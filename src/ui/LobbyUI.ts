@@ -54,6 +54,11 @@ export class LobbyUI {
   public onGearboxChange: (gb: GearboxType) => void = () => {};
   public onLaunchSession: (config: LobbyConfig) => void = () => {};
 
+  private hostIpText: HTMLElement;
+  private apkBtn: HTMLButtonElement;
+  private offlineStatusBtn: HTMLButtonElement;
+  private installBtn: HTMLButtonElement;
+
   constructor(public client: LobbyClient) {
     this.overlay = document.getElementById('lobby-overlay')!;
     this.homeView = document.getElementById('lobby-home-view')!;
@@ -68,16 +73,63 @@ export class LobbyUI {
     this.roomTitleText = document.getElementById('room-title-text')!;
     this.roomCodeBadge = document.getElementById('room-code-badge')!;
     this.hotspotUrlText = document.getElementById('hotspot-url-text')!;
+    this.hostIpText = document.getElementById('host-ip-text')!;
     this.hostControlsBox = document.getElementById('host-controls-box')!;
     this.rosterCountLabel = document.getElementById('roster-count-label')!;
     this.rosterList = document.getElementById('roster-list')!;
     this.chatBox = document.getElementById('lobby-chat-box')!;
     this.chatInput = document.getElementById('input-chat') as HTMLInputElement;
     this.launchBtn = document.getElementById('btn-launch-room') as HTMLButtonElement;
+    this.apkBtn = document.getElementById('btn-download-apk') as HTMLButtonElement;
+    this.offlineStatusBtn = document.getElementById('btn-offline-status') as HTMLButtonElement;
+    this.installBtn = document.getElementById('btn-install-app') as HTMLButtonElement;
 
     this.bindEvents();
     this.bindNetworkCallbacks();
     this.checkUrlRoomParam();
+    this.applyCapabilityGates();
+    this.updateOfflineStatus();
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('controllerchange', () => this.updateOfflineStatus());
+    }
+  }
+
+  private applyCapabilityGates(): void {
+    // Bluetooth: only show if supported (none implemented yet -> keep hidden).
+    // APK download: only show if a URL is configured.
+    const apkUrl = (window as unknown as { __APK_URL__?: string }).__APK_URL__ || '';
+    if (apkUrl) {
+      this.apkBtn.style.display = 'inline-flex';
+      this.apkBtn.addEventListener('click', () => window.open(apkUrl, '_blank'));
+    } else {
+      this.apkBtn.style.display = 'none';
+    }
+
+    // Install button is toggled by beforeinstallprompt in main.ts; hide by default.
+    this.installBtn.style.display = 'none';
+
+    // Capability: Bluetooth (not implemented) -> ensure no dangling button.
+  }
+
+  private updateOfflineStatus(): void {
+    const el = this.offlineStatusBtn;
+    if (!('serviceWorker' in navigator)) {
+      el.textContent = 'Offline: unsupported';
+      el.style.opacity = '0.5';
+      return;
+    }
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (reg && reg.active) {
+        el.textContent = 'Offline: ready';
+        el.style.opacity = '1';
+      } else {
+        el.textContent = 'Offline: installing…';
+        el.style.opacity = '0.7';
+      }
+    }).catch(() => {
+      el.textContent = 'Offline: unavailable';
+      el.style.opacity = '0.5';
+    });
   }
 
   public setVisible(visible: boolean): void {
@@ -342,6 +394,8 @@ export class LobbyUI {
     this.roomCodeBadge.textContent = `#${room.code}`;
     const shareUrl = await this.client.renderHotspotQR(this.qrCanvas, room.code);
     this.hotspotUrlText.textContent = shareUrl;
+    const ip = this.client.lanInfo?.ips?.[0] || location.hostname;
+    this.hostIpText.textContent = `Host IP: ${ip} • Port ${this.client.lanInfo?.port ?? (location.port || 80)}`;
 
     const me = room.players.find(p => p.id === this.client.clientId);
     const isHost = !!me?.isHost;

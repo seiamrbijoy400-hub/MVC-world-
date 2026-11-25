@@ -848,6 +848,12 @@
     .result-card span { display: block; font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 700; }
     .result-card strong { font-size: 18px; color: #f8fafc; font-variant-numeric: tabular-nums; }
   </style>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#ff5500">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <script>window.__APK_URL__ = "";</script>
 </head>
 <body>
   <div id="game-container">
@@ -929,6 +935,12 @@
           <button id="btn-solo-play" class="secondary-cta">🏎️ Quick Solo / Bots</button>
         </div>
 
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="btn-install-app" class="option-btn" style="display:none;padding:6px 10px;font-size:10px;">⬇️ Install App</button>
+          <button id="btn-download-apk" class="option-btn" style="display:none;padding:6px 10px;font-size:10px;">📦 Download APK</button>
+          <button id="btn-offline-status" class="option-btn" style="padding:6px 10px;font-size:10px;" disabled>Offline: checking…</button>
+        </div>
+
         <div>
           <span class="section-label">Join Friend on Same Hotspot / Wi-Fi</span>
           <div class="input-row" style="margin-bottom:7px;">
@@ -951,6 +963,7 @@
               <span id="room-code-badge" style="background:#ff5500;color:#fff;font-weight:900;font-size:12px;padding:2px 8px;border-radius:6px;">#0000</span>
             </div>
             <div id="hotspot-url-text" style="font-size:11px;color:#38bdf8;word-break:break-all;margin:4px 0;">http://192.168.x.x:5174</div>
+            <div id="host-ip-text" style="font-size:10px;color:#94a3b8;margin:2px 0;">Host IP: detecting…</div>
             <div style="display:flex;gap:6px;">
               <button id="btn-copy-link" class="option-btn" style="padding:4px 8px;font-size:10px;">Copy Hotspot Link</button>
               <button id="btn-leave-room" class="option-btn" style="padding:4px 8px;font-size:10px;background:#7f1d1d;">Leave</button>

@@ -515,7 +515,36 @@ class GameApp {
     });
     window.visualViewport?.addEventListener('resize', () => this.onResize());
     this.bindLifecycle();
+    this.registerServiceWorker();
+    this.bindPwaInstall();
     requestAnimationFrame((t) => this.loop(t));
+  }
+
+  private registerServiceWorker(): void {
+    if (!('serviceWorker' in navigator)) return;
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+
+  private bindPwaInstall(): void {
+    let deferred: any = null;
+    window.addEventListener('beforeinstallprompt', (e: Event) => {
+      e.preventDefault();
+      deferred = e;
+      const btn = document.getElementById('btn-install-app');
+      if (btn) btn.style.display = 'inline-flex';
+    });
+    const btn = document.getElementById('btn-install-app');
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        if (!deferred) return;
+        deferred.prompt();
+        await deferred.userChoice.catch(() => {});
+        deferred = null;
+        btn.style.display = 'none';
+      });
+    }
   }
 
   /**
