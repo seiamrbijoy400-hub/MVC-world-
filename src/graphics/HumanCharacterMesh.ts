@@ -487,7 +487,8 @@ export class HumanCharacterMesh {
       this.head.add(eye);
       this.eyeMeshes.push(eye);
 
-      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.0072, 0.009), this.browMat);
+      const brow = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), this.browMat);
+      brow.scale.set(0.024, 0.0044, 0.006);
       brow.position.set(side * 0.048, 0.222, -0.096);
       brow.rotation.y = Math.PI + side * 0.26;
       brow.rotation.z = side * -0.09;
