@@ -35,7 +35,7 @@ export class GLTFCharacterMesh {
     // Placeholder capsule so the mesh is visible immediately
     const ph = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.28, 1.1, 6, 12),
-      new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 })
+      new THREE.MeshStandardMaterial({ color: 0xff3355, transparent: true, opacity: 0.9 })
     );
     ph.position.y = 0.85;
     this.root.add(ph);
@@ -48,9 +48,20 @@ export class GLTFCharacterMesh {
       const gltf: any = await new Promise((resolve, reject) => {
         loader.load(this.modelUrl, resolve, undefined, reject);
       });
+      console.log('[GLTFCharacterMesh] loaded', this.modelUrl, 'anims:', (gltf.animations||[]).map((a:any)=>a.name));
       // remove placeholder
       while (this.root.children.length) this.root.remove(this.root.children[0]);
       const scene = gltf.scene.clone(true);
+      // Normalize scale: many Sketchfab exports are in cm (scale 100) or arbitrary.
+      const box = new THREE.Box3().setFromObject(scene);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const height = Math.max(size.y, 0.01);
+      const scale = 1.75 / height;
+      scene.scale.setScalar(scale);
+      // Center on ground
+      const box2 = new THREE.Box3().setFromObject(scene);
+      scene.position.y -= box2.min.y;
       this.root.add(scene);
       this.mixer = new THREE.AnimationMixer(scene);
       for (const clip of gltf.animations || []) {
