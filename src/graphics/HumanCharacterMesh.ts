@@ -337,33 +337,33 @@ export class HumanCharacterMesh {
 
     this.hairMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.hairColor),
-      roughness: 0.66,
-      metalness: 0.06
+      roughness: 0.52,
+      metalness: 0.08
     });
     this.jacketMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.jacketColor),
-      roughness: 0.78,
-      metalness: 0.04
+      roughness: 0.72,
+      metalness: 0.05
     });
     this.accentMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.accentColor),
-      roughness: 0.52,
-      metalness: 0.12
+      roughness: 0.48,
+      metalness: 0.16
     });
     this.pantsMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.pantsColor),
-      roughness: 0.88,
-      metalness: 0
+      roughness: 0.84,
+      metalness: 0.02
     });
     this.skinMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.skinColor),
-      roughness: 0.6,
+      roughness: 0.42,
       metalness: 0
     });
     this.shoeMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.accentColor).multiplyScalar(0.42),
-      roughness: 0.72,
-      metalness: 0.06
+      roughness: 0.68,
+      metalness: 0.08
     });
     this.browMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(this.appearance.hairColor).multiplyScalar(0.45),
@@ -1039,7 +1039,7 @@ export class HumanCharacterMesh {
     // Natural eye blink & expressive mouth
     this.updateFacialExpression(dt, state);
 
-    let tHipsY = 0.84;
+    let tHipsY = 0.86;
     let tHipsX = 0;
     let tHipsRotX = 0;
     let tHipsYaw = 0;
@@ -1057,140 +1057,152 @@ export class HumanCharacterMesh {
     let tRFootX = 0;
     let tLArmX = 0;
     let tRArmX = 0;
-    let tLArmZ = 0.11;
-    let tRArmZ = -0.11;
-    let tLForeX = -0.22;
-    let tRForeX = -0.22;
-    let blendRate = 16;
+    let tLArmZ = 0.08;
+    let tRArmZ = -0.08;
+    let tLForeX = -0.18;
+    let tRForeX = -0.18;
+    let blendRate = 14;
 
     if (state === 'IDLE') {
-      this.animPhase += dt * 2.3;
+      this.animPhase += dt * 1.6;
       const breath = Math.sin(this.animPhase);
-      tHipsY = 0.84 + breath * 0.010;
-      tHipsX = Math.sin(this.animPhase * 0.5) * 0.010;
-      tTorsoX = breath * 0.018;
-      tHeadX = -breath * 0.012;
-      tLArmX = Math.sin(this.animPhase * 0.5) * 0.035;
-      tRArmX = -Math.sin(this.animPhase * 0.5) * 0.035;
+      const sway = Math.sin(this.animPhase * 0.5);
+      tHipsY = 0.86 + breath * 0.008;
+      tHipsX = sway * 0.006;
+      tTorsoX = breath * 0.012;
+      tTorsoZ = sway * 0.012;
+      tHeadX = -breath * 0.010;
+      tHeadY = sway * 0.04;
+      tLArmX = sway * 0.025;
+      tRArmX = -sway * 0.025;
+      tLArmZ = 0.06 + sway * 0.015;
+      tRArmZ = -0.06 - sway * 0.015;
     } else if (state === 'WALK') {
-      this.animPhase += dt * 8.4;
+      this.animPhase += dt * 7.6;
       const swing = Math.sin(this.animPhase);
-      const legAmp = 0.52;
-      tHipsY = 0.83 + Math.abs(Math.sin(this.animPhase)) * 0.032;
-      tHipsX = swing * 0.022;
-      tHipsYaw = swing * 0.10;
-      tWaistYaw = -swing * 0.08;
-      tTorsoX = 0.08;
-      tTorsoY = -swing * 0.11;
-      tHeadY = swing * 0.07;
+      const absSwing = Math.abs(swing);
+      const legAmp = 0.58;
+      tHipsY = 0.85 + absSwing * 0.038;
+      tHipsX = swing * 0.018;
+      tHipsYaw = swing * 0.09;
+      tWaistYaw = -swing * 0.07;
+      tTorsoX = 0.06;
+      tTorsoY = -swing * 0.08;
+      tTorsoZ = -swing * 0.05;
+      tHeadY = swing * 0.05;
+      tHeadX = -0.04;
       tLLegX = swing * legAmp;
       tRLegX = -swing * legAmp;
-      tLShinX = Math.max(0, -swing) * 0.68;
-      tRShinX = Math.max(0, swing) * 0.68;
-      // Ankle counter-pitch keeps soles grounded on stance and rolls off toe
-      tLFootX = -(tLLegX + tLShinX) * 0.55 + Math.max(0, -swing) * 0.18;
-      tRFootX = -(tRLegX + tRShinX) * 0.55 + Math.max(0, swing) * 0.18;
-      tLArmX = -swing * 0.42;
-      tRArmX = swing * 0.42;
-      tLForeX = -0.36 - Math.max(0, -swing) * 0.25;
-      tRForeX = -0.36 - Math.max(0, swing) * 0.25;
+      tLShinX = Math.max(0, -swing) * 0.72;
+      tRShinX = Math.max(0, swing) * 0.72;
+      tLFootX = -(tLLegX + tLShinX) * 0.58 + Math.max(0, -swing) * 0.22;
+      tRFootX = -(tRLegX + tRShinX) * 0.58 + Math.max(0, swing) * 0.22;
+      tLArmX = -swing * 0.46;
+      tRArmX = swing * 0.46;
+      tLArmZ = 0.08 + absSwing * 0.04;
+      tRArmZ = -0.08 - absSwing * 0.04;
+      tLForeX = -0.32 - Math.max(0, -swing) * 0.22;
+      tRForeX = -0.32 - Math.max(0, swing) * 0.22;
     } else if (state === 'RUN' || state === 'FLEE') {
       const isFlee = state === 'FLEE';
-      this.animPhase += dt * (isFlee ? 16.5 : 14.2);
+      this.animPhase += dt * (isFlee ? 15.5 : 13.0);
       const swing = Math.sin(this.animPhase);
-      const legAmp = isFlee ? 1.05 : 0.96;
-      tHipsY = 0.81 + Math.abs(Math.sin(this.animPhase)) * 0.075;
-      tHipsX = swing * 0.028;
-      tHipsYaw = swing * 0.15;
-      tWaistYaw = -swing * 0.12;
-      tTorsoX = isFlee ? 0.34 : 0.28;
-      tTorsoY = -swing * 0.15;
-      tHeadY = isFlee ? Math.sin(this.animPhase * 0.5) * 0.25 : swing * 0.10;
-      tHeadX = -0.14;
+      const absSwing = Math.abs(swing);
+      const legAmp = isFlee ? 1.08 : 0.98;
+      tHipsY = 0.82 + absSwing * 0.085;
+      tHipsX = swing * 0.024;
+      tHipsYaw = swing * 0.16;
+      tWaistYaw = -swing * 0.13;
+      tTorsoX = isFlee ? 0.36 : 0.30;
+      tTorsoY = -swing * 0.16;
+      tTorsoZ = -swing * 0.08;
+      tHeadY = isFlee ? Math.sin(this.animPhase * 0.5) * 0.22 : swing * 0.10;
+      tHeadX = -0.16;
       tLLegX = swing * legAmp;
       tRLegX = -swing * legAmp;
-      tLShinX = Math.max(0, -swing) * 1.12;
-      tRShinX = Math.max(0, swing) * 1.12;
-      tLFootX = -(tLLegX + tLShinX) * 0.50 + Math.max(0, -swing) * 0.28;
-      tRFootX = -(tRLegX + tRShinX) * 0.50 + Math.max(0, swing) * 0.28;
-      tLArmX = isFlee ? -1.45 + swing * 0.45 : -swing * 0.84;
-      tRArmX = isFlee ? -1.45 - swing * 0.45 : swing * 0.84;
-      tLArmZ = isFlee ? 0.32 : 0.18;
-      tRArmZ = isFlee ? -0.32 : -0.18;
-      tLForeX = isFlee ? -0.75 : -1.05;
-      tRForeX = isFlee ? -0.75 : -1.05;
+      tLShinX = Math.max(0, -swing) * 1.15;
+      tRShinX = Math.max(0, swing) * 1.15;
+      tLFootX = -(tLLegX + tLShinX) * 0.52 + Math.max(0, -swing) * 0.30;
+      tRFootX = -(tRLegX + tRShinX) * 0.52 + Math.max(0, swing) * 0.30;
+      tLArmX = isFlee ? -1.50 + swing * 0.40 : -swing * 0.92;
+      tRArmX = isFlee ? -1.50 - swing * 0.40 : swing * 0.92;
+      tLArmZ = isFlee ? 0.34 : 0.20;
+      tRArmZ = isFlee ? -0.34 : -0.20;
+      tLForeX = isFlee ? -0.80 : -1.10;
+      tRForeX = isFlee ? -0.80 : -1.10;
     } else if (state === 'JUMP') {
-      tHipsY = 0.86;
-      tTorsoX = 0.12;
-      tLArmX = -1.15;
-      tRArmX = -1.15;
-      tLArmZ = 0.28;
-      tRArmZ = -0.28;
-      tLForeX = -0.55;
-      tRForeX = -0.55;
-      tLLegX = 0.55;
-      tLShinX = 0.90;
-      tLFootX = -0.35;
-      tRLegX = -0.22;
-      tRShinX = 0.45;
-      tRFootX = 0.25;
+      tHipsY = 0.88;
+      tTorsoX = 0.10;
+      tHeadX = -0.08;
+      tLArmX = -1.25;
+      tRArmX = -1.25;
+      tLArmZ = 0.30;
+      tRArmZ = -0.30;
+      tLForeX = -0.60;
+      tRForeX = -0.60;
+      tLLegX = 0.62;
+      tLShinX = 0.95;
+      tLFootX = -0.38;
+      tRLegX = -0.28;
+      tRShinX = 0.50;
+      tRFootX = 0.28;
     } else if (state === 'PUNCH') {
-      this.animPhase += dt * 18.0;
-      blendRate = 28;
+      this.animPhase += dt * 16.0;
+      blendRate = 26;
       tHipsY = 0.80;
       if (this.comboStep === 2) {
-        tTorsoX = 0.05;
-        tTorsoY = 0.78;
-        tRLegX = 1.32;
-        tRShinX = 0.12;
-        tRFootX = -0.30;
-        tLArmZ = 0.72;
-        tRArmZ = -0.72;
+        tTorsoX = 0.08;
+        tTorsoY = 0.72;
+        tRLegX = 1.28;
+        tRShinX = 0.10;
+        tRFootX = -0.28;
+        tLArmZ = 0.70;
+        tRArmZ = -0.70;
+        tLArmX = -0.6;
+        tRArmX = -0.9;
       } else if (this.comboStep === 1) {
-        tTorsoX = 0.16;
-        tTorsoY = 0.58;
-        tLArmX = -1.55;
-        tLForeX = -0.15;
-        tRArmX = -0.85;
-        tRForeX = -1.15;
+        tTorsoX = 0.18;
+        tTorsoY = 0.52;
+        tLArmX = -1.60;
+        tLForeX = -0.12;
+        tRArmX = -0.90;
+        tRForeX = -1.20;
       } else {
-        tTorsoX = 0.16;
-        tTorsoY = -0.58;
-        tRArmX = -1.55;
-        tRForeX = -0.15;
-        tLArmX = -0.85;
-        tLForeX = -1.15;
+        tTorsoX = 0.18;
+        tTorsoY = -0.52;
+        tRArmX = -1.60;
+        tRForeX = -0.12;
+        tLArmX = -0.90;
+        tLForeX = -1.20;
       }
     } else if (state === 'HIT') {
-      blendRate = 24;
-      tHipsY = 0.81;
-      tTorsoX = -0.34;
-      tHeadX = -0.24;
-      tLArmX = -0.45;
-      tRArmX = -0.45;
-      tLArmZ = 0.45;
-      tRArmZ = -0.45;
-      tLForeX = -0.65;
-      tRForeX = -0.65;
+      blendRate = 22;
+      tHipsY = 0.80;
+      tTorsoX = -0.38;
+      tHeadX = -0.28;
+      tLArmX = -0.50;
+      tRArmX = -0.50;
+      tLArmZ = 0.48;
+      tRArmZ = -0.48;
+      tLForeX = -0.70;
+      tRForeX = -0.70;
     } else if (state === 'KO') {
-      blendRate = 7.5;
-      // Flat prone collapse on the ground: straight legs & relaxed arms so nothing clips the floor
-      tHipsY = 0.13;
-      tHipsRotX = Math.PI * 0.48;
-      tTorsoX = 0.04;
-      tHeadX = -0.18;
-      tLArmX = -0.25;
-      tRArmX = -0.15;
-      tLArmZ = 0.52;
-      tRArmZ = -0.58;
-      tLForeX = -0.35;
-      tRForeX = -0.45;
-      tLLegX = 0.05;
-      tRLegX = -0.04;
+      blendRate = 7.0;
+      tHipsY = 0.12;
+      tHipsRotX = Math.PI * 0.50;
+      tTorsoX = 0.05;
+      tHeadX = -0.20;
+      tLArmX = -0.22;
+      tRArmX = -0.12;
+      tLArmZ = 0.55;
+      tRArmZ = -0.60;
+      tLForeX = -0.38;
+      tRForeX = -0.48;
+      tLLegX = 0.04;
+      tRLegX = -0.03;
       tLShinX = 0.08;
       tRShinX = 0.05;
     }
-
     const s = 1 - Math.exp(-blendRate * dt);
     this.hips.position.y += (tHipsY - this.hips.position.y) * s;
     this.hips.position.x += (tHipsX - this.hips.position.x) * s;
