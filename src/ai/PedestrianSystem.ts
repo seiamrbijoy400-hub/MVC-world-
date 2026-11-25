@@ -102,6 +102,7 @@ export class PedestrianSystem {
       // Pass empty playerName so ambient civilians don't clutter screen with floating HP bars
       const mesh = new HumanCharacterMesh('kaito', '', app);
       mesh.root.position.copy(start);
+      mesh.root.scale.setScalar(0.92 + (i % 5) * 0.035);
       this.scene.add(mesh.root);
 
       const agent: PedestrianAgent = {
