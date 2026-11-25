@@ -4,6 +4,7 @@ import { CharacterController } from './physics/CharacterController';
 import { CarMesh } from './graphics/CarMesh';
 import { HumanCharacterMesh } from './graphics/HumanCharacterMesh';
 import { GLTFCharacterMesh } from './graphics/GLTFCharacterMesh';
+import { modelUrlFor } from './graphics/CharacterAnimationMap';
 import { TrackEnvironment, TimeOfDay } from './graphics/TrackEnvironment';
 import { OpenWorldMap, DISTRICTS, type DistrictId } from './graphics/OpenWorldMap';
 import { ParticleSystem } from './graphics/ParticleSystem';
@@ -279,9 +280,14 @@ class GameApp {
 
     this.studio = new CharacterStudio();
     this.studio.applyPreset(this.save.data.characterId);
-    const gender = (this.save.data.characterId === 'mika' || this.save.data.characterId === 'sora') ? 'female' : 'male';
-    const modelUrl = gender === 'female' ? '/assets/models/female.glb' : '/assets/models/male.glb';
+    const modelUrl = modelUrlFor(this.save.data.characterId);
     this.avatarMesh = new GLTFCharacterMesh(modelUrl, this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
+    GLTFCharacterMesh.onModelStatus(() => {
+      const playerReady = this.avatarMesh instanceof GLTFCharacterMesh && this.avatarMesh.isRealistic;
+      const badge = document.getElementById('btn-model-status');
+      if (badge) badge.textContent = playerReady ? '3D characters: ready' : '3D characters: fallback';
+      this.studio.setRigged(playerReady);
+    });
     this.avatarMesh.setNameAndHp(this.save.data.playerName, 100);
     this.scene.add(this.avatarMesh.root);
 
@@ -470,6 +476,8 @@ class GameApp {
     this.lobbyUI = new LobbyUI(this.lobbyClient);
     this.lobbyUI.onCharacterPreview = (charId) => {
       this.studio.applyPreset(charId);
+      // Preview the correct rig immediately when a driver card is tapped.
+      if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setModel(modelUrlFor(charId));
     };
     this.lobbyUI.onColorPreview = (color) => {
       this.ownZenvo.mesh.setColor(color);
@@ -657,6 +665,9 @@ class GameApp {
     this.sound.init();
     this.physics.gearboxType = cfg.gearbox;
     this.carMesh.setColor(cfg.carColor);
+    if (this.avatarMesh instanceof GLTFCharacterMesh) {
+      this.avatarMesh.setModel(modelUrlFor(cfg.characterId));
+    }
     this.avatarMesh.setAppearance(this.studio.appearance);
     this.avatarMesh.setNameAndHp(cfg.playerName, 100);
     this.save.data.playerName = cfg.playerName;
@@ -691,9 +702,9 @@ class GameApp {
         if (!peer) {
           const carM = new CarMesh();
           carM.setColor(st.carColor || '#2563eb');
-          const peerGender = (st.characterId === 'mika' || st.characterId === 'sora') ? 'female' : 'male';
-          const peerModel = peerGender === 'female' ? '/assets/models/female.glb' : '/assets/models/male.glb';
-          const charM = new GLTFCharacterMesh(peerModel, st.characterId || 'mika', st.name || 'Friend', st.appearance);
+          const charM = new GLTFCharacterMesh(
+            modelUrlFor(st.characterId), st.characterId || 'mika', st.name || 'Friend', st.appearance ?? null
+          );
           this.scene.add(carM.root);
           this.scene.add(charM.root);
           peer = { id, carMesh: carM, charMesh: charM, lastState: st };

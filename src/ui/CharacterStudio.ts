@@ -34,6 +34,8 @@ export class CharacterStudio {
   private bodyEl: HTMLElement;
   public appearance: CharacterAppearance;
   public isOpen = false;
+  /** Rigged GLBs support color tints but not procedural hairstyle/accessory geometry. */
+  private rigged = false;
 
   public onChange: (app: CharacterAppearance) => void = () => {};
   public onToggle: (open: boolean) => void = () => {};
@@ -60,6 +62,12 @@ export class CharacterStudio {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.appearance));
     } catch {}
+  }
+
+  public setRigged(rigged: boolean): void {
+    if (this.rigged === rigged) return;
+    this.rigged = rigged;
+    this.renderControls();
   }
 
   public open(show: boolean): void {
@@ -125,10 +133,11 @@ export class CharacterStudio {
     `;
 
     this.bodyEl.innerHTML = `
+      ${this.rigged ? '' : `
       <div class="setting-group">
         <label>Hairstyle</label>
         ${chipRow('hairStyle', HAIR_STYLES)}
-      </div>
+      </div>`}
       <div class="setting-group">
         <label>Hair Color</label>
         ${swatchRow('hairColor', HAIR_COLORS)}
@@ -145,10 +154,17 @@ export class CharacterStudio {
         <label>Skin Tone</label>
         ${swatchRow('skinColor', SKIN_COLORS)}
       </div>
+      ${this.rigged ? `
+      <div class="setting-group">
+        <label>Model Notes</label>
+        <div style="font-size:10px;line-height:1.45;color:#94a3b8;">
+          Rigged GLB character: color changes apply live. Hair shape and accessories are baked into the model, so those controls are hidden.
+        </div>
+      </div>` : `
       <div class="setting-group">
         <label>Accessory</label>
         ${chipRow('accessory', ACCESSORIES)}
-      </div>
+      </div>`}
     `;
 
     this.bodyEl.querySelectorAll('[data-studio-key]').forEach((el) => {

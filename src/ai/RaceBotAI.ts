@@ -4,6 +4,8 @@ import { CarMesh } from '../graphics/CarMesh';
 import { TrackEnvironment } from '../graphics/TrackEnvironment';
 import { OpenWorldMap } from '../graphics/OpenWorldMap';
 import { GLTFCharacterMesh } from '../graphics/GLTFCharacterMesh';
+import { DEFAULT_APPEARANCE_BY_ID } from '../graphics/HumanCharacterMesh';
+import { MODEL_URLS, modelForCharacter } from '../graphics/CharacterAnimationMap';
 import { CharacterController } from '../physics/CharacterController';
 import type { BotDifficulty, CharacterId } from '../network/LobbyProtocol';
 
@@ -440,7 +442,14 @@ export class SparringFighter {
       this.mesh.setNameAndHp(this.name, this.controller.maxHp);
     };
 
-    this.mesh = new GLTFCharacterMesh('/assets/models/male.glb', charId, name, null);
+    const model = modelForCharacter(charId);
+    // Distinct fighter outfit, while the rig's original textures stay intact.
+    const appearance = {
+      ...DEFAULT_APPEARANCE_BY_ID[charId],
+      jacketColor: charId === 'mika' || charId === 'sora' ? '#be123c' : '#0f766e',
+      accentColor: '#facc15'
+    };
+    this.mesh = new GLTFCharacterMesh(MODEL_URLS[model], charId, name, appearance, 0, true);
     this.mesh.root.position.copy(pos);
     scene.add(this.mesh.root);
   }

@@ -3,8 +3,12 @@
 
 All runtime assets are stored locally under `public/assets/` with no runtime network dependency on external CDN model/texture URLs.
 
+Character GLBs were copied into this repository as new files; the originally attached upload files were not modified. Both rigs keep their original base-color textures, and per-character outfit/hair/skin variety is produced at runtime by softly tinting cloned materials. Punch/hit/KO poses are authored in code (`src/graphics/GLTFCharacterMesh.ts`) because the source GLBs contain locomotion, jump and talking clips but no combat clips.
+
 | Asset Path | Type | Size | Provenance / License Status |
 | :--- | :--- | :--- | :--- |
+| `public/assets/models/male.glb` | Rigged Animated Human (72 bones, 25 clips) | 6.0 MB | “Business Man - Low Polygon Game Character” by [manoeldarochadeoliveira](https://sketchfab.com/manoeldarochadeoliveira), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Source: https://sketchfab.com/3d-models/business-man-low-polygon-game-character-b6f6740f883b4749abac47af0045a9dd (attribution metadata embedded in GLB `asset.extras`). |
+| `public/assets/models/female.glb` | Rigged Animated Human (89 bones, 35 clips) | 8.8 MB | “Low Poly Girl” by [manoeldarochadeoliveira](https://sketchfab.com/manoeldarochadeoliveira), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Source: https://sketchfab.com/3d-models/low-poly-girl-4cb87c1d3c3c4b9ea3b4c61ab407500a (attribution metadata embedded in GLB `asset.extras`). |
 | `public/assets/models/car 1203.fbx` | 3D Vehicle Body (FBX) | 922 KB | Bundled in repository prior to current audit; no upstream LICENSE file present in `public/assets/` (`UNKNOWN` third-party source — founder must verify original source license before commercial distribution; `README.md` notes inspiration from `PaulinaCzapla/Realistic-Racing-Game`). |
 | `public/assets/models/wheel_front_right.fbx` | 3D Front Wheel (FBX) | 109 KB | Same as above (`UNKNOWN` license — verify prior to release). |
 | `public/assets/models/wheel_back_right.fbx` | 3D Rear Wheel (FBX) | 108 KB | Same as above (`UNKNOWN` license — verify prior to release). |

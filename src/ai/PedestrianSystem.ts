@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { CharacterController } from '../physics/CharacterController';
-import { HumanCharacterMesh, DEFAULT_APPEARANCE_BY_ID } from '../graphics/HumanCharacterMesh';
+import { DEFAULT_APPEARANCE_BY_ID } from '../graphics/HumanCharacterMesh';
+import { GLTFCharacterMesh } from '../graphics/GLTFCharacterMesh';
+import { MODEL_URLS, modelForCharacter } from '../graphics/CharacterAnimationMap';
 import type { CharacterAppearance, CharacterId, HairStyleId, AccessoryId } from '../network/LobbyProtocol';
 import type { OpenWorldMap } from '../graphics/OpenWorldMap';
 import { hasLineOfSight } from '../game/RoadGraph';
@@ -11,7 +13,7 @@ export interface PedestrianAgent {
   id: number;
   name: string;
   controller: CharacterController;
-  mesh: HumanCharacterMesh;
+  mesh: GLTFCharacterMesh;
   state: PedestrianState;
   stateTimer: number;
   patrolA: THREE.Vector3;
@@ -99,10 +101,13 @@ export class PedestrianSystem {
       ctrl.resetAt(start, 0);
 
       const app = makePedestrianAppearance(i + 1);
-      // Pass empty playerName so ambient civilians don't clutter screen with floating HP bars
-      const mesh = new HumanCharacterMesh('kaito', '', app);
+      // Alternate the two rigged GLBs and recolor outfits/hair/skin so the
+      // crowd doesn't look like clones. No floating HP bars for ambient civilians.
+      const baseId: CharacterId = (['kaito', 'mika', 'ren', 'sora'] as CharacterId[])[(i + 1) % 4];
+      const model = modelForCharacter(baseId);
+      const mesh = new GLTFCharacterMesh(MODEL_URLS[model], baseId, '', app, i, false);
       mesh.root.position.copy(start);
-      mesh.root.scale.setScalar(0.92 + (i % 5) * 0.035);
+      mesh.root.scale.setScalar(0.94 + (i % 4) * 0.035);
       this.scene.add(mesh.root);
 
       const agent: PedestrianAgent = {

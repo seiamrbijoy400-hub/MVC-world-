@@ -44,6 +44,12 @@ Playable offline on mobile (Android) and desktop browsers with realistic superca
 - Persistent black rubber skidmark trails laid down on the asphalt.
 - High-RPM exhaust backfire flame bursts.
 
+### 🧍 Rigged Characters & Crowd
+- Player, sparring fighters and hotspot peers use rigged GLB humans (male business-man / female low-poly girl) with their own idle/walk/run/jump clips.
+- Punch, hit-recoil and KO poses are layered procedurally on top of the rigs; pedestrians alternate both rigs with distinct outfit/hair/skin tints and body scales.
+- Geometry, textures and clips are shared across all characters; only materials and animation mixers are per-instance. Procedural characters remain as an automatic fallback if a GLB fails to load.
+- Character GLBs are CC BY 4.0 by manoeldarochadeoliveira — credited in-game in Settings and in `docs/ASSET_LICENSES.md`.
+
 ### 🔊 Dynamic Audio Synthesis
 - 100% offline Web Audio synthesizer simulating V8 harmonic firing frequencies matched to exact engine RPM.
 - Throttle load growl and exhaust deceleration crackles / pops.

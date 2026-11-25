@@ -48,6 +48,17 @@ if (typeof globalThis.window === 'undefined') {
 if (typeof globalThis.location === 'undefined') {
   (globalThis as unknown as Record<string, unknown>).location = { href: 'http://localhost/' };
 }
+// GLTFLoader decodes embedded GLB PNGs in a browser-like image environment.
+if (typeof globalThis.self === 'undefined') {
+  (globalThis as unknown as Record<string, unknown>).self = globalThis;
+}
+if (typeof globalThis.createImageBitmap === 'undefined') {
+  (globalThis as unknown as Record<string, unknown>).createImageBitmap = async () => ({
+    width: 8,
+    height: 8,
+    close: () => {}
+  });
+}
 if (typeof globalThis.ProgressEvent === 'undefined') {
   (globalThis as unknown as Record<string, unknown>).ProgressEvent = class ProgressEvent {
     type: string;
@@ -99,6 +110,8 @@ import { PoliceSystem } from '../src/game/PoliceSystem';
 import { PedestrianSystem } from '../src/ai/PedestrianSystem';
 import { WorldActivities, type CourierContractDef } from '../src/game/WorldActivities';
 import { CarMesh } from '../src/graphics/CarMesh';
+import { mapAnimStateToClip, modelForCharacter, modelUrlFor } from '../src/graphics/CharacterAnimationMap';
+import { GLTFCharacterMesh } from '../src/graphics/GLTFCharacterMesh';
 import { lanLobbyPlugin } from '../server/lanLobbyPlugin';
 import {
   separateVehiclePair,
@@ -676,4 +689,71 @@ test('AdaptiveResolution: drops pixel ratio under sustained load, recovers with 
   gov.setBounds(0.85, 1.35, 1.35);
   assert.equal(gov.currentRatio, 1.35);
   assert.equal(feed(gov, 30, 0.2), null);
+});
+
+test('Rigged character GLBs: embedded CC BY credits, skeleton, clips & state mapping', () => {
+  const specs: Array<{ model: 'male' | 'female'; file: string; minJoints: number; idle: string; walk: string; run: string; jump: string }> = [
+    { model: 'male', file: 'male.glb', minJoints: 72, idle: 'Rig|idle', walk: 'Rig|walk', run: 'Rig|run', jump: 'Rig|jump' },
+    { model: 'female', file: 'female.glb', minJoints: 89, idle: 'idle', walk: 'walk', run: 'run', jump: 'jump_fwd' }
+  ];
+
+  for (const spec of specs) {
+    const p = path.join(process.cwd(), 'public', 'assets', 'models', spec.file);
+    assert.ok(fs.existsSync(p), `Missing rigged character: ${spec.file}`);
+    const buf = fs.readFileSync(p);
+    assert.equal(buf.readUInt32LE(0), 0x46546c67, 'GLB magic');
+    const jsonLength = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.slice(20, 20 + jsonLength).toString('utf8'));
+    assert.ok(!gltf.extensionsRequired?.length, `${spec.file} must not need optional loaders`);
+    assert.ok((gltf.skins?.[0]?.joints?.length ?? 0) >= spec.minJoints, `${spec.file} skeleton incomplete`);
+    assert.match(gltf.asset?.extras?.license ?? '', /CC[- ]BY[- ]4\.0/);
+    assert.match(gltf.asset?.extras?.author ?? '', /manoeldarochadeoliveira/);
+
+    const names: string[] = (gltf.animations ?? []).map((a: { name: string }) => a.name);
+    assert.ok(names.length >= 25, `${spec.file} should ship its animation library`);
+    assert.equal(mapAnimStateToClip('IDLE', names, spec.model), spec.idle);
+    assert.equal(mapAnimStateToClip('WALK', names, spec.model), spec.walk);
+    assert.equal(mapAnimStateToClip('RUN', names, spec.model), spec.run);
+    assert.equal(mapAnimStateToClip('FLEE', names, spec.model), spec.run);
+    assert.equal(mapAnimStateToClip('JUMP', names, spec.model), spec.jump);
+    for (const state of ['PUNCH', 'HIT', 'KO', 'DRIVE'] as const) {
+      assert.ok(mapAnimStateToClip(state, names, spec.model), `${state} must keep a grounded base clip`);
+    }
+  }
+
+  assert.equal(modelForCharacter('kaito'), 'male');
+  assert.equal(modelForCharacter('mika'), 'female');
+  assert.equal(modelUrlFor('sora'), '/assets/models/female.glb');
+});
+
+test('GLTFCharacterMesh: loads both rigs, drives animation states and recolors per-instance materials', async () => {
+  const actor = new GLTFCharacterMesh('/assets/models/male.glb', 'kaito', '', null, 0, false);
+  const heroine = new GLTFCharacterMesh('/assets/models/female.glb', 'mika', '', null, 0, false);
+  const deadline = Date.now() + 4000;
+  while ((!actor.isRealistic || !heroine.isRealistic) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(actor.isRealistic, true, 'male GLB should load instead of the procedural fallback');
+  assert.equal(heroine.isRealistic, true, 'female GLB should load instead of the procedural fallback');
+
+  const internal = actor as unknown as { instance: { materials: THREE.MeshStandardMaterial[] }; root: THREE.Group };
+  assert.ok(internal.instance.materials.length >= 3, 'Each character owns cloned materials for color variants');
+  const before = internal.instance.materials[0].color.clone();
+  actor.setAppearance({
+    hairStyle: 'spiky', hairColor: '#1c1917', eyeColor: '#4a2f1b', jacketColor: '#ff5500',
+    accentColor: '#f8fafc', pantsColor: '#18181b', skinColor: '#e0b48c', accessory: 'none'
+  });
+  assert.ok(!internal.instance.materials[0].color.equals(before), 'Appearance must tint the GLB materials');
+  assert.ok(
+    internal.instance.materials.some((m) => !m.color.equals(internal.instance.materials[0].color)),
+    'Outfit, skin and accent meshes must receive different tints (NPC variety)'
+  );
+
+  for (const state of ['IDLE', 'WALK', 'RUN', 'JUMP', 'PUNCH', 'HIT', 'KO', 'FLEE'] as const) {
+    actor.updateAnimation(1 / 60, state);
+    heroine.updateAnimation(1 / 60, state);
+  }
+  assert.equal(actor.root.children.length, 1, 'Only the shared GLB instance stays attached to the actor');
+  actor.dispose();
+  heroine.dispose();
 });
