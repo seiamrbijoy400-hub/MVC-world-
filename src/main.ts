@@ -20,6 +20,7 @@ import { WeatherSystem } from './graphics/WeatherSystem';
 import { GhostSystem } from './game/GhostSystem';
 import { WorldActivities, type RivalSprintDef, type CourierContractDef } from './game/WorldActivities';
 import { GarageController } from './game/GarageController';
+import { AdaptiveResolution } from './game/AdaptiveResolution';
 import {
   separateVehiclePair,
   pushCharacterOutOfVehicles,
@@ -104,6 +105,9 @@ class GameApp {
   private baseAmbientIntensity = 0.72;
   private baseHemiIntensity = 0.55;
   private baseSunIntensity = 1.9;
+  private qualityRatioCap = 2;
+  private adaptiveRes = new AdaptiveResolution(1, { maxRatio: 2 });
+  private lastMaxSpeedSaveAt = -10;
 
   private raceBots: RaceBot[] = [];
   private cityCruisers: CityCruiserBot[] = [];
@@ -156,7 +160,7 @@ class GameApp {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
 
@@ -505,7 +509,36 @@ class GameApp {
     this.refreshProfile();
 
     window.addEventListener('resize', () => this.onResize());
+    window.addEventListener('orientationchange', () => {
+      // Some Android browsers report stale innerWidth/innerHeight for a beat.
+      window.setTimeout(() => this.onResize(), 120);
+    });
+    window.visualViewport?.addEventListener('resize', () => this.onResize());
+    this.bindLifecycle();
     requestAnimationFrame((t) => this.loop(t));
+  }
+
+  /**
+   * Mobile lifecycle: stop audio and flush progress when the app is
+   * backgrounded, then restore the frame clock instead of simulating a huge
+   * delta when it returns. Also flushes the save when the page is discarded.
+   */
+  private bindLifecycle(): void {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.sound.pauseAudio();
+        this.save.saveNow();
+        this.hud.clearAllInputs();
+      } else {
+        this.lastTime = performance.now();
+        this.adaptiveRes.reset();
+        if (!this.isPaused) this.sound.resumeAudio();
+      }
+    });
+    window.addEventListener('pagehide', () => {
+      this.save.saveNow();
+      this.sound.pauseAudio();
+    });
   }
 
   private spawnInOpenWorld(): void {
@@ -1374,11 +1407,11 @@ class GameApp {
   private applyGraphicsQuality(q: GraphicsQuality): void {
     const dpr = window.devicePixelRatio || 1;
     if (q === 'LOW') {
-      this.renderer.setPixelRatio(Math.min(dpr, 1.0));
+      this.qualityRatioCap = Math.min(dpr, 1.0);
       this.renderer.shadowMap.enabled = false;
       this.sunLight.castShadow = false;
     } else if (q === 'MED') {
-      this.renderer.setPixelRatio(Math.min(dpr, 1.35));
+      this.qualityRatioCap = Math.min(dpr, 1.35);
       this.renderer.shadowMap.enabled = true;
       this.sunLight.castShadow = true;
       if (this.sunLight.shadow.mapSize.width !== 1024) {
@@ -1387,7 +1420,7 @@ class GameApp {
         this.sunLight.shadow.map = null;
       }
     } else {
-      this.renderer.setPixelRatio(Math.min(dpr, 2.0));
+      this.qualityRatioCap = Math.min(dpr, 2.0);
       this.renderer.shadowMap.enabled = true;
       this.sunLight.castShadow = true;
       if (this.sunLight.shadow.mapSize.width !== 2048) {
@@ -1396,8 +1429,27 @@ class GameApp {
         this.sunLight.shadow.map = null;
       }
     }
+    this.renderer.setPixelRatio(this.qualityRatioCap);
+    // Let the governor trade a little sharpness for a stable frame rate, but
+    // never drop below a still-legible floor on high-density phone screens.
+    this.adaptiveRes.setBounds(
+      Math.min(0.85, this.qualityRatioCap),
+      this.qualityRatioCap,
+      this.qualityRatioCap
+    );
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.syncOptionSelection('.quality-options .option-btn', 'data-quality', q);
+  }
+
+  /** One decision per rendered frame; returns true when the pixel ratio changed. */
+  private updateAdaptiveResolution(dt: number): void {
+    if (this.isPaused || document.hidden) {
+      this.adaptiveRes.reset();
+      return;
+    }
+    const next = this.adaptiveRes.sample(dt);
+    if (next === null) return;
+    this.renderer.setPixelRatio(next);
   }
 
   private setWeatherMode(mode: WeatherMode): void {
@@ -1792,7 +1844,8 @@ class GameApp {
   private loop(currentTime: number): void {
     requestAnimationFrame((t) => this.loop(t));
 
-    const dt = Math.min((currentTime - this.lastTime) * 0.001, 0.04);
+    const rawDt = (currentTime - this.lastTime) * 0.001;
+    const dt = Math.min(rawDt, 0.04);
     this.lastTime = currentTime;
     this.elapsedSec += dt;
 
@@ -1867,7 +1920,12 @@ class GameApp {
         const speedNow = Math.round(this.physics.speedKmh);
         if (speedNow > this.save.data.maxSpeedKmh) {
           this.save.data.maxSpeedKmh = speedNow;
-          this.save.scheduleSave();
+          // Speed climbs every frame; don't serialise the whole save that
+          // often. A flush on backgrounding still captures the final value.
+          if (this.elapsedSec - this.lastMaxSpeedSaveAt > 4) {
+            this.lastMaxSpeedSaveAt = this.elapsedSec;
+            this.save.scheduleSave();
+          }
         }
 
         if (this.boostCooldown <= 0) {
@@ -1930,6 +1988,7 @@ class GameApp {
       } else {
         // ON-FOOT CHARACTER
         const charInputs = this.hud.pollCharacterInputs();
+        const wasGroundedBeforeStep = this.charCtrl.isGrounded;
         this.charCtrl.update(dt, charInputs, this.footCamYaw);
 
         // Character vs every car hull (parked, civic, police, moving traffic, race bots, sprint rival)
@@ -1968,7 +2027,9 @@ class GameApp {
         } else {
           this.footstepTimer = 0.06;
         }
-        if (charInputs.jump && this.charCtrl.velocity.y > 7.5) {
+        // Play the take-off sound only on the grounded -> airborne transition;
+        // the old velocity check retriggered it for a few frames per jump.
+        if (wasGroundedBeforeStep && !this.charCtrl.isGrounded && this.charCtrl.velocity.y > 0) {
           this.sound.playJump();
         }
 
@@ -2292,6 +2353,7 @@ class GameApp {
       extraMarkers
     );
     this.renderer.render(this.scene, this.camera);
+    this.updateAdaptiveResolution(rawDt);
   }
 
   private updateCamera(dt: number): void {

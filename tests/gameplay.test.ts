@@ -92,6 +92,7 @@ import { CarPhysics, GearboxType } from '../src/physics/CarPhysics';
 import { CharacterController } from '../src/physics/CharacterController';
 import { RoadGraph, hasLineOfSight } from '../src/game/RoadGraph';
 import { SaveManager } from '../src/game/SaveManager';
+import { AdaptiveResolution } from '../src/game/AdaptiveResolution';
 import { OpenWorldMap } from '../src/graphics/OpenWorldMap';
 import { TrackEnvironment } from '../src/graphics/TrackEnvironment';
 import { PoliceSystem } from '../src/game/PoliceSystem';
@@ -629,4 +630,50 @@ test('LAN server plugin: live HTTP /api/lan-info + 2-client WebSocket sync & dis
     if (guest.ws.readyState === WebSocket.OPEN) guest.ws.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('AdaptiveResolution: drops pixel ratio under sustained load, recovers with headroom, ignores stalls', () => {
+  const feed = (gov: AdaptiveResolution, fps: number, seconds: number) => {
+    const dt = 1 / fps;
+    const steps = Math.round(seconds * fps);
+    let last: number | null = null;
+    for (let i = 0; i < steps; i++) {
+      const next = gov.sample(dt);
+      if (next !== null) last = next;
+    }
+    return last;
+  };
+
+  const gov = new AdaptiveResolution(2, { minRatio: 0.85, maxRatio: 2, warmupSec: 1, windowSec: 0.5 });
+
+  // Warmup: a slow start does not immediately soften the image.
+  assert.equal(gov.sample(1 / 30), null);
+  assert.equal(gov.currentRatio, 2);
+
+  const dropped = feed(gov, 30, 3);
+  assert.ok(dropped !== null && dropped < 2, `expected a downward step, got ${dropped}`);
+  assert.ok(gov.currentRatio >= 0.85, 'never goes below the floor');
+
+  // Stay slow long enough to hit the floor and confirm clamping.
+  feed(gov, 25, 20);
+  assert.ok(Math.abs(gov.currentRatio - 0.85) < 1e-9, `clamped at min, got ${gov.currentRatio}`);
+
+  // Plenty of headroom now: steps back up, but not past the cap.
+  const raised = feed(gov, 60, 10);
+  assert.ok(raised !== null && raised > 0.85, `expected an upward step, got ${raised}`);
+  feed(gov, 60, 40);
+  assert.equal(gov.currentRatio, 2);
+
+  // A single long stall must not count as a slow window.
+  const before = gov.currentRatio;
+  gov.sample(1.2);
+  assert.equal(gov.currentRatio, before);
+  const afterStall = feed(gov, 30, 0.4);
+  assert.equal(gov.currentRatio, before, 'settling after a stall is ignored');
+  assert.equal(afterStall, null);
+
+  // A quality change re-bases the governor and resets its sample history.
+  gov.setBounds(0.85, 1.35, 1.35);
+  assert.equal(gov.currentRatio, 1.35);
+  assert.equal(feed(gov, 30, 0.2), null);
 });

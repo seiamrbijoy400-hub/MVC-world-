@@ -37,3 +37,12 @@ Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests"
 - Real browser `AudioContext` hardware playback and autoplay resume behavior on mobile touch events.
 - Actual GPU FPS, frame times, and thermal behavior across `HIGH`, `MED`, and `LOW` quality tiers.
 - Real client UI wiring (`LobbyClient` DOM bindings) across two physical devices over hotspot LAN.
+
+---
+
+## Sprint 8 — Mobile Lifecycle & Adaptive Resolution (2026-11-26)
+- New module `src/game/AdaptiveResolution.ts`: per-frame rolling-window FPS governor that lowers the renderer pixel ratio under sustained load and restores it with hysteresis. Long stalls / tab returns are ignored.
+- `src/main.ts`: lifecycle binding — pause/resume `SoundManager` on `visibilitychange`, flush `SaveManager` on backgrounding/pagehide, reset frame clock on return, reset governor on return; `orientationchange` + `visualViewport` resize handling; max-speed save throttled to every 4s (still flushed on background); jump take-off SFX now fires only on the grounded → airborne transition (no retrigger spam); adaptive resolution sample wired into the render loop using raw (pre-clamp) frame deltas.
+- `src/ui/HUD.ts`: `preventDefault` guarded by `cancelable` on touch buttons (avoids console errors on synthetic events).
+- `src/main.ts`: shadow map switched from `PCFSoftShadowMap` to `PCFShadowMap` for cheaper mobile shadow sampling.
+- Tests: 11/11 pass (added `AdaptiveResolution` coverage).

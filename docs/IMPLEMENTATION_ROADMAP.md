@@ -28,3 +28,11 @@
 1. **Live WebGL Visual & Touch Inspection (HIGHEST VALUE):** Boot `pnpm dev` / `pnpm preview` in a real WebGL-capable Chromium/Android browser (or enable Browser Automation MCP) to verify shader/lighting balance, FBX framing, touch ergonomics, and frame times across `HIGH`/`MED`/`LOW`.
 2. **Audio Playback & Hotspot Two-Device Trial:** Verify live engine/drift/collision WAV mixing and physical Android hotspot LAN pairing (`LobbyClient.ts`).
 3. **Optional `GameApp` Decomposition:** Extract `MultiplayerSync` from `src/main.ts` if expanding online gameplay modes further.
+
+---
+
+## Sprint 8 — Mobile Lifecycle & Adaptive Resolution (in progress)
+- Added `AdaptiveResolution` governor (`src/game/AdaptiveResolution.ts`) + unit test; wired into render loop.
+- Mobile lifecycle hardening: audio pause/resume + save flush on background/pagehide, frame-clock reset on return, orientation/visualViewport resize, throttled max-speed saves.
+- Jump take-off SFX dedup; cancelable `preventDefault` guard; cheaper `PCFShadowMap`.
+- Verification: `pnpm run build` clean, `11/11` tests pass. Live WebGL/Android hardware QA still requires a real browser (not available in this environment).

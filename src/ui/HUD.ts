@@ -493,13 +493,13 @@ export class HUD {
       const el = document.getElementById(id);
       if (!el) return;
       const press = (e: Event) => {
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
         e.stopPropagation();
         el.classList.add('pressed');
         onPress();
       };
       const release = (e: Event) => {
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
         e.stopPropagation();
         el.classList.remove('pressed');
         onRelease();
