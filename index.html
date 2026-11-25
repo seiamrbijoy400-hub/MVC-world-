@@ -1074,11 +1074,21 @@
 
     <!-- Compact Expandable Tools Drawer -->
     <div id="more-drawer" class="more-drawer">
+      <button id="btn-garage" class="hud-btn" style="background:rgba(249,115,22,0.22);border-color:#fb923c;" title="Garage &amp; Upgrades (B)"><span>🔧</span><span>Garage</span></button>
       <button id="btn-cam" class="hud-btn" title="Toggle Camera (V)"><span>📷</span><span id="cam-name">Chase</span></button>
       <button id="btn-tod" class="hud-btn" title="Time of Day"><span>🌤️</span><span id="tod-name">Day</span></button>
       <button id="btn-reset" class="hud-btn" title="Reset (R)"><span>↺</span><span>Reset Pos</span></button>
       <button id="btn-sound" class="hud-btn" title="Mute/Unmute SFX (M)"><span>🔊</span><span>Audio</span></button>
       <button id="btn-settings" class="hud-btn" title="Settings (Esc)"><span>⚙️</span><span>Settings</span></button>
+    </div>
+
+    <!-- In-World Drift Garage Prompt (when parked near Drift Garage on Plaza West) -->
+    <div id="garage-prompt" class="glass-card" style="position:absolute;top:132px;left:50%;transform:translateX(-50%);display:none;pointer-events:auto;align-items:center;gap:12px;border:2px solid #f97316;z-index:25;">
+      <div>
+        <div style="font-size:12px;font-weight:900;color:#fb923c;">🔧 NEO VELO DRIFT GARAGE</div>
+        <div style="font-size:10px;color:#cbd5e1;">Tune Engine, Nitrous, Underglow &amp; Career Stats</div>
+      </div>
+      <button id="btn-open-garage-prompt" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;">Open Garage</button>
     </div>
 
     <!-- In-World Race Gate Prompt (Positioned cleanly above notices, clear of tachometer & touch controls) -->
@@ -1183,6 +1193,53 @@
       <div style="display:flex;gap:8px;margin-top:10px;">
         <button id="studio-random-btn" class="option-btn" style="padding:11px;">🎲 Randomize</button>
         <button id="studio-done-btn" class="primary-cta" style="margin-top:0;flex:1.5;">Apply &amp; Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Garage, Performance Tuning & Career Stats Modal -->
+  <div id="garage-modal" class="modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-title">
+        <span>🔧 Drift Garage &amp; Career</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:13px;font-weight:900;color:#4ade80;">₡ <span id="garage-credits">1,000</span></span>
+          <button id="garage-close-btn" class="modal-close">&times;</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Twin-Supercharger Tune <span id="garage-engine-lv" style="color:#38bdf8;">Stage 0/3</span></label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div style="flex:1;font-size:11px;color:#cbd5e1;" id="garage-engine-desc">Stock V8 Peak Output (+0% torque)</div>
+          <button id="btn-upgrade-engine" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;">Upgrade ₡500</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Nitrous Overdrive Kit <span id="garage-nitro-lv" style="color:#facc15;">Stage 0/3</span></label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div style="flex:1;font-size:11px;color:#cbd5e1;" id="garage-nitro-desc">Standard bottle &amp; recharge speed</div>
+          <button id="btn-upgrade-nitro" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;">Upgrade ₡450</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Neon Underglow <span style="color:#94a3b8;">(Unlock ₡350)</span></label>
+        <div class="options-row" id="garage-underglow-row" style="flex-wrap:wrap;"></div>
+      </div>
+
+      <div class="setting-group">
+        <label>Emergency Heat Clear</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <div style="flex:1;font-size:11px;color:#cbd5e1;" id="garage-respray-desc">Quick respray &amp; clear wanted stars</div>
+          <button id="btn-garage-clear-heat" class="option-btn" style="flex:0 0 auto;padding:8px 14px;font-weight:800;">Respray ₡400</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Neo Velo Career Progress</label>
+        <div class="results-grid" id="garage-stats-grid" style="margin-bottom:4px;"></div>
       </div>
     </div>
   </div>
@@ -1328,7 +1385,7 @@
       <div id="res-lap-list" style="font-size:12px;color:#cbd5e1;margin-bottom:16px;"></div>
 
       <div style="display:flex;gap:10px;">
-        <button id="res-garage-btn" class="option-btn" style="padding:12px;">Lobby</button>
+        <button id="res-garage-btn" class="option-btn" style="padding:12px;">Open World</button>
         <button id="res-again-btn" class="primary-cta" style="margin-top:0;flex:2;">Race Again</button>
       </div>
     </div>

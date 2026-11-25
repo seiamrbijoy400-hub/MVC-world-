@@ -89,6 +89,9 @@ export class CarPhysics {
   private currentSteer = 0;
   public assistMode: 'ARCADE' | 'PRO' = 'ARCADE';
   public archetype: CarArchetypeId = 'HYPER';
+  public engineStage = 0;
+  public nitroStage = 0;
+  private archetypeTorqueScale = 1.0;
   public torqueScale = 1.0;
   public gripScale = 1.0;
   public weatherGripMultiplier = 1.0;
@@ -229,14 +232,14 @@ export class CarPhysics {
     this.archetype = type;
     if (type === 'DRIFT') {
       this.mass = 1320;
-      this.torqueScale = 1.06;
+      this.archetypeTorqueScale = 1.06;
       this.gripScale = 0.94;
       this.minDriftGrip = 0.24;
       this.maxSteerAngle = 37 * (Math.PI / 180);
       this.antiRollStiffness = 0.72;
     } else if (type === 'TOUGE') {
       this.mass = 1220;
-      this.torqueScale = 0.96;
+      this.archetypeTorqueScale = 0.96;
       this.gripScale = 1.24;
       this.minDriftGrip = 0.40;
       this.maxSteerAngle = 33 * (Math.PI / 180);
@@ -244,12 +247,23 @@ export class CarPhysics {
     } else {
       // HYPER — Zenvo TS1 Apex
       this.mass = 1450;
-      this.torqueScale = 1.0;
+      this.archetypeTorqueScale = 1.0;
       this.gripScale = 1.0;
       this.minDriftGrip = 0.34;
       this.maxSteerAngle = 31 * (Math.PI / 180);
       this.antiRollStiffness = 0.65;
     }
+    this.syncPerformanceTuning();
+  }
+
+  public applyTuning(engineStage: number, nitroStage: number): void {
+    this.engineStage = THREE.MathUtils.clamp(Math.round(engineStage), 0, 3);
+    this.nitroStage = THREE.MathUtils.clamp(Math.round(nitroStage), 0, 3);
+    this.syncPerformanceTuning();
+  }
+
+  private syncPerformanceTuning(): void {
+    this.torqueScale = this.archetypeTorqueScale * (1 + this.engineStage * 0.08);
   }
 
   public addNitro(amount: number): void {
@@ -320,15 +334,16 @@ export class CarPhysics {
       if (shiftDownTrigger && clutchOk) this.shiftDown();
     }
 
-    // Nitrous Overdrive consumption & passive trickle
+    // Nitrous Overdrive consumption & passive trickle (scales with nitro upgrade stage)
     const wantsNitro = Boolean(canDrive && inputs.nitro && this.gear >= 1 && this.nitro > 1.5);
     if (wantsNitro) {
       this.isNitroActive = true;
-      this.nitro = Math.max(0, this.nitro - 26 * dt);
+      const drainRate = 26 - this.nitroStage * 2.5;
+      this.nitro = Math.max(0, this.nitro - drainRate * dt);
     } else {
       this.isNitroActive = false;
       // Gentle passive trickle + bonus recharge when drifting
-      const regen = this.isDrifting ? 14.5 : 3.2;
+      const regen = (this.isDrifting ? 14.5 : 3.2) + this.nitroStage * 2.2;
       this.nitro = Math.min(100, this.nitro + regen * dt);
     }
 
@@ -452,7 +467,7 @@ export class CarPhysics {
       this.currentRpm = THREE.MathUtils.clamp(this.currentRpm, this.idleRpm, this.maxRpm);
     }
 
-    const nitroTorqueMult = this.isNitroActive ? 1.48 : 1.0;
+    const nitroTorqueMult = this.isNitroActive ? (1.48 + this.nitroStage * 0.06) : 1.0;
     const engineTorque = (!canDrive || clutchDisengaged || this.revLimiterBounce)
       ? 0
       : this.evaluateEngineTorque(this.currentRpm) * effectiveThrottle * this.torqueScale * nitroTorqueMult;
@@ -461,9 +476,7 @@ export class CarPhysics {
     const driveWheelTorque = engineTorque * gearRatio * this.finalDrive * drivetrainEfficiency;
     let driveForce = driveWheelTorque / this.wheelRadiusRear;
     if (this.gear === -1) driveForce = -driveForce;
-    if (this.isNitroActive) {
-      driveForce += 4800; // Direct jet thrust at high gears
-    }
+    const nitroJetForce = this.isNitroActive ? (4800 + this.nitroStage * 950) : 0;
 
     // --- 4. Sample Ground for All 4 Wheels ---
     let avgGroundY = 0;
@@ -523,13 +536,15 @@ export class CarPhysics {
       netLongForce = 0;
     }
 
-    // Dynamic rear weight transfer under launch lets track tires hook up to ~1.65x static load
-    const maxRearTraction = rearLoad * avgGrip * 1.65;
+    // Dynamic rear weight transfer under launch + tuned compound slicks let high-stage builds hook harder
+    const maxRearTraction = rearLoad * avgGrip * (1.65 + this.engineStage * 0.12);
     const wheelspinRatio = Math.max(0, (Math.abs(driveForce) - maxRearTraction) / maxRearTraction);
     if (Math.abs(driveForce) > maxRearTraction) {
       // Brakes must still work when traction-limited — include brakeForce in capped calculation
       const cappedDrive = Math.sign(driveForce) * maxRearTraction;
-      netLongForce = cappedDrive - Math.sign(vFwd) * (aeroDrag + rollingResistance + brakeForce);
+      netLongForce = cappedDrive + nitroJetForce - Math.sign(vFwd) * (aeroDrag + rollingResistance + brakeForce);
+    } else {
+      netLongForce += nitroJetForce;
     }
 
     // --- 6. Lateral Axle Tire Forces & Real Yaw Dynamics ---

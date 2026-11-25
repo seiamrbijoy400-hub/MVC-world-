@@ -1,44 +1,25 @@
 # APEX ZERO: NEON VELO — Implementation Roadmap
-**Date:** 2026-11-25 | **Baseline:** Clean build, 60 modules
+**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 62 modules) | **Sim Tests:** 6/6 Pass (`tests/gameplay.test.ts`)
 
 ---
 
-## Sprint 3 (Current) — Bug fixes, world clarity, and feel
-
-### Priority order
-1. ✅ **[P2-F] Ghost pitch double-add** — 5-line fix, visual correctness
-2. ✅ **[P2-D] Elevated shard pickup radius** — 2-line fix, gameplay critical
-3. ✅ **[P2-C] Minimap: add activity markers** — shards + traps + rival portals on minimap
-4. ✅ **[P1-A] Drift zone ring heights** — terrain-sample the ring Y at build time
-5. ✅ **[P4-E] Air time tracking** — wire `onAirLanding` → `save.data.maxAirTime`
-6. ✅ **[P4-C] Civic car respawn** — respawn stolen civics at their original position after a delay
-7. ✅ **[P3-B] Sparring fighter leash** — return to home if >80m away
-8. ✅ **[P2-E] Rival portal prompt gate** — require inCar + narrower radius (8m)
-9. ✅ **[P1-D] Character-car pushback + building clamp** — run worldCollider after push
-10. ⬜ **[P3-A/F] Gearbox setting in settings modal** — wire gearbox-options handler
-
-### Sprint 4 — World richness
-- Minimap shard/trap icon legend
-- More civic car variants with different physics (lighter, slower)
-- District discovery: trigger when first entering city zones
-- NPC reactions: pedestrians flee police/fights
-- Weather-reactive visual: wet road sheen on track surface
-
-### Sprint 5 — Activities and progression depth
-- Delivery missions using existing WorldActivities scaffolding
-- Vehicle recovery missions: bring stolen civic cars back to their owners
-- Police escape bonus: credits for clean getaway
-- Leaderboard screen in results modal
-
-### Sprint 6 — Performance and polish
-- Three.js resource disposal on peer leave
-- Code-split main.ts into GameLoop + GameSystems managers  
-- LOD for distant character meshes (replace full mesh with billboard beyond 60m)
-- Shadow map radius follows player (currently fixed at scene load)
+## Completed Sprints
+- **Sprint 3 & 4:** Ghost pitch fix, shard 3D pickup radius, drift zone ground sampling, Harbor seawall & Touge ramp gap alignment, unmirrored building signs + per-face UV scaling, Nitro touch/tachometer HUD, input blur safety, District discovery.
+- **Sprint 4.5 (Checkpoint `bb7c08b`):** `RoadGraph.ts` Dijkstra routing & building `hasLineOfSight()`, `PedestrianSystem.ts` (14 patrolling NPCs, crime witness & fleeing), stopped traffic/police hijacking, `CarMesh.dispose()` & `HumanCharacterMesh.dispose()`, hit stun & prone KO poses, footstep/jump/land/punch/door SFX.
+- **Sprint 5 (Current):**
+  - Fixed `CarPhysics` rear traction clamping so Stage 1–3 Engine & Nitro tuning deliver measurable acceleration/speed (`CarPhysics.ts`).
+  - Fixed `PoliceSystem` unreachable `onEscaped` reward (`clearHeat` ordering), blind/non-omniscient spawn & search navigation (`lastKnownPos`, `goalDist`).
+  - Added Drift Garage & Tuning Shop (`index.html`, `SaveManager.ts`, `main.ts`) giving `₡` credits real mechanical/visual progression + Career Stats view.
+  - Added Rival Sprint sequential checkpoint beacons (`nextWpMarker`), GPU disposal on sprint end/cancel (`WorldActivities.ts`), and minimap checkpoint markers.
+  - Fixed assaulted pedestrian behavior (`markVictimFlee`), on-foot collision/damage with all moving vehicles, car vs `SparringFighter` collision, `ownZenvo` GP race restore, and full Neo Velo street/Touge/Harbor minimap rendering (`HUD.ts`).
+  - Created headless Node simulation suite (`tests/gameplay.test.ts`) verifying 6 core gameplay systems end-to-end.
 
 ---
 
-## Definition of Done (per AGENTS.md §8)
-A feature is PASS only when complete player-facing behaviour is implemented and tested.
-Every sprint must end with: clean TypeScript build, honest test record, no regressions.
-
+## Next Priorities
+### Sprint 6 — Real Device QA, Performance & Modularization
+1. **Live Browser / Android Chrome QA (HIGHEST VALUE):** Run `pnpm dev` / `pnpm preview` on target Android phone to measure real FPS across `HIGH`/`MED`/`LOW`, verify multi-touch steering + pedal/joystick ergonomics, verify FBX HQ car model loading, and check HUD safe-area clearances.
+2. **Modularize `src/main.ts`:** Extract `GarageController`, `CollisionResolver`, and `SessionManager` out of the 2,500-line `GameApp` class.
+3. **GPU Draw-Call Reduction for Mobile (`OpenWorldMap.ts`):** Share building window atlas textures across palette buckets instead of 2 `256×512` textures per building; verify draw calls with `renderer.info`.
+4. **LAN Multiplayer Verification:** Test two devices on Android hotspot using `server/lanLobbyPlugin.ts` WebSocket sync (character appearance, combat hits, ball sync).
+5. **Gameplay Depth:** Add repeatable Time-Trial / Delivery Sprint contracts at Harbor Cargo & Drift Garage once modularization lands.

@@ -769,34 +769,73 @@ export class HUD {
     const mapScale = 0.16;
     const mapOffsetX = w * 0.5 + 10;
     const mapOffsetY = h * 0.5 + 6;
+    const toX = (wx: number) => wx * mapScale + mapOffsetX;
+    const toY = (wz: number) => wz * mapScale + mapOffsetY;
 
-    // Metro City East Grid
-    ctx.fillStyle = 'rgba(148, 163, 184, 0.22)';
-    ctx.fillRect(28 * mapScale + mapOffsetX, -220 * mapScale + mapOffsetY, 210 * mapScale, 440 * mapScale);
+    // Harbor Ocean Water (south of Harbor Quay)
+    ctx.fillStyle = 'rgba(6, 182, 212, 0.22)';
+    ctx.fillRect(toX(30), toY(268), 300 * mapScale, 70 * mapScale);
 
-    // Soccer Pitch
-    ctx.fillStyle = 'rgba(34, 197, 94, 0.35)';
-    ctx.fillRect(134 * mapScale + mapOffsetX, 48 * mapScale + mapOffsetY, 80 * mapScale, 84 * mapScale);
+    // Metro City Blocks Footprint
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.14)';
+    ctx.fillRect(toX(32), toY(-220), 282 * mapScale, 452 * mapScale);
+
+    // Mountain Touge Elevated Deck (z = -340..-252)
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.20)';
+    ctx.fillRect(toX(38), toY(-340), 234 * mapScale, 88 * mapScale);
+
+    // Harbor Quay & South Stunt Pier
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.26)';
+    ctx.fillRect(toX(35), toY(231), 282 * mapScale, 38 * mapScale);
+    ctx.fillRect(toX(140), toY(265), 56 * mapScale, 34 * mapScale);
+
+    // Stunt Park & Soccer Pitch
+    ctx.fillStyle = 'rgba(249, 115, 22, 0.24)';
+    ctx.fillRect(toX(56), toY(44), 56 * mapScale, 92 * mapScale);
+    ctx.fillStyle = 'rgba(34, 197, 94, 0.36)';
+    ctx.fillRect(toX(134), toY(48), 80 * mapScale, 84 * mapScale);
+
+    // City Road Network (Avenues, Streets, GP Connectors, Touge Access)
+    ctx.strokeStyle = 'rgba(226, 232, 240, 0.42)';
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    for (const ax of [46, 122, 224, 296]) {
+      ctx.moveTo(toX(ax), toY(-215));
+      ctx.lineTo(toX(ax), toY(232));
+    }
+    for (const sz of [-160, -40, 30, 150, 224]) {
+      const startX = sz <= 30 ? 7 : 38;
+      ctx.moveTo(toX(startX), toY(sz));
+      ctx.lineTo(toX(312), toY(sz));
+    }
+    // Touge Switchback Roads
+    ctx.moveTo(toX(32), toY(-160));
+    ctx.lineTo(toX(32), toY(-296));
+    ctx.lineTo(toX(278), toY(-296));
+    ctx.lineTo(toX(278), toY(-160));
+    ctx.stroke();
 
     // GP Circuit Loop
     ctx.beginPath();
     for (let i = 0; i < track.trackPoints.length; i++) {
       const pt = track.trackPoints[i];
-      const mx = pt.x * mapScale + mapOffsetX;
-      const my = pt.z * mapScale + mapOffsetY;
+      const mx = toX(pt.x);
+      const my = toY(pt.z);
       if (i === 0) ctx.moveTo(mx, my);
       else ctx.lineTo(mx, my);
     }
     ctx.closePath();
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 3.8;
     ctx.strokeStyle = '#38bdf8';
     ctx.stroke();
 
-    // Start Gate green dot
+    // Start Gate green dot & Drift Garage orange dot
     ctx.beginPath();
-    ctx.arc(0 * mapScale + mapOffsetX, -4 * mapScale + mapOffsetY, 4.2, 0, Math.PI * 2);
+    ctx.arc(toX(0), toY(-4), 4.0, 0, Math.PI * 2);
     ctx.fillStyle = '#22c55e';
     ctx.fill();
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(toX(84) - 2.5, toY(15) - 2.5, 5, 5);
 
     for (const m of extraMarkers) {
       ctx.fillStyle = m.color;

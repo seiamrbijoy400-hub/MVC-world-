@@ -63,6 +63,7 @@ export interface ActiveSprintState {
   rivalWpIdx: number;
   playerWpIdx: number;
   elapsed: number;
+  nextWpMarker: THREE.Mesh;
   finishMarker: THREE.Mesh;
 }
 
@@ -71,6 +72,7 @@ export interface ActivityCallbacks {
   onDriftZoneCompleted: (zone: DriftZoneDef, score: number, medal: 'GOLD' | 'SILVER' | 'BRONZE' | 'NONE', isNewBest: boolean) => void;
   onShardCollected: (shard: ApexShardDef, totalFound: number, totalCount: number) => void;
   onNearRivalPrompt: (rival: RivalSprintDef | null) => void;
+  onSprintCheckpoint?: (wpIdx: number, totalWps: number) => void;
   onSprintEnded: (def: RivalSprintDef, playerWon: boolean, timeSec: number) => void;
 }
 
@@ -369,6 +371,20 @@ export class WorldActivities {
     finishMarker.position.set(finalWp.x, finalWp.y + 7, finalWp.z);
     this.scene.add(finishMarker);
 
+    const wp0 = rival.waypoints[0];
+    const nextWpMarker = new THREE.Mesh(
+      new THREE.CylinderGeometry(4.8, 4.8, 12, 20, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xfacc15,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    nextWpMarker.position.set(wp0.x, wp0.y + 6, wp0.z);
+    this.scene.add(nextWpMarker);
+
     this.activeSprint = {
       def: rival,
       rivalPhysics: rivalPhys,
@@ -376,6 +392,7 @@ export class WorldActivities {
       rivalWpIdx: 0,
       playerWpIdx: 0,
       elapsed: 0,
+      nextWpMarker,
       finishMarker
     };
     return true;
@@ -384,7 +401,13 @@ export class WorldActivities {
   public cancelSprint(): void {
     if (!this.activeSprint) return;
     this.scene.remove(this.activeSprint.rivalMesh.root);
+    this.activeSprint.rivalMesh.dispose();
+    this.scene.remove(this.activeSprint.nextWpMarker);
+    this.activeSprint.nextWpMarker.geometry.dispose();
+    (this.activeSprint.nextWpMarker.material as THREE.Material).dispose();
     this.scene.remove(this.activeSprint.finishMarker);
+    this.activeSprint.finishMarker.geometry.dispose();
+    (this.activeSprint.finishMarker.material as THREE.Material).dispose();
     this.activeSprint = null;
   }
 
@@ -434,10 +457,18 @@ export class WorldActivities {
           this.activeDriftZone = insideZone;
           this.activeDriftZoneScore = 0;
         }
+        (insideZone.ringMesh.material as THREE.MeshBasicMaterial).color.setHex(
+          isDrifting ? 0xfacc15 : 0x22c55e
+        );
         if (isDrifting && playerSpeedKmh > 32) {
           this.activeDriftZoneScore += driftRatePtsPerSec * dt;
         }
-      } else if (this.activeDriftZone) {
+      } else {
+        for (const z of this.driftZones) {
+          (z.ringMesh.material as THREE.MeshBasicMaterial).color.setHex(0xf97316);
+        }
+      }
+      if (!insideZone && this.activeDriftZone) {
         const finished = this.activeDriftZone;
         const finalScore = Math.round(this.activeDriftZoneScore);
         this.activeDriftZone = null;
@@ -519,7 +550,12 @@ export class WorldActivities {
           this.cb.onSprintEnded(finishedDef, true, time);
           return;
         }
+        const nxt = sp.def.waypoints[sp.playerWpIdx];
+        sp.nextWpMarker.position.set(nxt.x, nxt.y + 6, nxt.z);
+        sp.nextWpMarker.visible = sp.playerWpIdx < sp.def.waypoints.length - 1;
+        this.cb.onSprintCheckpoint?.(sp.playerWpIdx, sp.def.waypoints.length);
       }
+      sp.nextWpMarker.rotation.y = -timeSec * 2.2;
 
       // Drive AI Rival toward its waypoint
       const rPhys = sp.rivalPhysics;

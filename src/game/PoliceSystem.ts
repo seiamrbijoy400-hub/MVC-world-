@@ -103,6 +103,7 @@ export class PoliceSystem {
     this.heat = 0;
     this.crimeCooldown = 0;
     this.decayTimer = 0;
+    this.spawnCooldown = 0;
     this.isSpotted = false;
     this.setBustProgress(0);
     this.onHooks.onHeatChanged(0, HEAT_LABELS[0]);
@@ -122,7 +123,10 @@ export class PoliceSystem {
   }
 
   /** Allows the player to steal a nearby stopped police cruiser cleanly without dual ownership. */
-  public takeNearestUnit(pos: THREE.Vector3, maxRadius = 4.4): { physics: CarPhysics; mesh: CarMesh } | null {
+  public takeNearestUnit(
+    pos: THREE.Vector3,
+    maxRadius = 4.4
+  ): { physics: CarPhysics; mesh: CarMesh; lightA: THREE.Mesh; lightB: THREE.Mesh } | null {
     for (let i = 0; i < this.units.length; i++) {
       const u = this.units[i];
       if (u.physics.speedKmh > 22) continue;
@@ -131,7 +135,7 @@ export class PoliceSystem {
         this.units.splice(i, 1);
         this.setBustProgress(0);
         u.physics.onWallCollision = () => {};
-        return { physics: u.physics, mesh: u.mesh };
+        return { physics: u.physics, mesh: u.mesh, lightA: u.lightA, lightB: u.lightB };
       }
     }
     return null;
@@ -188,11 +192,11 @@ export class PoliceSystem {
 
       if (this.decayTimer > 6.5) {
         this.decayTimer = 0;
-        this.heat = Math.max(0, this.heat - 1);
-        if (this.heat === 0) {
+        if (this.heat <= 1) {
           this.clearHeat(true);
           return;
         }
+        this.heat = Math.max(0, this.heat - 1);
         this.onHooks.onHeatChanged(this.heat, HEAT_LABELS[this.heat]);
       }
     }
@@ -252,21 +256,35 @@ export class PoliceSystem {
   }
 
   private spawnUnit(playerPos: THREE.Vector3): void {
+    // Dispatched units home on lastKnownPos unless player is actively spotted
+    const dispatchTarget = (this.isSpotted || this.lastKnownPos.lengthSq() < 1) ? playerPos : this.lastKnownPos;
     let best: [number, number] = SPAWN_POINTS[0];
     let bestScore = -Infinity;
     for (const p of SPAWN_POINTS) {
-      const d = Math.hypot(p[0] - playerPos.x, p[1] - playerPos.z);
-      const score = (d > 55 && d < 140 ? 100 : 0) - Math.abs(d - 85);
+      const dTarget = Math.hypot(p[0] - dispatchTarget.x, p[1] - dispatchTarget.z);
+      const dPlayer = Math.hypot(p[0] - playerPos.x, p[1] - playerPos.z);
+      const overlapsUnit = this.units.some(
+        (u) => Math.hypot(u.physics.position.x - p[0], u.physics.position.z - p[1]) < 9
+      );
+      const insideBuilding = this.openWorld.colliders.some(
+        (c) => p[0] > c.minX - 2 && p[0] < c.maxX + 2 && p[1] > c.minZ - 2 && p[1] < c.maxZ + 2
+      );
+      let score = (dTarget > 50 && dTarget < 145 ? 100 : 0) - Math.abs(dTarget - 85);
+      // Avoid magically popping in right next to a hidden player
+      if (dPlayer < 52) score -= 240;
+      if (overlapsUnit) score -= 500;
+      if (insideBuilding) score -= 1000;
       if (score > bestScore) {
         bestScore = score;
         best = p;
       }
     }
 
-    const heading = Math.atan2(-(playerPos.x - best[0]), -(playerPos.z - best[1]));
+    const heading = Math.atan2(-(dispatchTarget.x - best[0]), -(dispatchTarget.z - best[1]));
     const ground = this.track.sampleGround(best[0], best[1]);
     const rampH = this.openWorld.sampleRampHeight(best[0], best[1]);
     const spawn = new THREE.Vector3(best[0], Math.max(ground.height, rampH), best[1]);
+    this.openWorld.resolveCollision(spawn, new THREE.Vector3(), 1.8);
 
     const physics = new CarPhysics();
     physics.enforceTrackWalls = false;
@@ -308,7 +326,11 @@ export class PoliceSystem {
     stripe.position.set(0, 0.56, 0.0);
     mesh.root.add(stripe);
 
-    this.lastKnownPos.copy(playerPos);
+    if (this.lastKnownPos.lengthSq() < 1) {
+      this.lastKnownPos.copy(playerPos);
+    }
+    const spawnLOS = hasLineOfSight(spawn.x, spawn.z, playerPos.x, playerPos.z, this.openWorld.colliders)
+      && Math.hypot(spawn.x - playerPos.x, spawn.z - playerPos.z) < 95;
     this.units.push({
       physics,
       mesh,
@@ -318,7 +340,7 @@ export class PoliceSystem {
       stuckTimer: 0,
       reverseTimer: 0,
       age: 0,
-      mode: 'PURSUING'
+      mode: spawnLOS ? 'PURSUING' : 'SEARCHING'
     });
   }
 
@@ -334,6 +356,7 @@ export class PoliceSystem {
     const rgt = unit.physics.getRightVector();
 
     const goalPos = unit.mode === 'PURSUING' ? playerPos : this.lastKnownPos;
+    const goalDist = Math.hypot(goalPos.x - unit.physics.position.x, goalPos.z - unit.physics.position.z);
     const hasLOS = hasLineOfSight(
       unit.physics.position.x,
       unit.physics.position.z,
@@ -343,7 +366,7 @@ export class PoliceSystem {
       1.6
     );
 
-    const steerTarget = hasLOS || dist < 18
+    const steerTarget = hasLOS || goalDist < 18
       ? goalPos
       : this.roadGraph.findNextWaypoint(unit.physics.position, goalPos, this.navScratch);
 

@@ -56,6 +56,7 @@ interface VehicleEntry {
   mesh: CarMesh;
   name: string;
   spawnSpec?: CivicSpawnSpec;
+  policeLights?: { a: THREE.Mesh; b: THREE.Mesh; active: boolean };
 }
 
 class GameApp {
@@ -102,12 +103,17 @@ class GameApp {
   private pedestrians!: PedestrianSystem;
   private remotePeers = new Map<string, RemotePeer>();
 
+  /** Player's primary owned Zenvo TS1 (always restored cleanly for GP races & garage tuning). */
+  private ownZenvo!: VehicleEntry;
   /** Player-owned cars left in the world (own Zenvo + anything stolen and abandoned). */
   private parkedCars: VehicleEntry[] = [];
   /** Stealable civilian cars parked around the city. */
   private civicCars: VehicleEntry[] = [];
   private nearbyCivic: VehicleEntry | null = null;
   private activeCarName = 'Your Zenvo';
+  private activePoliceLights: { a: THREE.Mesh; b: THREE.Mesh; active: boolean } | undefined;
+  private lastGaragePrompt = false;
+  private fighterHitCooldown = 0;
   private assaultHeatCooldown = 0;
   private policeHitCooldown = 0;
   private footstepTimer = 0;
@@ -200,6 +206,7 @@ class GameApp {
     this.physics.gearboxType = this.save.data.gearbox;
     this.physics.assistMode = this.save.data.assistMode;
     this.physics.applyArchetype(this.save.data.carArchetype);
+    this.physics.applyTuning(this.save.data.engineStage, this.save.data.nitroStage);
     this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
     this.physics.onAirLanding = (airSec) => {
       if (airSec > 0.8) {
@@ -255,6 +262,7 @@ class GameApp {
     this.carMesh.setColor(this.save.data.carColor);
     this.carMesh.setUnderglowColor(this.save.data.underglowColor);
     this.scene.add(this.carMesh.root);
+    this.ownZenvo = { physics: this.physics, mesh: this.carMesh, name: 'Your Zenvo' };
 
     this.studio = new CharacterStudio();
     this.studio.applyPreset(this.save.data.characterId);
@@ -379,6 +387,14 @@ class GameApp {
         this.award(150, 120);
       },
       onNearRivalPrompt: (rival) => this.setRivalPrompt(rival),
+      onSprintCheckpoint: (wpIdx, totalWps) => {
+        this.sound.playBeep(880, 0.08);
+        this.hud.showNotification(
+          `CHECKPOINT ${wpIdx}/${totalWps}`,
+          wpIdx === totalWps - 1 ? 'Final push — hit the GREEN Finish Gate!' : 'Follow the GOLD beacon to the next block!',
+          1.4
+        );
+      },
       onSprintEnded: (def, playerWon, timeSec) => {
         this.setRivalPrompt(null);
         if (playerWon) {
@@ -424,11 +440,13 @@ class GameApp {
       this.studio.applyPreset(charId);
     };
     this.lobbyUI.onColorPreview = (color) => {
+      this.ownZenvo.mesh.setColor(color);
       this.carMesh.setColor(color);
       this.save.data.carColor = color;
       this.save.scheduleSave();
     };
     this.lobbyUI.onGearboxChange = (gb) => {
+      this.ownZenvo.physics.gearboxType = gb;
       this.physics.gearboxType = gb;
       this.save.data.gearbox = gb;
       this.save.scheduleSave();
@@ -508,7 +526,18 @@ class GameApp {
     this.activities.cancelSprint();
     document.getElementById('results-modal')!.classList.remove('open');
 
-    // Automatically put player inside car on Starting Grid!
+    // Always put player inside their tuned Zenvo on the Starting Grid (keep any stolen ride parked cleanly)
+    if (this.physics !== this.ownZenvo.physics) {
+      this.parkActiveCar();
+      this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
+      this.physics = this.ownZenvo.physics;
+      this.carMesh = this.ownZenvo.mesh;
+      this.activeCarName = this.ownZenvo.name;
+      this.activePoliceLights = undefined;
+      this.configureActiveCar();
+    } else {
+      this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
+    }
     this.inCar = true;
     this.avatarMesh.root.visible = false;
     this.physics.enforceTrackWalls = true;
@@ -716,11 +745,12 @@ class GameApp {
         toP.normalize();
         if (toP.dot(fwd) > 0.05) {
           ped.controller.takeDamage(26, fwd.x, fwd.z);
+          this.pedestrians.markVictimFlee(ped, origin);
           this.sound.playCrash(24);
           this.particles.emitSparks(ped.controller.position, 8);
           this.cameraShake = 0.14;
           this.pedestrians.alertDanger(origin, 22);
-          this.pedestrians.notifyCrime(origin, 'ASSAULT ON CIVILIAN', 32);
+          this.pedestrians.notifyCrime(origin, 'ASSAULT ON CIVILIAN', 32, ped);
         }
       }
     }
@@ -784,7 +814,14 @@ class GameApp {
       // Check stopped police cruiser theft!
       const cop = this.police.takeNearestUnit(this.charCtrl.position, 4.4);
       if (cop) {
-        this.hijackVehicle(cop.physics, cop.mesh, 'Police Cruiser', 2, 'POLICE VEHICLE STOLEN');
+        this.hijackVehicle(
+          cop.physics,
+          cop.mesh,
+          'Police Cruiser',
+          2,
+          'POLICE VEHICLE STOLEN',
+          { a: cop.lightA, b: cop.lightB, active: true }
+        );
         return;
       }
 
@@ -816,7 +853,12 @@ class GameApp {
   /** Keeps a reference to the car you just left so you can re-enter it later. */
   private parkActiveCar(): void {
     if (this.parkedCars.some((p) => p.physics === this.physics)) return;
-    this.parkedCars.push({ physics: this.physics, mesh: this.carMesh, name: this.activeCarName });
+    this.parkedCars.push({
+      physics: this.physics,
+      mesh: this.carMesh,
+      name: this.activeCarName,
+      policeLights: this.activePoliceLights
+    });
   }
 
   private findNearestParkedCar(radius: number): VehicleEntry | null {
@@ -857,12 +899,15 @@ class GameApp {
     this.physics = entry.physics;
     this.carMesh = entry.mesh;
     this.activeCarName = entry.name;
+    this.activePoliceLights = entry.policeLights;
     this.configureActiveCar();
     this.avatarMesh.root.visible = false;
     this.sound.playCarDoor();
     this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
     this.hud.setStealPrompt(null);
-    this.hud.showNotification('DRIVING', 'Drive to Green Gate on Track to Race!', 1.6);
+    if (this.gameState === GameState.OPEN_WORLD) {
+      this.hud.showNotification('DRIVING', `${entry.name} • Drive to Green Gate on Track to Race!`, 1.6);
+    }
     this.setRivalPrompt(this.nearbyRival);
   }
 
@@ -871,7 +916,8 @@ class GameApp {
     mesh: CarMesh,
     label: string,
     directHeat: number,
-    crimeReason: string
+    crimeReason: string,
+    policeLights?: { a: THREE.Mesh; b: THREE.Mesh; active: boolean }
   ): void {
     this.sound.init();
     this.parkActiveCar();
@@ -879,6 +925,7 @@ class GameApp {
     this.physics = physics;
     this.carMesh = mesh;
     this.activeCarName = label;
+    this.activePoliceLights = policeLights;
     this.configureActiveCar();
     this.avatarMesh.root.visible = false;
     this.save.data.carsStolen++;
@@ -890,7 +937,11 @@ class GameApp {
     this.police.addHeat(witnessed ? directHeat + 1 : directHeat, crimeReason, physics.position);
     this.hud.setStealPrompt(null);
     this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
-    this.hud.showNotification(crimeReason, `${label} is yours — lose the heat!`, 2.6);
+    this.hud.showNotification(
+      crimeReason,
+      policeLights ? `${label} stolen — press Horn [H] to toggle strobes!` : `${label} is yours — lose the heat!`,
+      2.6
+    );
     this.setRivalPrompt(null);
   }
 
@@ -903,6 +954,7 @@ class GameApp {
     this.physics = civic.physics;
     this.carMesh = civic.mesh;
     this.activeCarName = `${civic.name}'s Ride`;
+    this.activePoliceLights = undefined;
     this.configureActiveCar();
     this.avatarMesh.root.visible = false;
 
@@ -944,9 +996,11 @@ class GameApp {
     }
   }
 
-  /** Re-applies the player-car callbacks after swapping into a different chassis. */
+  /** Re-applies the player-car callbacks and preferences after swapping into a different chassis. */
   private configureActiveCar(): void {
     this.physics.enforceTrackWalls = false;
+    this.physics.gearboxType = this.save.data.gearbox;
+    this.physics.assistMode = this.save.data.assistMode;
     this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
     this.physics.onAirLanding = (airSec) => {
       if (airSec > 0.8) {
@@ -1185,6 +1239,15 @@ class GameApp {
     this.sound.init();
     this.sound.playHorn();
     const origin = this.inCar ? this.physics.position : this.charCtrl.position;
+
+    if (this.inCar && this.activePoliceLights) {
+      this.activePoliceLights.active = !this.activePoliceLights.active;
+      this.hud.showNotification(
+        'POLICE STROBES',
+        this.activePoliceLights.active ? 'Emergency lightbar ON' : 'Emergency lightbar OFF',
+        1.1
+      );
+    }
 
     for (const c of this.cityCruisers) {
       if (c.physics.position.distanceTo(origin) < 18) {
@@ -1476,7 +1539,14 @@ class GameApp {
       if (e.code === 'KeyV') cycleCam();
       if (e.code === 'KeyM') soundBtn.click();
       if (e.code === 'KeyY') this.startNearbyRival();
+      if (e.code === 'KeyB') {
+        const gm = document.getElementById('garage-modal')!;
+        if (gm.classList.contains('open')) this.closeGarageModal();
+        else this.openGarageModal();
+      }
     });
+
+    this.setupGarageHandlers();
 
     document.querySelectorAll('.cam-options .option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1540,6 +1610,7 @@ class GameApp {
     document.querySelectorAll('.assist-options .option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const assist = btn.getAttribute('data-assist') as 'ARCADE' | 'PRO';
+        this.ownZenvo.physics.assistMode = assist;
         this.physics.assistMode = assist;
         this.save.data.assistMode = assist;
         this.save.scheduleSave();
@@ -1550,7 +1621,8 @@ class GameApp {
     document.querySelectorAll('.archetype-options .option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const arch = btn.getAttribute('data-arch') as CarArchetypeId;
-        this.physics.applyArchetype(arch);
+        this.ownZenvo.physics.applyArchetype(arch);
+        if (this.physics !== this.ownZenvo.physics) this.physics.applyArchetype(arch);
         this.save.data.carArchetype = arch;
         this.save.scheduleSave();
         this.syncOptionSelection('.archetype-options .option-btn', 'data-arch', arch);
@@ -1569,6 +1641,197 @@ class GameApp {
     });
   }
 
+  private setupGarageHandlers(): void {
+    const garageModal = document.getElementById('garage-modal')!;
+    const closeBtn = document.getElementById('garage-close-btn')!;
+    document.getElementById('btn-garage')?.addEventListener('click', () => {
+      document.getElementById('more-drawer')?.classList.remove('open');
+      this.openGarageModal();
+    });
+    document.getElementById('btn-open-garage-prompt')?.addEventListener('click', () => this.openGarageModal());
+    closeBtn.addEventListener('click', () => this.closeGarageModal());
+    garageModal.addEventListener('click', (e) => {
+      if (e.target === garageModal) this.closeGarageModal();
+    });
+
+    const engineCosts = [500, 1200, 2400];
+    document.getElementById('btn-upgrade-engine')?.addEventListener('click', () => {
+      const st = this.save.data.engineStage;
+      if (st >= 3) return;
+      const cost = engineCosts[st];
+      if (this.save.data.credits < cost) {
+        this.sound.playBeep(200, 0.16);
+        this.hud.showNotification('INSUFFICIENT CREDITS', `Need ₡${cost.toLocaleString()} for Engine Stage ${st + 1}`, 1.8);
+        return;
+      }
+      this.save.spendCredits(cost);
+      this.save.data.engineStage = st + 1;
+      this.save.saveNow();
+      this.ownZenvo.physics.applyTuning(this.save.data.engineStage, this.save.data.nitroStage);
+      this.sound.playRankUpFanfare();
+      this.refreshProfile();
+      this.refreshGarageModal();
+      this.hud.showNotification(`ENGINE STAGE ${st + 1}`, `+${(st + 1) * 8}% Supercharger Torque installed!`, 2.0);
+    });
+
+    const nitroCosts = [450, 1000, 2000];
+    document.getElementById('btn-upgrade-nitro')?.addEventListener('click', () => {
+      const st = this.save.data.nitroStage;
+      if (st >= 3) return;
+      const cost = nitroCosts[st];
+      if (this.save.data.credits < cost) {
+        this.sound.playBeep(200, 0.16);
+        this.hud.showNotification('INSUFFICIENT CREDITS', `Need ₡${cost.toLocaleString()} for Nitro Stage ${st + 1}`, 1.8);
+        return;
+      }
+      this.save.spendCredits(cost);
+      this.save.data.nitroStage = st + 1;
+      this.save.saveNow();
+      this.ownZenvo.physics.applyTuning(this.save.data.engineStage, this.save.data.nitroStage);
+      this.sound.playRankUpFanfare();
+      this.refreshProfile();
+      this.refreshGarageModal();
+      this.hud.showNotification(`NITRO STAGE ${st + 1}`, 'Stronger boost thrust & faster bottle recharge!', 2.0);
+    });
+
+    document.getElementById('btn-garage-clear-heat')?.addEventListener('click', () => {
+      if (this.police.heat <= 0) {
+        this.hud.showNotification('CLEAN RECORD', 'Police are not chasing you right now.', 1.4);
+        return;
+      }
+      const cost = 400;
+      if (this.save.data.credits < cost) {
+        this.sound.playBeep(200, 0.16);
+        this.hud.showNotification('INSUFFICIENT CREDITS', `Need ₡${cost} for fresh plates & respray`, 1.8);
+        return;
+      }
+      this.save.spendCredits(cost);
+      this.save.saveNow();
+      this.police.clearHeat(false);
+      this.sound.playCarDoor();
+      this.sound.playDiscoveryChime();
+      this.refreshProfile();
+      this.refreshGarageModal();
+      this.hud.showNotification('FRESH RESPRAY', 'Police scanners cleared!', 2.0);
+    });
+  }
+
+  private openGarageModal(): void {
+    this.hud.clearAllInputs();
+    this.refreshGarageModal();
+    document.getElementById('garage-modal')!.classList.add('open');
+    this.isPaused = true;
+    this.sound.pauseAudio();
+  }
+
+  private closeGarageModal(): void {
+    document.getElementById('garage-modal')!.classList.remove('open');
+    this.isPaused = false;
+    this.sound.resumeAudio();
+  }
+
+  private refreshGarageModal(): void {
+    const crEl = document.getElementById('garage-credits');
+    if (crEl) crEl.textContent = Math.round(this.save.data.credits).toLocaleString();
+
+    const engSt = this.save.data.engineStage;
+    const engCosts = [500, 1200, 2400];
+    const engLv = document.getElementById('garage-engine-lv');
+    const engDesc = document.getElementById('garage-engine-desc');
+    const engBtn = document.getElementById('btn-upgrade-engine') as HTMLButtonElement | null;
+    if (engLv) engLv.textContent = `Stage ${engSt}/3`;
+    if (engDesc) engDesc.textContent = engSt === 0 ? 'Stock V8 Output (+0% torque)' : `Twin-Supercharged Stage ${engSt} (+${engSt * 8}% torque)`;
+    if (engBtn) {
+      engBtn.textContent = engSt >= 3 ? 'MAXED' : `Upgrade ₡${engCosts[engSt].toLocaleString()}`;
+      engBtn.disabled = engSt >= 3 || this.save.data.credits < engCosts[engSt];
+      engBtn.style.opacity = engBtn.disabled ? '0.5' : '1';
+    }
+
+    const nitSt = this.save.data.nitroStage;
+    const nitCosts = [450, 1000, 2000];
+    const nitLv = document.getElementById('garage-nitro-lv');
+    const nitDesc = document.getElementById('garage-nitro-desc');
+    const nitBtn = document.getElementById('btn-upgrade-nitro') as HTMLButtonElement | null;
+    if (nitLv) nitLv.textContent = `Stage ${nitSt}/3`;
+    if (nitDesc) nitDesc.textContent = nitSt === 0 ? 'Standard N2O Bottle' : `High-Flow Stage ${nitSt} (+${nitSt * 6}% boost & faster regen)`;
+    if (nitBtn) {
+      nitBtn.textContent = nitSt >= 3 ? 'MAXED' : `Upgrade ₡${nitCosts[nitSt].toLocaleString()}`;
+      nitBtn.disabled = nitSt >= 3 || this.save.data.credits < nitCosts[nitSt];
+      nitBtn.style.opacity = nitBtn.disabled ? '0.5' : '1';
+    }
+
+    const heatBtn = document.getElementById('btn-garage-clear-heat') as HTMLButtonElement | null;
+    if (heatBtn) {
+      heatBtn.disabled = this.police.heat <= 0 || this.save.data.credits < 400;
+      heatBtn.style.opacity = heatBtn.disabled ? '0.45' : '1';
+      heatBtn.textContent = this.police.heat > 0 ? 'Respray ₡400' : 'Clean';
+    }
+
+    const glowRow = document.getElementById('garage-underglow-row');
+    if (glowRow) {
+      const palette = [
+        { hex: '#22d3ee', label: 'Cyan' },
+        { hex: '#ec4899', label: 'Pink' },
+        { hex: '#facc15', label: 'Gold' },
+        { hex: '#22c55e', label: 'Neon' },
+        { hex: '#ff5500', label: 'Apex' },
+        { hex: '#a855f7', label: 'Violet' },
+        { hex: 'OFF', label: 'Off' }
+      ];
+      glowRow.innerHTML = '';
+      for (const item of palette) {
+        const unlocked = this.save.data.unlockedUnderglows.includes(item.hex);
+        const equipped = this.save.data.underglowColor === item.hex;
+        const btn = document.createElement('button');
+        btn.className = `option-btn${equipped ? ' selected' : ''}`;
+        btn.style.flex = '0 0 auto';
+        btn.style.padding = '6px 10px';
+        btn.style.fontSize = '11px';
+        if (item.hex !== 'OFF') {
+          btn.style.borderBottom = `3px solid ${item.hex}`;
+        }
+        btn.textContent = unlocked ? item.label : `${item.label} ₡350`;
+        btn.addEventListener('click', () => {
+          if (!this.save.data.unlockedUnderglows.includes(item.hex)) {
+            if (this.save.data.credits < 350) {
+              this.sound.playBeep(200, 0.16);
+              this.hud.showNotification('INSUFFICIENT CREDITS', 'Need ₡350 to unlock this neon kit', 1.6);
+              return;
+            }
+            this.save.spendCredits(350);
+            this.save.data.unlockedUnderglows.push(item.hex);
+          }
+          this.save.data.underglowColor = item.hex;
+          this.save.saveNow();
+          this.ownZenvo.mesh.setUnderglowColor(item.hex);
+          this.carMesh.setUnderglowColor(item.hex);
+          this.sound.playDiscoveryChime();
+          this.refreshProfile();
+          this.refreshGarageModal();
+        });
+        glowRow.appendChild(btn);
+      }
+    }
+
+    const statsEl = document.getElementById('garage-stats-grid');
+    if (statsEl) {
+      const s = this.save.data;
+      const cards: Array<[string, string]> = [
+        ['Top Speed', `${s.maxSpeedKmh} km/h`],
+        ['Best Drift Combo', `${s.bestDriftCombo.toLocaleString()} pts`],
+        ['Apex Logs', `${s.discoveredShards.length} / 12`],
+        ['Rivals Defeated', `${s.rivalsDefeated.length} / 4`],
+        ['Districts', `${s.discoveredDistricts.length} / 5`],
+        ['Longest Airtime', `${s.maxAirTime.toFixed(1)}s`],
+        ['Cars Stolen', `${s.carsStolen}`],
+        ['Goals / KOs', `${s.goalsScored} / ${s.knockouts}`]
+      ];
+      statsEl.innerHTML = cards
+        .map(([k, v]) => `<div class="result-card"><span>${k}</span><strong style="font-size:14px;">${v}</strong></div>`)
+        .join('');
+    }
+  }
+
   private syncOptionSelection(selector: string, attr: string, val: string): void {
     document.querySelectorAll(selector).forEach((el) => {
       el.classList.toggle('selected', el.getAttribute(attr) === val);
@@ -1583,7 +1846,7 @@ class GameApp {
     this.renderer.setSize(width, height);
   }
 
-  private separateVehiclePair(a: CarPhysics, b: CarPhysics, withEffects: boolean): void {
+  private separateVehiclePair(a: CarPhysics, b: CarPhysics, nearFocus: boolean): void {
     const minDist = 3.1;
     const dx = a.position.x - b.position.x;
     const dz = a.position.z - b.position.z;
@@ -1608,9 +1871,13 @@ class GameApp {
       a.velocity.z += nz * impulse;
       b.velocity.x -= nx * impulse;
       b.velocity.z -= nz * impulse;
-      if (withEffects && Math.abs(relDot) > 5) {
-        this.sound.playCrash(Math.abs(relDot) * 3.6);
+      if (nearFocus && Math.abs(relDot) > 5) {
+        const impactKmh = Math.abs(relDot) * 3.6;
+        this.sound.playCrash(impactKmh);
         this.particles.emitSparks(a.position, 8);
+        if (this.inCar && (a === this.physics || b === this.physics)) {
+          this.cameraShake = Math.max(this.cameraShake, Math.min(0.32, impactKmh / 145));
+        }
       }
     }
   }
@@ -1626,9 +1893,11 @@ class GameApp {
       ...(this.activities.activeSprint ? [this.activities.activeSprint.rivalPhysics] : [])
     ];
     const vehicles = Array.from(new Set(all));
+    const focus = this.inCar ? this.physics.position : this.charCtrl.position;
     for (let i = 0; i < vehicles.length; i++) {
       for (let j = i + 1; j < vehicles.length; j++) {
-        this.separateVehiclePair(vehicles[i], vehicles[j], i === 0);
+        const nearFocus = Math.hypot(vehicles[i].position.x - focus.x, vehicles[i].position.z - focus.z) < 55;
+        this.separateVehiclePair(vehicles[i], vehicles[j], nearFocus);
       }
     }
   }
@@ -1763,6 +2032,17 @@ class GameApp {
         this.carMesh.update(this.physics, inputs.brake, dt);
         this.particles.update(dt, this.physics);
 
+        if (this.activePoliceLights) {
+          const on = this.activePoliceLights.active;
+          const red = Math.sin(this.elapsedSec * 9.0) > 0;
+          (this.activePoliceLights.a.material as THREE.MeshBasicMaterial).color.setHex(
+            on ? (red ? 0xff2a3c : 0x3b0a0f) : 0x3b0a0f
+          );
+          (this.activePoliceLights.b.material as THREE.MeshBasicMaterial).color.setHex(
+            on ? (red ? 0x0a1c40 : 0x38bdf8) : 0x0a1c40
+          );
+        }
+
         if (isTimedRace) {
           this.lapManager.update(
             dt,
@@ -1788,12 +2068,15 @@ class GameApp {
         const charInputs = this.hud.pollCharacterInputs();
         this.charCtrl.update(dt, charInputs, this.footCamYaw);
 
-        // Character vs every parked / civic car hull
+        // Character vs every car hull (parked, civic, police, moving traffic, race bots, sprint rival)
         const carHulls = [
           this.physics,
           ...this.parkedCars.map((p) => p.physics),
           ...this.civicCars.map((c) => c.physics),
-          ...this.police.units.map((u) => u.physics)
+          ...this.police.units.map((u) => u.physics),
+          ...this.cityCruisers.map((c) => c.physics),
+          ...this.raceBots.map((b) => b.physics),
+          ...(this.activities.activeSprint ? [this.activities.activeSprint.rivalPhysics] : [])
         ];
         let pushedByCarThisFrame = false;
         for (const hull of carHulls) {
@@ -1901,6 +2184,15 @@ class GameApp {
         && Math.hypot(activePos.x - 0, activePos.z - (-4)) < 14;
       this.hud.setRacePrompt(nearStartGate);
 
+      const nearDriftGarage = this.gameState === GameState.OPEN_WORLD
+        && !this.activities.activeSprint
+        && Math.hypot(activePos.x - 84, activePos.z - 15) < 12;
+      if (nearDriftGarage !== this.lastGaragePrompt) {
+        this.lastGaragePrompt = nearDriftGarage;
+        const gp = document.getElementById('garage-prompt');
+        if (gp) gp.style.display = nearDriftGarage ? 'flex' : 'none';
+      }
+
       // Update Checkpoint Portal Visuals
       this.track.updateCheckpointVisuals(this.lapManager.nextCheckpointIndex, isTimedRace, this.elapsedSec);
 
@@ -1938,24 +2230,31 @@ class GameApp {
           1 - Math.min(1, this.police.nearestDistance / 150)
         );
 
-        // A cruiser clipping you on foot hurts.
+        // Any fast vehicle (police, traffic, race bot) clipping you on foot hurts.
         if (this.policeHitCooldown > 0) this.policeHitCooldown -= dt;
         if (!this.inCar && !this.charCtrl.isDead && this.policeHitCooldown <= 0) {
-          for (const unit of this.police.units) {
-            if (unit.physics.speedKmh < 24) continue;
+          const movingHazards: CarPhysics[] = [
+            ...this.police.units.map((u) => u.physics),
+            ...this.cityCruisers.map((c) => c.physics),
+            ...this.raceBots.map((b) => b.physics)
+          ];
+          for (const haz of movingHazards) {
+            if (haz.speedKmh < 24) continue;
             const d = Math.hypot(
-              unit.physics.position.x - this.charCtrl.position.x,
-              unit.physics.position.z - this.charCtrl.position.z
+              haz.position.x - this.charCtrl.position.x,
+              haz.position.z - this.charCtrl.position.z
             );
-            if (d < 3.2) {
-              const away = this.charCtrl.position.clone().sub(unit.physics.position);
+            if (d < 3.0 && Math.abs(haz.position.y - this.charCtrl.position.y) < 2.2) {
+              const away = this.charCtrl.position.clone().sub(haz.position);
               away.y = 0;
               if (away.lengthSq() < 0.001) away.set(0, 0, 1);
               away.normalize();
-              this.charCtrl.takeDamage(30, away.x, away.z);
+              const dmg = Math.min(40, Math.round(haz.speedKmh * 0.45));
+              this.charCtrl.takeDamage(dmg, away.x, away.z);
               this.policeHitCooldown = 1.2;
               this.cameraShake = 0.3;
-              this.sound.playCrash(45);
+              this.sound.playCrash(haz.speedKmh);
+              this.particles.emitSparks(this.charCtrl.position, 8);
               break;
             }
           }
@@ -1968,8 +2267,33 @@ class GameApp {
       this.resolveCarVsCarCollisions();
       this.updateParkedVehicles(dt);
 
-      // Update City Sparring Fighters
+      // Update City Sparring Fighters + car impact check
+      if (this.fighterHitCooldown > 0) this.fighterHitCooldown -= dt;
       for (const f of this.sparringFighters) {
+        if (!f.isDead && this.inCar && this.physics.speedKmh > 20 && this.fighterHitCooldown <= 0) {
+          const d = Math.hypot(f.controller.position.x - this.physics.position.x, f.controller.position.z - this.physics.position.z);
+          if (d < 2.3 && Math.abs(f.controller.position.y - this.physics.position.y) < 2.0) {
+            const awayX = f.controller.position.x - this.physics.position.x;
+            const awayZ = f.controller.position.z - this.physics.position.z;
+            const len = Math.hypot(awayX, awayZ) || 1;
+            const dmg = Math.min(80, Math.round(this.physics.speedKmh * 0.75));
+            const killed = f.controller.takeDamage(dmg, awayX / len, awayZ / len);
+            this.fighterHitCooldown = 0.7;
+            this.sound.playCrash(this.physics.speedKmh);
+            this.particles.emitSparks(f.controller.position, killed ? 22 : 10);
+            this.cameraShake = 0.18;
+            this.pedestrians.alertDanger(f.controller.position, 22);
+            if (killed) {
+              this.save.data.knockouts++;
+              this.save.scheduleSave();
+              this.award(120, 160);
+              this.police.addHeat(2, 'HIT AND RUN', f.controller.position);
+              this.hud.showNotification(`${f.name.toUpperCase()} DOWN`, 'Hit-and-run reported!', 2.4);
+            } else {
+              this.pedestrians.notifyCrime(f.controller.position, 'RECKLESS DRIVING', 28);
+            }
+          }
+        }
         f.update(dt, this.charCtrl.position, !this.inCar);
       }
 
@@ -2063,7 +2387,22 @@ class GameApp {
       ...this.activities.speedTraps.map(t => ({ x: t.x, z: t.z, color: '#22d3ee', shape: 'square' as const, size: 2.5 })),
       ...this.activities.rivals
         .filter(r => !this.save.data.rivalsDefeated.includes(r.id))
-        .map(r => ({ x: r.startPos.x, z: r.startPos.z, color: '#ec4899', shape: 'ring' as const, size: 3.0 }))
+        .map(r => ({ x: r.startPos.x, z: r.startPos.z, color: '#ec4899', shape: 'ring' as const, size: 3.0 })),
+      ...(this.activities.activeSprint ? [
+        {
+          x: this.activities.activeSprint.rivalPhysics.position.x,
+          z: this.activities.activeSprint.rivalPhysics.position.z,
+          color: '#ec4899',
+          size: 3.6
+        },
+        {
+          x: this.activities.activeSprint.def.waypoints[this.activities.activeSprint.playerWpIdx].x,
+          z: this.activities.activeSprint.def.waypoints[this.activities.activeSprint.playerWpIdx].z,
+          color: '#22c55e',
+          shape: 'ring' as const,
+          size: 4.5
+        }
+      ] : [])
     ];
 
     this.hud.render(

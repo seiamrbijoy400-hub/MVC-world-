@@ -140,10 +140,10 @@ export class PedestrianSystem {
    * Checks if any living pedestrian within witness range & line-of-sight sees a crime.
    * Returns true if at least one witness starts calling police.
    */
-  public notifyCrime(crimePos: THREE.Vector3, reason: string, radius = 30): boolean {
+  public notifyCrime(crimePos: THREE.Vector3, reason: string, radius = 30, exclude?: PedestrianAgent): boolean {
     let witnessed = false;
     for (const a of this.agents) {
-      if (a.controller.isDead || a.state === 'KO') continue;
+      if (a === exclude || a.controller.isDead || a.state === 'KO') continue;
       const d = Math.hypot(a.controller.position.x - crimePos.x, a.controller.position.z - crimePos.z);
       if (d > radius) continue;
       if (!hasLineOfSight(a.controller.position.x, a.controller.position.z, crimePos.x, crimePos.z, this.openWorld.colliders)) {
@@ -160,6 +160,15 @@ export class PedestrianSystem {
       }
     }
     return witnessed;
+  }
+
+  /** Switches a struck civilian directly into terrified FLEE rather than freezing as a witness. */
+  public markVictimFlee(victim: PedestrianAgent, attackerPos: THREE.Vector3): void {
+    if (victim.controller.isDead) return;
+    victim.state = 'FLEE';
+    victim.stateTimer = 5.5;
+    victim.witnessReported = false;
+    victim.threatPos.copy(attackerPos);
   }
 
   /** Alerts nearby pedestrians to flee away from danger (active sirens, crashes, fights). */
@@ -212,7 +221,8 @@ export class PedestrianSystem {
           const len = Math.hypot(awayX, awayZ) || 1;
           const dmg = Math.min(55, Math.round(playerCarSpeedKmh * 0.85));
           const killed = a.controller.takeDamage(dmg, awayX / len, awayZ / len);
-          this.notifyCrime(a.controller.position, killed ? 'HIT AND RUN' : 'RECKLESS DRIVING', 34);
+          this.markVictimFlee(a, playerCarPos);
+          this.notifyCrime(a.controller.position, killed ? 'HIT AND RUN' : 'RECKLESS DRIVING', 34, a);
           this.alertDanger(playerCarPos, 22);
         } else if (dCar < 9 && playerCarSpeedKmh > 48 && a.state !== 'WITNESS') {
           // Near miss makes pedestrian jump/flee out of the road!

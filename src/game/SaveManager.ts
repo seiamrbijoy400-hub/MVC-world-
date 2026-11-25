@@ -24,6 +24,9 @@ export interface SaveData {
   characterId: CharacterId;
   carColor: string;
   underglowColor: string;
+  unlockedUnderglows: string[];
+  engineStage: number;
+  nitroStage: number;
   carArchetype: CarArchetypeId;
   gearbox: GearboxType;
   assistMode: 'ARCADE' | 'PRO';
@@ -79,6 +82,9 @@ export function createDefaultSave(): SaveData {
     characterId: 'kaito',
     carColor: '#ff5500',
     underglowColor: '#22d3ee',
+    unlockedUnderglows: ['#22d3ee', 'OFF'],
+    engineStage: 0,
+    nitroStage: 0,
     carArchetype: 'HYPER',
     gearbox: GearboxType.AUTO,
     assistMode: 'ARCADE',
@@ -125,6 +131,11 @@ export class SaveManager {
         return {
           ...createDefaultSave(),
           ...parsed,
+          engineStage: Math.max(0, Math.min(3, Number(parsed.engineStage) || 0)),
+          nitroStage: Math.max(0, Math.min(3, Number(parsed.nitroStage) || 0)),
+          unlockedUnderglows: Array.isArray(parsed.unlockedUnderglows) && parsed.unlockedUnderglows.length > 0
+            ? parsed.unlockedUnderglows
+            : ['#22d3ee', 'OFF'],
           speedTrapRecords: { ...(parsed.speedTrapRecords || {}) },
           driftZoneRecords: { ...(parsed.driftZoneRecords || {}) },
           discoveredShards: Array.isArray(parsed.discoveredShards) ? parsed.discoveredShards : [],
