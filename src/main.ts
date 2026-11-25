@@ -3,6 +3,7 @@ import { CarPhysics, GearboxType, GroundSample } from './physics/CarPhysics';
 import { CharacterController } from './physics/CharacterController';
 import { CarMesh } from './graphics/CarMesh';
 import { HumanCharacterMesh } from './graphics/HumanCharacterMesh';
+import { GLTFCharacterMesh } from './graphics/GLTFCharacterMesh';
 import { TrackEnvironment, TimeOfDay } from './graphics/TrackEnvironment';
 import { OpenWorldMap, DISTRICTS, type DistrictId } from './graphics/OpenWorldMap';
 import { ParticleSystem } from './graphics/ParticleSystem';
@@ -45,7 +46,7 @@ enum GameState {
 interface RemotePeer {
   id: string;
   carMesh: CarMesh;
-  charMesh: HumanCharacterMesh;
+  charMesh: HumanCharacterMesh | GLTFCharacterMesh;
   lastState: NetworkPlayerSync;
 }
 
@@ -81,7 +82,7 @@ class GameApp {
   private inCar = false; // Spawn on foot right beside car in Open World!
 
   private carMesh: CarMesh;
-  private avatarMesh: HumanCharacterMesh;
+  private avatarMesh: HumanCharacterMesh | GLTFCharacterMesh;
   private track: TrackEnvironment;
   private openWorld: OpenWorldMap;
   private particles: ParticleSystem;
@@ -278,7 +279,9 @@ class GameApp {
 
     this.studio = new CharacterStudio();
     this.studio.applyPreset(this.save.data.characterId);
-    this.avatarMesh = new HumanCharacterMesh(this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
+    const gender = (this.save.data.characterId === 'mika' || this.save.data.characterId === 'sora') ? 'female' : 'male';
+    const modelUrl = gender === 'female' ? '/assets/models/female.glb' : '/assets/models/male.glb';
+    this.avatarMesh = new GLTFCharacterMesh(modelUrl, this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
     this.avatarMesh.setNameAndHp(this.save.data.playerName, 100);
     this.scene.add(this.avatarMesh.root);
 
@@ -688,7 +691,9 @@ class GameApp {
         if (!peer) {
           const carM = new CarMesh();
           carM.setColor(st.carColor || '#2563eb');
-          const charM = new HumanCharacterMesh(st.characterId || 'mika', st.name || 'Friend', st.appearance);
+          const peerGender = (st.characterId === 'mika' || st.characterId === 'sora') ? 'female' : 'male';
+          const peerModel = peerGender === 'female' ? '/assets/models/female.glb' : '/assets/models/male.glb';
+          const charM = new GLTFCharacterMesh(peerModel, st.characterId || 'mika', st.name || 'Friend', st.appearance);
           this.scene.add(carM.root);
           this.scene.add(charM.root);
           peer = { id, carMesh: carM, charMesh: charM, lastState: st };

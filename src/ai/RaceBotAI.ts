@@ -3,7 +3,7 @@ import { CarPhysics, CarInputs } from '../physics/CarPhysics';
 import { CarMesh } from '../graphics/CarMesh';
 import { TrackEnvironment } from '../graphics/TrackEnvironment';
 import { OpenWorldMap } from '../graphics/OpenWorldMap';
-import { HumanCharacterMesh } from '../graphics/HumanCharacterMesh';
+import { GLTFCharacterMesh } from '../graphics/GLTFCharacterMesh';
 import { CharacterController } from '../physics/CharacterController';
 import type { BotDifficulty, CharacterId } from '../network/LobbyProtocol';
 
@@ -411,7 +411,7 @@ export class CityCruiserBot {
 
 export class SparringFighter {
   public controller: CharacterController;
-  public mesh: HumanCharacterMesh;
+  public mesh: GLTFCharacterMesh;
   public readonly name: string;
   public onKilled: (fighter: SparringFighter) => void = () => {};
   private homePos: THREE.Vector3;
@@ -440,7 +440,7 @@ export class SparringFighter {
       this.mesh.setNameAndHp(this.name, this.controller.maxHp);
     };
 
-    this.mesh = new HumanCharacterMesh(charId, name);
+    this.mesh = new GLTFCharacterMesh('/assets/models/male.glb', charId, name, null);
     this.mesh.root.position.copy(pos);
     scene.add(this.mesh.root);
   }
