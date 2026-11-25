@@ -1739,6 +1739,11 @@ class GameApp {
     const extraMarkers: MinimapActor[] = [
       ...this.raceBots.map(b => ({ x: b.physics.position.x, z: b.physics.position.z, color: '#facc15' })),
       ...this.cityCruisers.map(c => ({ x: c.physics.position.x, z: c.physics.position.z, color: '#38bdf8' })),
+      ...this.police.units.map(u => ({ x: u.physics.position.x, z: u.physics.position.z, color: '#ef4444' })),
+      ...this.sparringFighters
+        .filter(f => !f.isDead)
+        .map(f => ({ x: f.controller.position.x, z: f.controller.position.z, color: '#fb923c' })),
+      ...this.civicCars.map(c => ({ x: c.physics.position.x, z: c.physics.position.z, color: '#a3e635' })),
       ...Array.from(this.remotePeers.values()).map(p => ({
         x: p.lastState.inCar ? p.lastState.carX : p.lastState.x,
         z: p.lastState.inCar ? p.lastState.carZ : p.lastState.z,
