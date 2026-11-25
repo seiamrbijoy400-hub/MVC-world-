@@ -297,6 +297,8 @@ export class HUD {
       this.enterExitLabel.textContent = 'Exit Car';
       this.enterExitBtn.style.opacity = '1';
       this.enterExitBtn.style.background = 'rgba(255, 85, 0, 0.88)';
+      // Force the on-foot action label to refresh next time we step out.
+      this.lastFootAction = '';
     }
 
     this.updateTouchVisibility(gearbox);
