@@ -1186,19 +1186,6 @@ export class HumanCharacterMesh {
       tRArmZ = -0.48;
       tLForeX = -0.70;
       tRForeX = -0.70;
-    } else if (state === 'IDLE_LOOK' || state === 'WITNESS') {
-      this.animPhase += dt * 1.2;
-      const breath = Math.sin(this.animPhase);
-      const sway = Math.sin(this.animPhase * 0.6);
-      tHipsY = 0.86 + breath * 0.006;
-      tHipsX = sway * 0.004;
-      tTorsoX = breath * 0.010;
-      tHeadY = sway * 0.25; // look around
-      tHeadX = -0.02;
-      tLArmX = sway * 0.020;
-      tRArmX = -sway * 0.020;
-      tLArmZ = 0.05 + sway * 0.02;
-      tRArmZ = -0.05 - sway * 0.02;
     } else if (state === 'KO') {
       blendRate = 7.0;
       tHipsY = 0.12;
