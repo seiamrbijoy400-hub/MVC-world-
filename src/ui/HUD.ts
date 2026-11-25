@@ -42,6 +42,12 @@ export class HUD {
   private hpEl: HTMLElement;
   private driftPillEl: HTMLElement;
 
+  private rankTitleEl: HTMLElement;
+  private rankLvEl: HTMLElement;
+  private xpEl: HTMLElement;
+  private xpFillEl: HTMLElement;
+  private creditsEl: HTMLElement;
+
   private barGas: HTMLElement;
   private barBrake: HTMLElement;
   private barClutch: HTMLElement;
@@ -134,6 +140,12 @@ export class HUD {
     this.hpEl = document.getElementById('hud-hp')!;
     this.driftPillEl = document.getElementById('drift-pill')!;
 
+    this.rankTitleEl = document.getElementById('hud-rank-title')!;
+    this.rankLvEl = document.getElementById('hud-rank-lv')!;
+    this.xpEl = document.getElementById('hud-xp')!;
+    this.xpFillEl = document.getElementById('hud-xp-fill')!;
+    this.creditsEl = document.getElementById('hud-credits')!;
+
     this.barGas = document.getElementById('bar-gas')!;
     this.barBrake = document.getElementById('bar-brake')!;
     this.barClutch = document.getElementById('bar-clutch')!;
@@ -179,6 +191,22 @@ export class HUD {
       this.lastRacePrompt = visible;
       this.racePromptEl.style.display = visible ? 'flex' : 'none';
     }
+  }
+
+  public setProfile(
+    title: string,
+    level: number,
+    color: string,
+    xp: number,
+    progress: number,
+    credits: number
+  ): void {
+    this.rankTitleEl.textContent = title;
+    this.rankTitleEl.style.color = color;
+    this.rankLvEl.textContent = `LV.${level}`;
+    this.xpEl.textContent = xp.toLocaleString();
+    this.xpFillEl.style.width = `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%`;
+    this.creditsEl.textContent = Math.round(credits).toLocaleString();
   }
 
   public setOnFootMode(onFoot: boolean, canEnterCar: boolean, hp: number, gearbox: GearboxType): void {

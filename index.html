@@ -369,6 +369,14 @@
     .lap-val.best { color: #38bdf8; }
     .lap-val.drift { color: #f59e0b; }
 
+    .profile-card { display: flex; flex-direction: column; gap: 5px; min-width: 198px; }
+    .profile-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .profile-rank { font-size: 12px; font-weight: 900; letter-spacing: 0.6px; color: #f8fafc; }
+    .profile-level { font-size: 9px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; }
+    .xp-track { height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+    #hud-xp-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22d3ee, #facc15); transition: width 0.3s ease; }
+    .profile-credits { font-size: 11px; font-weight: 900; color: #facc15; font-variant-numeric: tabular-nums; }
+
     .top-buttons { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
     .hud-btn {
       background: rgba(15, 23, 42, 0.85);
@@ -838,6 +846,18 @@
   <div id="hud-overlay">
     <div class="top-bar">
       <div class="top-left-stack">
+        <div class="glass-card profile-card">
+          <div class="profile-row">
+            <span id="hud-rank-title" class="profile-rank">Street Rookie</span>
+            <span id="hud-rank-lv" class="profile-level">LV.1</span>
+          </div>
+          <div class="xp-track"><div id="hud-xp-fill"></div></div>
+          <div class="profile-row">
+            <span class="profile-level">XP <span id="hud-xp">0</span></span>
+            <span class="profile-credits">₡ <span id="hud-credits">1000</span></span>
+          </div>
+        </div>
+
         <div class="glass-card lap-info">
           <div class="lap-stat">
             <span class="lap-label">Mode</span>
@@ -894,6 +914,15 @@
         <div style="font-size:10px;color:#cbd5e1;">3-Lap Timed Race vs 3 AI Bots</div>
       </div>
       <button id="btn-start-gp-race" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;">Start Race (G)</button>
+    </div>
+
+    <!-- Rival Sprint Prompt -->
+    <div id="rival-prompt" class="glass-card" style="position:absolute;top:132px;left:50%;transform:translateX(-50%);display:none;pointer-events:auto;align-items:center;gap:12px;border:2px solid #ec4899;z-index:25;">
+      <div>
+        <div style="font-size:12px;font-weight:900;color:#f472b6;"><span id="rival-prompt-name">RIVAL</span> CHALLENGE</div>
+        <div id="rival-prompt-sub" style="font-size:10px;color:#cbd5e1;">1v1 Sprint</div>
+      </div>
+      <button id="btn-start-rival" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;background:#ec4899;">Challenge (Y)</button>
     </div>
 
     <!-- Animated Emoji Reactions & Live Chat -->
@@ -1015,6 +1044,31 @@
           <button class="option-btn selected" data-tod="DAY">Crisp Day</button>
           <button class="option-btn" data-tod="SUNSET">Sunset</button>
           <button class="option-btn" data-tod="NIGHT">Neon Night</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Weather</label>
+        <div class="options-row weather-options">
+          <button class="option-btn selected" data-weather="CLEAR">Clear</button>
+          <button class="option-btn" data-weather="RAIN">Rain</button>
+          <button class="option-btn" data-weather="STORM">Storm</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Best-Lap Ghost</label>
+        <div class="options-row ghost-options">
+          <button class="option-btn selected" data-ghost="ON">On</button>
+          <button class="option-btn" data-ghost="OFF">Off</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Eurobeat Music</label>
+        <div class="options-row music-options">
+          <button class="option-btn" data-music="ON">On</button>
+          <button class="option-btn selected" data-music="OFF">Off</button>
         </div>
       </div>
 

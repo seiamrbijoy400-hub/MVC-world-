@@ -13,6 +13,11 @@ import { HUD, MinimapActor, TouchMode } from './ui/HUD';
 import { LobbyClient } from './network/LobbyClient';
 import { LobbyUI, LobbyConfig } from './ui/LobbyUI';
 import { CharacterStudio } from './ui/CharacterStudio';
+import { SaveManager } from './game/SaveManager';
+import type { WeatherMode } from './game/SaveManager';
+import { WeatherSystem } from './graphics/WeatherSystem';
+import { GhostSystem } from './game/GhostSystem';
+import { WorldActivities, type RivalSprintDef } from './game/WorldActivities';
 import type { NetworkPlayerSync } from './network/LobbyProtocol';
 
 enum CameraView {
@@ -61,6 +66,16 @@ class GameApp {
   private lobbyUI: LobbyUI;
   private studio: CharacterStudio;
 
+  private save: SaveManager;
+  private weather: WeatherSystem;
+  private ghost: GhostSystem;
+  private activities: WorldActivities;
+  private ghostReplayEnabled = true;
+  private nearbyRival: RivalSprintDef | null = null;
+  private baseAmbientIntensity = 0.72;
+  private baseHemiIntensity = 0.55;
+  private baseSunIntensity = 1.9;
+
   private raceBots: RaceBot[] = [];
   private cityCruisers: CityCruiserBot[] = [];
   private sparringFighters: SparringFighter[] = [];
@@ -79,6 +94,7 @@ class GameApp {
   private cameraShake = 0;
   private syncAccumulator = 0;
   private boostCooldown = 0;
+  private peerScratch = new THREE.Vector3();
 
   private lastTime = performance.now();
   private isPaused = false;
@@ -107,10 +123,23 @@ class GameApp {
     this.track = new TrackEnvironment(this.scene);
     this.openWorld = new OpenWorldMap(this.scene);
 
+    this.save = new SaveManager();
+    this.sound.isMusicEnabled = this.save.data.musicEnabled;
+    this.weather = new WeatherSystem(this.scene);
+    this.weather.onThunderFlash = () => this.sound.playThunder();
+    this.weather.setMode(this.save.data.weatherMode);
+    this.ghostReplayEnabled = this.save.data.ghostReplayEnabled;
+    const wet = this.weather.mode !== 'CLEAR';
+    this.track.setWetSurface(wet);
+    this.openWorld.setWetSurface(wet);
+
     this.openWorld.onGoalScored = (side) => {
       this.sound.playBeep(1280, 0.4);
       this.particles.emitSparks(this.openWorld.ballPos, 24);
       this.hud.showNotification('GOOOAAAL!!', `${side} Net Scored in Playground!`, 2.5);
+      this.save.data.goalsScored++;
+      this.save.scheduleSave();
+      this.award(80, 120);
     };
 
     const sampleUnifiedGround = (x: number, z: number): GroundSample => {
@@ -130,10 +159,15 @@ class GameApp {
     this.physics.trackMaxHalfWidth = this.track.wallOffset;
     this.physics.groundHeightSampler = sampleUnifiedGround;
     this.physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
+    this.physics.gearboxType = this.save.data.gearbox;
+    this.physics.assistMode = this.save.data.assistMode;
+    this.physics.applyArchetype(this.save.data.carArchetype);
+    this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
     this.physics.onWallCollision = (impactKmh) => {
       this.sound.playCrash(impactKmh);
       this.particles.emitSparks(this.physics.position, 14);
       this.cameraShake = Math.min(0.42, impactKmh / 140);
+      this.lapManager.handleDriftCrash(impactKmh);
     };
 
     // Character Controller
@@ -143,11 +177,17 @@ class GameApp {
     this.charCtrl.onPunchStrike = (origin, fwd) => this.handlePlayerPunch(origin, fwd);
 
     this.carMesh = new CarMesh(true);
+    this.carMesh.setColor(this.save.data.carColor);
+    this.carMesh.setUnderglowColor(this.save.data.underglowColor);
     this.scene.add(this.carMesh.root);
 
     this.studio = new CharacterStudio();
-    this.avatarMesh = new AnimeCharacterMesh('kaito', 'Kaito_01', this.studio.appearance);
+    this.studio.applyPreset(this.save.data.characterId);
+    this.avatarMesh = new AnimeCharacterMesh(this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
+    this.avatarMesh.setNameAndHp(this.save.data.playerName, 100);
     this.scene.add(this.avatarMesh.root);
+
+    this.ghost = new GhostSystem(this.scene, this.save.data.bestLapGhost);
 
     this.studio.onChange = (app) => {
       this.avatarMesh.setAppearance(app);
@@ -166,6 +206,7 @@ class GameApp {
     this.hud.onHorn = () => this.handleHornPressed();
     this.hud.onSendChat = (txt) => this.sendInGameChat(txt);
     this.hud.onSendEmoji = (emoji) => this.sendEmojiReaction(emoji);
+    this.refreshProfile();
 
     this.lapManager = new LapManager(
       this.track,
@@ -173,6 +214,70 @@ class GameApp {
       (title, desc) => this.hud.showNotification(title, desc),
       (stats) => this.showRaceResults(stats)
     );
+    this.lapManager.onLapRecorded = (lapTime, isNewBest) => this.handleLapRecorded(lapTime, isNewBest);
+    this.lapManager.onDriftBanked = (banked, multiplier) => {
+      this.hud.showNotification(`DRIFT BANKED +${banked.toLocaleString()}`, `${multiplier.toFixed(1)}× chain multiplier`, 1.8);
+      this.save.data.totalDriftPoints += banked;
+      this.save.data.bestDriftCombo = Math.max(this.save.data.bestDriftCombo, banked);
+      this.save.scheduleSave();
+      this.award(Math.round(banked / 12), Math.round(banked / 18));
+    };
+    this.lapManager.onDriftLost = (lost) => {
+      if (lost >= 100) this.hud.showNotification('DRIFT LOST', `-${lost.toLocaleString()} pts — crashed`, 1.4);
+    };
+
+    this.activities = new WorldActivities(this.scene, this.save, this.track, this.openWorld, {
+      onSpeedTrapTriggered: (trap, speedKmh, isNewBest) => {
+        this.sound.playSpeedTrapFlash();
+        this.hud.showNotification(
+          isNewBest ? `TRAP RECORD: ${speedKmh} KM/H` : trap.name,
+          isNewBest ? `New personal best! Target ${trap.targetKmh} km/h` : `${speedKmh} / ${trap.targetKmh} km/h`,
+          2.0
+        );
+        if (isNewBest) this.award(120, 200);
+        else if (speedKmh >= trap.targetKmh) this.award(25, 40);
+      },
+      onDriftZoneCompleted: (zone, score, medal, isNewBest) => {
+        this.sound.playDiscoveryChime();
+        const label = medal === 'NONE' ? 'DRIFT ZONE CLOSED' : `${medal} DRIFT ZONE`;
+        this.hud.showNotification(
+          label,
+          `${zone.name}: ${score.toLocaleString()} pts${isNewBest ? ' • NEW BEST' : ''}`,
+          2.4
+        );
+        if (medal !== 'NONE') {
+          const xp = medal === 'GOLD' ? 240 : (medal === 'SILVER' ? 160 : 90);
+          const credits = medal === 'GOLD' ? 450 : (medal === 'SILVER' ? 260 : 120);
+          this.award(Math.round(xp * (isNewBest ? 1.5 : 1)), Math.round(credits * (isNewBest ? 1.5 : 1)));
+        }
+      },
+      onShardCollected: (shard, found, total) => {
+        this.sound.playDiscoveryChime();
+        this.hud.showNotification(`APEX LOG ${found}/${total}: ${shard.title}`, shard.lore, 3.6);
+        this.award(150, 120);
+      },
+      onNearRivalPrompt: (rival) => this.setRivalPrompt(rival),
+      onSprintEnded: (def, playerWon, timeSec) => {
+        this.setRivalPrompt(null);
+        if (playerWon) {
+          if (!this.save.data.rivalsDefeated.includes(def.id)) {
+            this.save.data.rivalsDefeated.push(def.id);
+            this.save.scheduleSave();
+          }
+          this.sound.playRankUpFanfare();
+          this.hud.showNotification(
+            `RIVAL DEFEATED: ${def.rivalName}`,
+            `${def.tauntWin} (${this.lapManager.formatTime(timeSec)})`,
+            4.5
+          );
+          this.award(def.rewardXp, def.rewardCredits);
+        } else {
+          this.sound.playBeep(220, 0.3);
+          this.hud.showNotification(`RIVAL WINS: ${def.rivalName}`, def.tauntLose, 4.0);
+        }
+        this.refreshProfile();
+      }
+    });
 
     // Spawn 2 Roaming Anime Sparring Fighters in City Plaza & Playground!
     const f1 = new SparringFighter('Kenji', 'kaito', new THREE.Vector3(34, 0, 22), this.scene);
@@ -198,19 +303,39 @@ class GameApp {
     };
     this.lobbyUI.onColorPreview = (color) => {
       this.carMesh.setColor(color);
+      this.save.data.carColor = color;
+      this.save.scheduleSave();
     };
     this.lobbyUI.onGearboxChange = (gb) => {
       this.physics.gearboxType = gb;
+      this.save.data.gearbox = gb;
+      this.save.scheduleSave();
       this.hud.updateTouchVisibility(gb);
     };
     this.lobbyUI.onLaunchSession = (cfg) => this.applyLobbyLaunch(cfg);
 
+    this.lobbyUI.config.playerName = this.save.data.playerName;
+    this.lobbyUI.config.characterId = this.save.data.characterId;
+    this.lobbyUI.config.carColor = this.save.data.carColor;
+    this.lobbyUI.config.gearbox = this.save.data.gearbox;
+    const savedNameInput = document.getElementById('input-player-name') as HTMLInputElement | null;
+    if (savedNameInput) savedNameInput.value = this.save.data.playerName;
+    document.querySelectorAll('.color-swatch').forEach((s) => {
+      s.classList.toggle('selected', s.getAttribute('data-color') === this.save.data.carColor);
+    });
+    document.querySelectorAll('.char-card').forEach((c) => {
+      c.classList.toggle('selected', c.getAttribute('data-char') === this.save.data.characterId);
+    });
+
     this.spawnCityCruisers();
-    this.setAtmosphere('DAY');
+    const savedTod = this.save.data.atmospherePref === 'AUTO' ? 'SUNSET' : this.save.data.atmospherePref;
+    this.setAtmosphere(savedTod);
     this.bindMultiplayerEvents();
     this.setupCameraDragLook(canvas);
     this.spawnInOpenWorld();
     this.setupUIHandlers();
+    this.syncSavedSettings();
+    this.refreshProfile();
 
     window.addEventListener('resize', () => this.onResize());
     requestAnimationFrame((t) => this.loop(t));
@@ -219,6 +344,9 @@ class GameApp {
   private spawnInOpenWorld(): void {
     this.gameState = GameState.OPEN_WORLD;
     this.inCar = false;
+    this.activities.cancelSprint();
+    this.setRivalPrompt(null);
+    this.ghost.updatePlayback(false, 0);
     // Park car at South Track-City Boulevard Junction facing the GP Track Gate
     this.physics.enforceTrackWalls = false;
     this.physics.resetToTrack(new THREE.Vector3(16, 0, 26), Math.PI * 0.42);
@@ -243,6 +371,8 @@ class GameApp {
   private startTimedCircuitRace(laps = 3): void {
     this.sound.init();
     this.hud.setRacePrompt(false);
+    this.setRivalPrompt(null);
+    this.activities.cancelSprint();
     document.getElementById('results-modal')!.classList.remove('open');
 
     // Automatically put player inside car on Starting Grid!
@@ -260,6 +390,11 @@ class GameApp {
     this.countdownTimer = 3.2;
     this.lastCountdownStep = -1;
     this.track.setCountdownLights(1, false);
+    this.ghost.startRecording();
+    this.ghost.updatePlayback(false, 0);
+    if (this.ghostReplayEnabled && this.ghost.hasGhost) {
+      this.hud.showNotification('GHOST ACTIVE', 'Racing against your best lap!', 2.0);
+    }
   }
 
   private applyLobbyLaunch(cfg: LobbyConfig): void {
@@ -268,6 +403,12 @@ class GameApp {
     this.carMesh.setColor(cfg.carColor);
     this.avatarMesh.setAppearance(this.studio.appearance);
     this.avatarMesh.setNameAndHp(cfg.playerName, 100);
+    this.save.data.playerName = cfg.playerName;
+    this.save.data.characterId = cfg.characterId;
+    this.save.data.carColor = cfg.carColor;
+    this.save.data.gearbox = cfg.gearbox;
+    this.save.scheduleSave();
+    this.refreshProfile();
 
     if (cfg.mode === 'CIRCUIT_RACE') {
       this.startTimedCircuitRace(cfg.laps || 3);
@@ -433,6 +574,10 @@ class GameApp {
 
   private toggleEnterExitCar(): void {
     if (this.gameState === GameState.COUNTDOWN) return;
+    if (this.activities.activeSprint) {
+      this.hud.showNotification('SPRINT IN PROGRESS', 'Finish the 1v1 before leaving the car!', 1.6);
+      return;
+    }
 
     if (this.inCar) {
       if (this.physics.speedKmh > 35) {
@@ -449,6 +594,7 @@ class GameApp {
       this.sound.updateTireSkid(0);
       this.hud.setOnFootMode(true, true, this.charCtrl.hp, this.physics.gearboxType);
       this.hud.showNotification('ON FOOT', 'Walk/Run • Fight [J] • Drive [F]', 1.8);
+      this.setRivalPrompt(null);
     } else {
       const dist = Math.hypot(
         this.charCtrl.position.x - this.physics.position.x,
@@ -459,6 +605,7 @@ class GameApp {
         this.avatarMesh.root.visible = false;
         this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
         this.hud.showNotification('DRIVING', 'Drive to Green Gate on Track to Race!', 1.6);
+        this.setRivalPrompt(this.nearbyRival);
       } else {
         this.hud.showNotification('TOO FAR', 'Walk closer to your Zenvo car!', 1.2);
       }
@@ -524,6 +671,10 @@ class GameApp {
       this.hemiLight.intensity = 0.55;
       this.renderer.toneMappingExposure = 1.08;
     }
+
+    this.baseAmbientIntensity = this.ambientLight.intensity;
+    this.baseHemiIntensity = this.hemiLight.intensity;
+    this.baseSunIntensity = this.sunLight.intensity;
 
     // Outdoor sky reflection probe so car metallic paint reflects sky & horizon naturally
     const envScene = new THREE.Scene();
@@ -614,9 +765,128 @@ class GameApp {
     }
   }
 
+  private handleLapRecorded(lapTime: number, isNewBest: boolean): void {
+    if (this.save.data.bestLapTime === null || lapTime < this.save.data.bestLapTime) {
+      this.save.data.bestLapTime = lapTime;
+      this.save.scheduleSave();
+    }
+
+    if (isNewBest) {
+      const frames = this.ghost.commitBestLap();
+      if (frames && frames.length > 10) {
+        this.save.data.bestLapGhost = frames;
+        this.save.saveNow();
+        this.hud.showNotification('GHOST SAVED', 'Your best lap is now racing with you', 2.2);
+      }
+      this.award(200, 250);
+    }
+
+    this.ghost.startRecording();
+    this.refreshProfile();
+  }
+
+  private award(xp: number, credits: number): void {
+    if (xp <= 0 && credits <= 0) return;
+    const newRank = this.save.grantReward(xp, credits);
+    if (newRank) {
+      this.sound.playRankUpFanfare();
+      this.hud.showNotification(`RANK UP: ${newRank.title}`, `${newRank.jpTitle} • LV.${newRank.level}`, 3.2);
+    }
+    this.refreshProfile();
+  }
+
+  private refreshProfile(): void {
+    const rank = this.save.getRank();
+    const next = this.save.getNextRank();
+    const span = next ? Math.max(1, next.minXp - rank.minXp) : 1;
+    const progress = next ? (this.save.data.legendXp - rank.minXp) / span : 1;
+    this.hud.setProfile(
+      rank.title,
+      rank.level,
+      rank.color,
+      this.save.data.legendXp,
+      Math.max(0, Math.min(1, progress)),
+      this.save.data.credits
+    );
+  }
+
+  private syncSavedSettings(): void {
+    this.syncOptionSelection('.weather-options .option-btn', 'data-weather', this.weather.mode);
+    this.syncOptionSelection('.ghost-options .option-btn', 'data-ghost', this.ghostReplayEnabled ? 'ON' : 'OFF');
+    this.syncOptionSelection('.music-options .option-btn', 'data-music', this.sound.isMusicEnabled ? 'ON' : 'OFF');
+    this.syncOptionSelection('.assist-options .option-btn', 'data-assist', this.physics.assistMode);
+    this.syncOptionSelection('.gearbox-options .option-btn', 'data-gearbox', this.physics.gearboxType);
+    this.syncOptionSelection('.tod-options .option-btn', 'data-tod', this.timeOfDay);
+    this.syncOptionSelection('.cam-options .option-btn', 'data-cam', this.cameraView);
+  }
+
+  private setWeatherMode(mode: WeatherMode): void {
+    this.weather.setMode(mode);
+    this.save.data.weatherMode = mode;
+    this.save.scheduleSave();
+    const wet = mode !== 'CLEAR';
+    this.track.setWetSurface(wet);
+    this.openWorld.setWetSurface(wet);
+    this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
+    this.syncOptionSelection('.weather-options .option-btn', 'data-weather', mode);
+    const label = mode === 'CLEAR'
+      ? 'Clear skies — full grip'
+      : (mode === 'RAIN' ? 'Wet roads — grip reduced, 1.3× drift score' : 'Storm — low grip, 1.5× drift score');
+    this.hud.showNotification(`WEATHER: ${mode}`, label, 2.2);
+  }
+
+  private setRivalPrompt(rival: RivalSprintDef | null): void {
+    this.nearbyRival = rival;
+    const el = document.getElementById('rival-prompt');
+    if (!el) return;
+    if (!rival || !this.inCar || this.gameState !== GameState.OPEN_WORLD) {
+      el.style.display = 'none';
+      return;
+    }
+    const unlocked = this.save.getRank().level >= rival.minRank;
+    const nameEl = document.getElementById('rival-prompt-name');
+    const subEl = document.getElementById('rival-prompt-sub');
+    if (nameEl) nameEl.textContent = rival.rivalName.toUpperCase();
+    if (subEl) {
+      subEl.textContent = unlocked
+        ? `1v1 Sprint • ${rival.rewardCredits.toLocaleString()}₡ reward`
+        : `Locked — Legend Rank ${rival.minRank} required`;
+    }
+    const btn = document.getElementById('btn-start-rival') as HTMLButtonElement | null;
+    if (btn) {
+      btn.disabled = !unlocked;
+      btn.style.opacity = unlocked ? '1' : '0.5';
+    }
+    el.style.display = 'flex';
+  }
+
+  private startNearbyRival(): void {
+    const rival = this.nearbyRival;
+    if (!rival) return;
+    if (!this.inCar) {
+      this.hud.showNotification('GET IN YOUR CAR', 'You need your Zenvo to challenge a rival', 2.0);
+      return;
+    }
+    if (this.gameState !== GameState.OPEN_WORLD) return;
+    if (this.save.getRank().level < rival.minRank) {
+      this.hud.showNotification('LOCKED', `Reach Legend Rank ${rival.minRank} to challenge ${rival.rivalName}`, 2.4);
+      return;
+    }
+    if (!this.activities.startRivalSprint(rival, this.physics)) return;
+    this.setRivalPrompt(null);
+    this.lapManager.resetRace(0);
+    this.hud.showNotification(
+      `${rival.rivalName.toUpperCase()} CHALLENGE`,
+      `${rival.tauntStart} Follow the green gate!`,
+      4.0
+    );
+  }
+
   private showRaceResults(stats: LapStats): void {
     this.gameState = GameState.FINISHED;
     this.physics.enforceTrackWalls = false;
+    this.ghost.updatePlayback(false, 0);
+    this.award(250, 300);
     document.getElementById('res-total-time')!.textContent = this.lapManager.formatTime(stats.totalRaceTime);
     document.getElementById('res-best-lap')!.textContent = stats.bestLapTime
       ? this.lapManager.formatTime(stats.bestLapTime)
@@ -662,6 +932,8 @@ class GameApp {
       const order: TimeOfDay[] = ['DAY', 'SUNSET', 'NIGHT'];
       const next = order[(order.indexOf(this.timeOfDay) + 1) % order.length];
       this.setAtmosphere(next);
+      this.save.data.atmospherePref = next;
+      this.save.scheduleSave();
     });
 
     document.getElementById('btn-reset')!.addEventListener('click', () => {
@@ -691,8 +963,16 @@ class GameApp {
     });
 
     const modal = document.getElementById('settings-modal')!;
-    const openModal = () => { modal.classList.add('open'); this.isPaused = true; };
-    const closeModal = () => { modal.classList.remove('open'); this.isPaused = false; };
+    const openModal = () => {
+      modal.classList.add('open');
+      this.isPaused = true;
+      this.sound.pauseAudio();
+    };
+    const closeModal = () => {
+      modal.classList.remove('open');
+      this.isPaused = false;
+      this.sound.resumeAudio();
+    };
 
     document.getElementById('btn-settings')!.addEventListener('click', openModal);
     document.getElementById('modal-close-btn')!.addEventListener('click', closeModal);
@@ -710,6 +990,7 @@ class GameApp {
       }
       if (e.code === 'KeyV') cycleCam();
       if (e.code === 'KeyM') soundBtn.click();
+      if (e.code === 'KeyY') this.startNearbyRival();
     });
 
     document.querySelectorAll('.cam-options .option-btn').forEach((btn) => {
@@ -734,13 +1015,49 @@ class GameApp {
       btn.addEventListener('click', () => {
         const tod = btn.getAttribute('data-tod') as TimeOfDay;
         this.setAtmosphere(tod);
+        this.save.data.atmospherePref = tod;
+        this.save.scheduleSave();
       });
     });
+
+    document.querySelectorAll('.weather-options .option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-weather') as WeatherMode;
+        this.setWeatherMode(mode);
+      });
+    });
+
+    document.querySelectorAll('.ghost-options .option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const on = btn.getAttribute('data-ghost') === 'ON';
+        this.ghostReplayEnabled = on;
+        this.save.data.ghostReplayEnabled = on;
+        this.save.scheduleSave();
+        this.syncOptionSelection('.ghost-options .option-btn', 'data-ghost', on ? 'ON' : 'OFF');
+        this.hud.showNotification('BEST-LAP GHOST', on ? 'Ghost replay enabled' : 'Ghost replay disabled', 1.6);
+      });
+    });
+
+    document.querySelectorAll('.music-options .option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const on = btn.getAttribute('data-music') === 'ON';
+        this.sound.init();
+        if (this.sound.isMusicEnabled !== on) this.sound.toggleMusic();
+        this.save.data.musicEnabled = on;
+        this.save.scheduleSave();
+        this.syncOptionSelection('.music-options .option-btn', 'data-music', on ? 'ON' : 'OFF');
+        this.hud.showNotification('EUROBEAT', on ? 'Music channel on' : 'Music channel off', 1.4);
+      });
+    });
+
+    document.getElementById('btn-start-rival')?.addEventListener('click', () => this.startNearbyRival());
 
     document.querySelectorAll('.assist-options .option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const assist = btn.getAttribute('data-assist') as 'ARCADE' | 'PRO';
         this.physics.assistMode = assist;
+        this.save.data.assistMode = assist;
+        this.save.scheduleSave();
         this.syncOptionSelection('.assist-options .option-btn', 'data-assist', assist);
       });
     });
@@ -796,7 +1113,8 @@ class GameApp {
     const vehicles: CarPhysics[] = [
       this.physics,
       ...this.raceBots.map(b => b.physics),
-      ...this.cityCruisers.map(c => c.physics)
+      ...this.cityCruisers.map(c => c.physics),
+      ...(this.activities.activeSprint ? [this.activities.activeSprint.rivalPhysics] : [])
     ];
     for (let i = 0; i < vehicles.length; i++) {
       for (let j = i + 1; j < vehicles.length; j++) {
@@ -840,6 +1158,19 @@ class GameApp {
     this.sunLight.target.position.copy(focusPos);
 
     if (!this.isPaused) {
+      const weatherForward = this.inCar ? this.physics.getForwardVector() : this.charCtrl.getForwardVector();
+      this.weather.update(dt, focusPos, weatherForward);
+      this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
+      const flash = this.weather.lightningFlash;
+      this.ambientLight.intensity = this.baseAmbientIntensity + flash * 0.75;
+      this.hemiLight.intensity = this.baseHemiIntensity + flash * 2.0;
+      this.sunLight.intensity = this.baseSunIntensity + flash * 0.9;
+      this.sound.updateNitroAndRain(
+        this.physics.isNitroActive,
+        this.weather.rainIntensity,
+        this.gameState === GameState.TIMED_RACE ? 1 : 0.35
+      );
+
       if (this.boostCooldown > 0) this.boostCooldown -= dt;
 
       if (this.gameState === GameState.COUNTDOWN) {
@@ -866,6 +1197,34 @@ class GameApp {
         const inputs = this.hud.pollInputs(this.physics.gearboxType);
         const prevGear = this.physics.gear;
         this.physics.update(dt, inputs, canDrive);
+
+        if (isTimedRace) {
+          this.ghost.recordStep(
+            dt,
+            this.lapManager.stats.currentLapTime,
+            this.physics.position.x,
+            this.physics.position.y,
+            this.physics.position.z,
+            this.physics.rotation.y,
+            this.physics.rotation.x + this.physics.bodyPitch,
+            this.physics.rotation.z + this.physics.bodyRoll,
+            this.physics.wheels[0]?.steerAngle ?? 0
+          );
+        } else {
+          this.lapManager.updateDriftOnly(
+            dt,
+            this.physics.isDrifting,
+            this.physics.speedKmh,
+            this.physics.driftAngle,
+            this.weather.driftScoreMultiplier
+          );
+        }
+
+        const speedNow = Math.round(this.physics.speedKmh);
+        if (speedNow > this.save.data.maxSpeedKmh) {
+          this.save.data.maxSpeedKmh = speedNow;
+          this.save.scheduleSave();
+        }
 
         if (this.boostCooldown <= 0) {
           for (const pad of this.openWorld.boostPads) {
@@ -894,7 +1253,15 @@ class GameApp {
         this.particles.update(dt, this.physics);
 
         if (isTimedRace) {
-          this.lapManager.update(dt, this.physics.position, this.physics.isDrifting, this.physics.speedKmh, this.physics.driftAngle);
+          this.lapManager.update(
+            dt,
+            this.physics.position,
+            this.physics.isDrifting,
+            this.physics.speedKmh,
+            this.physics.driftAngle,
+            this.weather.driftScoreMultiplier
+          );
+          this.ghost.updatePlayback(this.ghostReplayEnabled, this.lapManager.stats.currentLapTime);
         }
 
         const onCurb = this.physics.wheels.some(w => w.isCurb);        if (onCurb && this.physics.speedKmh > 30) this.cameraShake = Math.max(this.cameraShake, 0.035);
@@ -940,12 +1307,28 @@ class GameApp {
 
       // Lap timer ticks even when player is on foot during a timed race
       if (isTimedRace && !this.inCar) {
-        this.lapManager.update(dt, this.physics.position, false, 0, 0);
+        this.lapManager.update(dt, this.physics.position, false, 0, 0, this.weather.driftScoreMultiplier);
+        this.ghost.updatePlayback(false, this.lapManager.stats.currentLapTime);
       }
 
       // Check proximity to In-World GP Race Start Portal (0, 0, -4)
       const activePos = this.inCar ? this.physics.position : this.charCtrl.position;
-      const nearStartGate = this.gameState === GameState.OPEN_WORLD && Math.hypot(activePos.x - 0, activePos.z - (-4)) < 14;
+
+      // Open-world activities: speed traps, drift zones, Apex Logs, rival sprints
+      this.activities.update(
+        dt,
+        this.elapsedSec,
+        activePos,
+        this.physics.speedKmh,
+        this.inCar,
+        this.physics.isDrifting,
+        this.lapManager.lastDriftRate * this.weather.driftScoreMultiplier,
+        isTimedRace
+      );
+
+      const nearStartGate = this.gameState === GameState.OPEN_WORLD
+        && !this.activities.activeSprint
+        && Math.hypot(activePos.x - 0, activePos.z - (-4)) < 14;
       this.hud.setRacePrompt(nearStartGate);
 
       // Update Checkpoint Portal Visuals
@@ -983,11 +1366,11 @@ class GameApp {
       // Update Remote Hotspot Friends
       for (const peer of this.remotePeers.values()) {
         const st = peer.lastState;
-        peer.carMesh.root.position.lerp(new THREE.Vector3(st.carX, st.carY, st.carZ), 0.3);
+        peer.carMesh.root.position.lerp(this.peerScratch.set(st.carX, st.carY, st.carZ), 0.3);
         peer.carMesh.root.rotation.y = st.carYaw;
         peer.charMesh.root.visible = !st.inCar;
         if (!st.inCar) {
-          peer.charMesh.root.position.lerp(new THREE.Vector3(st.x, st.y, st.z), 0.35);
+          peer.charMesh.root.position.lerp(this.peerScratch.set(st.x, st.y, st.z), 0.35);
           peer.charMesh.root.rotation.y = st.yaw;
           peer.charMesh.updateAnimation(dt, st.animState);
           peer.charMesh.setNameAndHp(st.name, st.hp);

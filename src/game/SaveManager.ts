@@ -47,6 +47,7 @@ export interface SaveData {
   discoveredDistricts: string[];
   rivalsDefeated: string[];
   bestLapGhost: GhostFrame[];
+  ghostReplayEnabled: boolean;
 }
 
 export interface LegendRank {
@@ -97,7 +98,8 @@ export function createDefaultSave(): SaveData {
     discoveredShards: [],
     discoveredDistricts: [],
     rivalsDefeated: [],
-    bestLapGhost: []
+    bestLapGhost: [],
+    ghostReplayEnabled: true
   };
 }
 

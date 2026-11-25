@@ -109,6 +109,9 @@ export class SoundManager {
       this.musicAudio = new Audio('/assets/sounds/step-inside-your-mind-instrumental-eurobeat-royalty-free-music.mp3');
       this.musicAudio.loop = true;
       this.musicAudio.volume = 0.22;
+      if (this.isMusicEnabled && !this.isMuted) {
+        this.musicAudio.play().catch(() => {});
+      }
 
       this.isInitialized = true;
 
@@ -262,6 +265,22 @@ export class SoundManager {
       }
     }
     return this.isMuted;
+  }
+
+  public pauseAudio(): void {
+    if (this.ctx && this.ctx.state === 'running') {
+      this.ctx.suspend().catch(() => {});
+    }
+    if (this.musicAudio) this.musicAudio.pause();
+  }
+
+  public resumeAudio(): void {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume().catch(() => {});
+    }
+    if (this.musicAudio && this.isMusicEnabled && !this.isMuted) {
+      this.musicAudio.play().catch(() => {});
+    }
   }
 
   public toggleMusic(): boolean {

@@ -320,6 +320,8 @@ export class AnimeCharacterMesh {
   private blinkProgress = -1;
   private displayName = 'Racer';
   private lastHp = 100;
+  private lastNameDrawn = '';
+  private lastHpDrawn = -1;
 
   constructor(characterId: CharacterId = 'kaito', playerName = '', customAppearance?: CharacterAppearance) {
     this.displayName = playerName;
@@ -794,6 +796,9 @@ export class AnimeCharacterMesh {
     this.displayName = name;
     this.lastHp = hp;
     if (!this.nameSprite) return;
+    if (name === this.lastNameDrawn && hp === this.lastHpDrawn) return;
+    this.lastNameDrawn = name;
+    this.lastHpDrawn = hp;
 
     const ctx = this.nameCtx;
     ctx.clearRect(0, 0, 256, 64);

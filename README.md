@@ -57,9 +57,12 @@ Playable offline on mobile (Android) and desktop browsers with realistic superca
 - **Telemetry Bars**: Real-time visual feedback for throttle, brake, and clutch pressure.
 - **3 Camera Views**: Chase Cam (with speed-sensitive dynamic FOV), Cockpit / Hood Cam, and Orbit Cam.
 - **Full Input Support**:
-  - **Keyboard**: `W`/`S` (Throttle/Brake), `A`/`D` (Steer), `Space` (Handbrake), `E`/`Q` (Gear Shift), `C` (Clutch), `R` (Reset), `V` (Camera), `M` (Mute), `Esc` (Settings).
+  - **Keyboard**: `W`/`S` (Throttle/Brake), `A`/`D` (Steer), `Space` (Handbrake), `E`/`Q` (Gear Shift), `C` (Clutch), `R` (Reset), `V` (Camera), `M` (Mute), `Y` (Rival Challenge), `Esc` (Settings).
   - **Mobile Touch**: Left/Right steering pads, Gas, Brake, Drift, Shift Up/Down buttons.
   - **Gamepad**: Analog triggers and steering sticks mapped via HTML5 Gamepad API.
+- **Legend Progression**: XP, credits, six Legend ranks, speed-trap and drift-zone records, Apex Logs, and a four-rival ladder — all saved locally.
+- **Dynamic Weather**: Clear / Rain / Storm, with real grip loss, wet asphalt, lightning, and drift-score bonuses.
+- **Best-Lap Ghost**: your fastest lap is recorded and replays beside you on the next attempt.
 
 ---
 

@@ -477,6 +477,10 @@ export class WorldActivities {
     let closestRival: RivalSprintDef | null = null;
     if (!this.activeSprint && !isTimedCircuitRace) {
       for (const r of this.rivals) {
+        if (this.save.data.rivalsDefeated.includes(r.id)) {
+          r.portalMesh.visible = false;
+          continue;
+        }
         r.portalMesh.visible = true;
         const pulse = 0.92 + Math.sin(timeSec * 4.5) * 0.08;
         r.portalMesh.scale.set(pulse, 1, pulse);
