@@ -424,12 +424,15 @@ export class SparringFighter {
         this.timer = 1.4;
       }
     } else {
+      // Leash: return to home zone if strayed more than 80m away.
+      const distToHome = this.controller.position.distanceTo(this.homePos);
+      const wanderRadius = distToHome > 80 ? 2 : 14;
       if (this.timer <= 0) {
         this.timer = 3 + Math.random() * 3;
         this.wanderTarget.set(
-          this.homePos.x + (Math.random() - 0.5) * 14,
+          this.homePos.x + (Math.random() - 0.5) * wanderRadius,
           0,
-          this.homePos.z + (Math.random() - 0.5) * 14
+          this.homePos.z + (Math.random() - 0.5) * wanderRadius
         );
       }
       const dx = this.wanderTarget.x - this.controller.position.x;
@@ -438,6 +441,7 @@ export class SparringFighter {
       if (d > 1.2) {
         moveX = dx / d;
         moveY = -dz / d;
+        sprint = distToHome > 80; // Sprint back when far from home
       }
     }
 

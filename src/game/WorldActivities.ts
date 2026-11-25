@@ -162,7 +162,10 @@ export class WorldActivities {
         side: THREE.DoubleSide
       });
       const ring = new THREE.Mesh(geo, mat);
-      ring.position.set(d.x, 0.08, d.z);
+      // Sample terrain height so the ring sits on the ground at any elevation.
+      const groundY = this.track.sampleGround(d.x, d.z).height;
+      const rampY = this.openWorld.sampleRampHeight(d.x, d.z);
+      ring.position.set(d.x, Math.max(groundY, rampY) + 0.08, d.z);
       this.scene.add(ring);
 
       this.driftZones.push({ ...d, ringMesh: ring });
@@ -460,9 +463,9 @@ export class WorldActivities {
       shard.crystal.rotation.y = timeSec * 2.2;
       shard.crystal.position.y = Math.sin(timeSec * 3.0 + shard.x) * 0.25;
 
-      const d = Math.hypot(playerPos.x - shard.x, playerPos.z - shard.z);
-      const dy = Math.abs(playerPos.y - (shard.y - 1.0));
-      if (d < 3.6 && dy < 4.0) {
+      // Use full 3-D distance so elevated shards (ramps, rooftops) are reachable on foot and in car.
+      const d3 = Math.hypot(playerPos.x - shard.x, playerPos.y - shard.y, playerPos.z - shard.z);
+      if (d3 < 6.5) {
         shard.collected = true;
         shard.group.visible = false;
         if (!this.save.data.discoveredShards.includes(shard.id)) {
@@ -485,7 +488,8 @@ export class WorldActivities {
         const pulse = 0.92 + Math.sin(timeSec * 4.5) * 0.08;
         r.portalMesh.scale.set(pulse, 1, pulse);
         const d = Math.hypot(playerPos.x - r.startPos.x, playerPos.z - r.startPos.z);
-        if (d < 12) {
+        // Only trigger the prompt when the player is driving — avoids accidental on-foot prompts.
+        if (d < 8 && inCar) {
           closestRival = r;
         }
       }

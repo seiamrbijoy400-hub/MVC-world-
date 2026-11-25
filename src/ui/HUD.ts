@@ -10,6 +10,9 @@ export interface MinimapActor {
   x: number;
   z: number;
   color: string;
+  /** Optional shape: 'dot' (default), 'diamond' (shards), 'square' (traps), 'ring' (rivals/portals) */
+  shape?: 'dot' | 'diamond' | 'square' | 'ring';
+  size?: number;
 }
 
 export class HUD {
@@ -718,10 +721,36 @@ export class HUD {
     ctx.fill();
 
     for (const m of extraMarkers) {
-      ctx.beginPath();
-      ctx.arc(m.x * mapScale + mapOffsetX, m.z * mapScale + mapOffsetY, 3.2, 0, Math.PI * 2);
       ctx.fillStyle = m.color;
-      ctx.fill();
+      ctx.strokeStyle = m.color;
+      const mx = m.x * mapScale + mapOffsetX;
+      const mz = m.z * mapScale + mapOffsetY;
+      const sz = m.size ?? 3.2;
+
+      if (m.shape === 'diamond') {
+        // Apex shard: yellow diamond
+        ctx.beginPath();
+        ctx.moveTo(mx, mz - sz * 1.4);
+        ctx.lineTo(mx + sz, mz);
+        ctx.lineTo(mx, mz + sz * 1.4);
+        ctx.lineTo(mx - sz, mz);
+        ctx.closePath();
+        ctx.fill();
+      } else if (m.shape === 'square') {
+        // Speed trap: cyan square
+        ctx.fillRect(mx - sz, mz - sz, sz * 2, sz * 2);
+      } else if (m.shape === 'ring') {
+        // Rival sprint portal: open ring
+        ctx.beginPath();
+        ctx.arc(mx, mz, sz * 1.3, 0, Math.PI * 2);
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        // Default dot
+        ctx.beginPath();
+        ctx.arc(mx, mz, sz, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     const px = playerPos.x * mapScale + mapOffsetX;

@@ -176,6 +176,17 @@ class GameApp {
     this.physics.assistMode = this.save.data.assistMode;
     this.physics.applyArchetype(this.save.data.carArchetype);
     this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
+    this.physics.onAirLanding = (airSec) => {
+      if (airSec > 0.8) {
+        this.particles.emitSparks(this.physics.position, Math.min(40, Math.round(airSec * 20)));
+        this.hud.showNotification('AIRTIME!', `${airSec.toFixed(1)}s hang time`, 1.4);
+        this.award(Math.round(airSec * 30), Math.round(airSec * 20));
+      }
+      if (airSec > this.save.data.maxAirTime) {
+        this.save.data.maxAirTime = Number(airSec.toFixed(2));
+        this.save.scheduleSave();
+      }
+    };
     this.physics.onWallCollision = (impactKmh) => {
       this.sound.playCrash(impactKmh);
       this.particles.emitSparks(this.physics.position, 14);
@@ -778,12 +789,40 @@ class GameApp {
       3.0
     );
     this.setRivalPrompt(null);
+
+    // Respawn a fresh replacement at the original spot after 90 seconds so the city never runs dry.
+    const spawnSpec = {
+      x: civic.physics.lastSafePosition.x || civic.physics.position.x,
+      z: civic.physics.lastSafePosition.z || civic.physics.position.z,
+      heading: civic.physics.lastSafeRotation || civic.physics.rotation.y,
+      color: (civic.mesh.root.userData.color as string) || '#6b7280',
+      name: civic.name
+    };
+    window.setTimeout(() => {
+      // Only respawn if the car is no longer in the player's hands (they may have abandoned it).
+      const stillOwnedByPlayer = this.physics === civic.physics
+        || this.parkedCars.some((p) => p.physics === civic.physics);
+      if (!stillOwnedByPlayer) {
+        this.createCivicCar(spawnSpec);
+      }
+    }, 90_000);
   }
 
   /** Re-applies the player-car callbacks after swapping into a different chassis. */
   private configureActiveCar(): void {
     this.physics.enforceTrackWalls = false;
     this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
+    this.physics.onAirLanding = (airSec) => {
+      if (airSec > 0.8) {
+        this.particles.emitSparks(this.physics.position, Math.min(40, Math.round(airSec * 20)));
+        this.hud.showNotification('AIRTIME!', `${airSec.toFixed(1)}s hang time`, 1.4);
+        this.award(Math.round(airSec * 30), Math.round(airSec * 20));
+      }
+      if (airSec > this.save.data.maxAirTime) {
+        this.save.data.maxAirTime = Number(airSec.toFixed(2));
+        this.save.scheduleSave();
+      }
+    };
     this.physics.onWallCollision = (impactKmh) => {
       this.sound.playCrash(impactKmh);
       this.particles.emitSparks(this.physics.position, 14);
@@ -957,25 +996,29 @@ class GameApp {
     ];
 
     for (const spec of specs) {
-      const physics = new CarPhysics();
-      physics.enforceTrackWalls = false;
-      physics.groundHeightSampler = this.sampleUnifiedGround;
-      physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
-
-      const ground = this.sampleUnifiedGround(spec.x, spec.z);
-      physics.resetToTrack(new THREE.Vector3(spec.x, ground.height, spec.z), spec.heading);
-      // Nudge out of any building collider so the car never spawns inside a wall.
-      this.openWorld.resolveCollision(physics.position, new THREE.Vector3(), 1.5);
-      physics.position.y = this.sampleUnifiedGround(physics.position.x, physics.position.z).height;
-
-      const mesh = new CarMesh();
-      mesh.setColor(spec.color);
-      mesh.root.position.copy(physics.position);
-      mesh.root.rotation.y = physics.rotation.y;
-      this.scene.add(mesh.root);
-
-      this.civicCars.push({ physics, mesh, name: spec.name });
+      this.createCivicCar(spec);
     }
+  }
+
+  private createCivicCar(spec: { x: number; z: number; heading: number; color: string; name: string }): void {
+    const physics = new CarPhysics();
+    physics.enforceTrackWalls = false;
+    physics.groundHeightSampler = this.sampleUnifiedGround;
+    physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
+
+    const ground = this.sampleUnifiedGround(spec.x, spec.z);
+    physics.resetToTrack(new THREE.Vector3(spec.x, ground.height, spec.z), spec.heading);
+    // Nudge out of any building collider so the car never spawns inside a wall.
+    this.openWorld.resolveCollision(physics.position, new THREE.Vector3(), 1.5);
+    physics.position.y = this.sampleUnifiedGround(physics.position.x, physics.position.z).height;
+
+    const mesh = new CarMesh();
+    mesh.setColor(spec.color);
+    mesh.root.position.copy(physics.position);
+    mesh.root.rotation.y = physics.rotation.y;
+    this.scene.add(mesh.root);
+
+    this.civicCars.push({ physics, mesh, name: spec.name });
   }
 
   private syncParkedMeshes(): void {
@@ -1470,8 +1513,8 @@ class GameApp {
             this.physics.position.y,
             this.physics.position.z,
             this.physics.rotation.y,
-            this.physics.rotation.x + this.physics.bodyPitch,
-            this.physics.rotation.z + this.physics.bodyRoll,
+            this.physics.bodyPitch,
+            this.physics.bodyRoll,
             this.physics.wheels[0]?.steerAngle ?? 0
           );
         } else {
@@ -1548,6 +1591,7 @@ class GameApp {
           ...this.civicCars.map((c) => c.physics),
           ...this.police.units.map((u) => u.physics)
         ];
+        let pushedByCarThisFrame = false;
         for (const hull of carHulls) {
           const dx = this.charCtrl.position.x - hull.position.x;
           const dz = this.charCtrl.position.z - hull.position.z;
@@ -1557,7 +1601,12 @@ class GameApp {
             const d = Math.sqrt(dSq);
             this.charCtrl.position.x = hull.position.x + (dx / d) * carRad;
             this.charCtrl.position.z = hull.position.z + (dz / d) * carRad;
+            pushedByCarThisFrame = true;
           }
+        }
+        // After car push, re-resolve against world buildings so we can't be pushed into walls.
+        if (pushedByCarThisFrame) {
+          this.openWorld.resolveCollision(this.charCtrl.position, this.charCtrl.velocity, 0.45);
         }
 
         this.avatarMesh.root.position.copy(this.charCtrl.position);
@@ -1748,7 +1797,15 @@ class GameApp {
         x: p.lastState.inCar ? p.lastState.carX : p.lastState.x,
         z: p.lastState.inCar ? p.lastState.carZ : p.lastState.z,
         color: '#4ade80'
-      }))
+      })),
+      // Activity markers: uncollected shards (yellow diamonds), speed traps (cyan squares), rival portals (rings)
+      ...this.activities.shards
+        .filter(s => !s.collected)
+        .map(s => ({ x: s.x, z: s.z, color: '#facc15', shape: 'diamond' as const, size: 2.5 })),
+      ...this.activities.speedTraps.map(t => ({ x: t.x, z: t.z, color: '#22d3ee', shape: 'square' as const, size: 2.5 })),
+      ...this.activities.rivals
+        .filter(r => !this.save.data.rivalsDefeated.includes(r.id))
+        .map(r => ({ x: r.startPos.x, z: r.startPos.z, color: '#ec4899', shape: 'ring' as const, size: 3.0 }))
     ];
 
     this.hud.render(
