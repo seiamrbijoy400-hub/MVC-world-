@@ -7,6 +7,7 @@ export class CarMesh {
   private static sharedShadowTex: THREE.CanvasTexture | null = null;
   private static sharedGlowTex: THREE.CanvasTexture | null = null;
   private static sharedBeamTex: THREE.CanvasTexture | null = null;
+  private static sharedPlateTex: THREE.CanvasTexture | null = null;
 
   private static loadCachedFBX(url: string): Promise<THREE.Group> {
     let cached = CarMesh.fbxCache.get(url);
@@ -50,6 +51,7 @@ export class CarMesh {
   private nitroFlameR: THREE.Mesh | null = null;
   private headSpotLights: THREE.SpotLight[] = [];
   private headlightBulbMat: THREE.MeshStandardMaterial | null = null;
+  private driverGroup: THREE.Group | null = null;
   public isGhost = false;
 
   constructor(withHeadlights = false, isGhost = false) {
@@ -64,6 +66,7 @@ export class CarMesh {
       this.createContactShadow();
       this.createUnderglow();
       this.createNitroFlames();
+      this.createDriverSilhouette();
     }
     this.createFallbackCar();
     this.createBrakeAndReverseBars();
@@ -73,6 +76,30 @@ export class CarMesh {
 
     // Asynchronously load the authentic HQ FBX Racing Car & Wheels
     this.loadHQModels();
+  }
+
+  public setDriverVisible(visible: boolean): void {
+    if (this.driverGroup) {
+      this.driverGroup.visible = visible;
+    }
+  }
+
+  private createDriverSilhouette(): void {
+    const drv = new THREE.Group();
+    drv.position.set(-0.34, 0.56, 0.14);
+    const suitMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.72 });
+    const helmetMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.25, metalness: 0.35 });
+    const visorMat = new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.08, metalness: 0.9 });
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.28, 0.18), suitMat);
+    torso.position.y = 0.12;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), helmetMat);
+    head.position.y = 0.33;
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.06, 0.06), visorMat);
+    visor.position.set(0, 0.34, -0.09);
+    drv.add(torso, head, visor);
+    this.driverGroup = drv;
+    this.bodyGroup.add(drv);
   }
 
   private createUnderglow(): void {
@@ -282,6 +309,28 @@ export class CarMesh {
         opacity: 0.78
       });
       const interiorMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85, metalness: 0.1 });
+      const grilleMat = new THREE.MeshStandardMaterial({ color: 0x27272a, roughness: 0.45, metalness: 0.72 });
+      if (!CarMesh.sharedPlateTex) {
+        const pc = document.createElement('canvas');
+        pc.width = 128;
+        pc.height = 64;
+        const pCtx = pc.getContext('2d')!;
+        pCtx.fillStyle = '#f8fafc';
+        pCtx.fillRect(0, 0, 128, 64);
+        pCtx.strokeStyle = '#0f172a';
+        pCtx.lineWidth = 5;
+        pCtx.strokeRect(3, 3, 122, 58);
+        pCtx.fillStyle = '#0284c7';
+        pCtx.fillRect(6, 6, 116, 14);
+        pCtx.fillStyle = '#0f172a';
+        pCtx.font = 'bold 20px sans-serif';
+        pCtx.textAlign = 'center';
+        pCtx.fillText('NV 00-APEX', 64, 46);
+        const pt = new THREE.CanvasTexture(pc);
+        pt.userData.shared = true;
+        CarMesh.sharedPlateTex = pt;
+      }
+      const plateMat = new THREE.MeshStandardMaterial({ map: CarMesh.sharedPlateTex, roughness: 0.35, metalness: 0.15 });
       const headlightMat = new THREE.MeshStandardMaterial({
         color: 0xe0f2fe,
         emissive: 0xbae6fd,
@@ -328,6 +377,10 @@ export class CarMesh {
             mesh.material = chromeMat;
           } else if (name.includes('light')) {
             mesh.material = headlightMat;
+          } else if (name === 'plate') {
+            mesh.material = plateMat;
+          } else if (name.includes('grill')) {
+            mesh.material = grilleMat;
           } else if (name.includes('interior') || name.includes('dashboard') || name.includes('roll')) {
             mesh.material = interiorMat;
           } else {

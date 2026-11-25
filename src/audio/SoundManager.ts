@@ -42,14 +42,24 @@ export class SoundManager {
 
   constructor() {
     const unlock = () => {
-      this.init();
-      window.removeEventListener('click', unlock);
-      window.removeEventListener('keydown', unlock);
-      window.removeEventListener('touchstart', unlock);
+      if (!this.isInitialized) {
+        this.init();
+      } else {
+        this.resumeAudio();
+      }
+      if (this.ctx?.state === 'running') {
+        window.removeEventListener('click', unlock);
+        window.removeEventListener('keydown', unlock);
+        window.removeEventListener('touchstart', unlock);
+        window.removeEventListener('touchend', unlock);
+        window.removeEventListener('pointerdown', unlock);
+      }
     };
     window.addEventListener('click', unlock);
     window.addEventListener('keydown', unlock);
-    window.addEventListener('touchstart', unlock);
+    window.addEventListener('touchstart', unlock, { passive: true });
+    window.addEventListener('touchend', unlock, { passive: true });
+    window.addEventListener('pointerdown', unlock, { passive: true });
   }
 
   public init(): void {

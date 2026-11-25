@@ -418,15 +418,19 @@ export class HumanCharacterMesh {
     chest.position.y = 0.21;
     chest.castShadow = true;
 
-    // Accent racing stripe / zipper placket down chest center
-    const zipper = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.31, 0.025), this.accentMat);
+    // Tailored jacket placket & split stand-up collar lapels (replaces blocky donut torus)
+    const zipper = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.31, 0.018), this.accentMat);
     zipper.position.set(0, 0.21, -0.12);
     this.torso.add(zipper);
 
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.11, 0.033, 8, 18), this.accentMat);
-    collar.rotation.x = Math.PI * 0.5;
-    collar.position.y = 0.39;
-    this.torso.add(collar);
+    const lapelGeo = new THREE.BoxGeometry(0.052, 0.085, 0.045);
+    for (const side of [-1, 1]) {
+      const lapel = new THREE.Mesh(lapelGeo, this.jacketMat);
+      lapel.position.set(side * 0.056, 0.382, -0.022);
+      lapel.rotation.z = side * -0.24;
+      lapel.rotation.y = side * -0.22;
+      this.torso.add(lapel);
+    }
 
     // Canvas belt breaks up the silhouette and grounds the outfit
     const belt = new THREE.Mesh(
@@ -482,17 +486,17 @@ export class HumanCharacterMesh {
     for (const side of [-1, 1]) {
       const eyeMat = new THREE.MeshBasicMaterial({ map: eyeTex, transparent: true, depthWrite: false });
       this.eyeMats.push(eyeMat);
-      const eye = new THREE.Mesh(new THREE.PlaneGeometry(0.055, 0.040), eyeMat);
-      eye.position.set(side * 0.046, 0.197, -0.098);
-      eye.rotation.y = Math.PI + side * 0.26;
+      const eye = new THREE.Mesh(new THREE.PlaneGeometry(0.036, 0.023), eyeMat);
+      eye.position.set(side * 0.038, 0.194, -0.098);
+      eye.rotation.y = Math.PI + side * 0.24;
       this.head.add(eye);
       this.eyeMeshes.push(eye);
 
       const brow = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), this.browMat);
-      brow.scale.set(0.024, 0.0044, 0.006);
-      brow.position.set(side * 0.048, 0.222, -0.096);
-      brow.rotation.y = Math.PI + side * 0.26;
-      brow.rotation.z = side * -0.09;
+      brow.scale.set(0.021, 0.0038, 0.005);
+      brow.position.set(side * 0.040, 0.215, -0.097);
+      brow.rotation.y = Math.PI + side * 0.24;
+      brow.rotation.z = side * -0.08;
       this.head.add(brow);
     }
 

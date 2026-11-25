@@ -1,5 +1,4 @@
 import os from 'os';
-import type { Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type {
@@ -57,7 +56,18 @@ function generateRoomCode(existing: Map<string, InternalRoom>): string {
   return String(Date.now()).slice(-4);
 }
 
-export function lanLobbyPlugin(): Plugin {
+export interface LanLobbyServerLike {
+  httpServer: any;
+  middlewares: {
+    use: (route: string, handler: (req: IncomingMessage, res: ServerResponse) => void) => unknown;
+  };
+}
+
+export function lanLobbyPlugin(): {
+  name: string;
+  configureServer(server: LanLobbyServerLike): void;
+  configurePreviewServer(server: LanLobbyServerLike): void;
+} {
   const rooms = new Map<string, InternalRoom>();
   const clients = new Map<string, ClientSession>();
   const attachedServers = new WeakSet<object>();
@@ -142,6 +152,7 @@ export function lanLobbyPlugin(): Plugin {
     }
 
     broadcastToRoom(oldCode, 'ROOM_STATE', { room: sanitizeRoom(room) });
+    broadcastToRoom(oldCode, 'WORLD_STATE', { states: room.playerStates });
     if (leavingPlayer) {
       broadcastToRoom(oldCode, 'CHAT_MSG', {
         sender: 'System',

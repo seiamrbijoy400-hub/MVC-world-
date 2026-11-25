@@ -213,22 +213,48 @@ export class OpenWorldMap {
     c.width = 256;
     c.height = 256;
     const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#1b1f27';
+    ctx.fillStyle = '#1d2129';
     ctx.fillRect(0, 0, 256, 256);
 
-    ctx.fillStyle = '#94a3b8';
+    // Subtle asphalt aggregate texture & dark tire tracks
+    for (let i = 0; i < 1800; i++) {
+      const shade = 24 + Math.floor(Math.random() * 20);
+      ctx.fillStyle = `rgb(${shade},${shade + 3},${shade + 8})`;
+      ctx.fillRect(Math.random() * 255, Math.random() * 255, 2, 2);
+    }
+
     if (isHorizontal) {
-      ctx.fillRect(0, 0, 256, 12);
-      ctx.fillRect(0, 244, 256, 12);
-      ctx.fillStyle = '#facc15';
-      ctx.fillRect(0, 124, 256, 3);
-      ctx.fillRect(0, 130, 256, 3);
+      ctx.fillStyle = 'rgba(10, 12, 16, 0.28)';
+      ctx.fillRect(0, 52, 256, 36);
+      ctx.fillRect(0, 168, 256, 36);
+      // Concrete curb shoulder
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(0, 0, 256, 10);
+      ctx.fillRect(0, 246, 256, 10);
+      // Crisp lane markings (muted amber double center + white dashes)
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(0, 125, 256, 2);
+      ctx.fillRect(0, 130, 256, 2);
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.55)';
+      ctx.fillRect(16, 68, 44, 2);
+      ctx.fillRect(144, 68, 44, 2);
+      ctx.fillRect(16, 186, 44, 2);
+      ctx.fillRect(144, 186, 44, 2);
     } else {
-      ctx.fillRect(0, 0, 12, 256);
-      ctx.fillRect(244, 0, 12, 256);
-      ctx.fillStyle = '#facc15';
-      ctx.fillRect(124, 0, 3, 256);
-      ctx.fillRect(130, 0, 3, 256);
+      ctx.fillStyle = 'rgba(10, 12, 16, 0.28)';
+      ctx.fillRect(52, 0, 36, 256);
+      ctx.fillRect(168, 0, 36, 256);
+      ctx.fillStyle = '#475569';
+      ctx.fillRect(0, 0, 10, 256);
+      ctx.fillRect(246, 0, 10, 256);
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(125, 0, 2, 256);
+      ctx.fillRect(130, 0, 2, 256);
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.55)';
+      ctx.fillRect(68, 16, 2, 44);
+      ctx.fillRect(68, 144, 2, 44);
+      ctx.fillRect(186, 16, 2, 44);
+      ctx.fillRect(186, 144, 2, 44);
     }
 
     const tex = new THREE.CanvasTexture(c);
@@ -329,14 +355,50 @@ export class OpenWorldMap {
     c.width = 256;
     c.height = 512;
     const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#0b1220';
+
+    // Architectural brushed dark concrete/anodized curtain-wall base
+    ctx.fillStyle = '#18202c';
     ctx.fillRect(0, 0, 256, 512);
 
-    for (let y = 24; y < 480; y += 26) {
-      for (let x = 16; x < 240; x += 26) {
-        const lit = Math.random() > 0.3;
-        ctx.fillStyle = lit ? (Math.random() > 0.78 ? accentHex : '#bae6fd') : '#162033';
-        ctx.fillRect(x, y, 16, 16);
+    // Subtle concrete vertical pilaster strips & floor slab spandrel bands
+    for (let y = 0; y < 512; y += 32) {
+      ctx.fillStyle = '#202938';
+      ctx.fillRect(0, y, 256, 7);
+      ctx.fillStyle = 'rgba(0,0,0,0.28)';
+      ctx.fillRect(0, y + 7, 256, 2);
+
+      for (let x = 10; x < 246; x += 24) {
+        const winY = y + 10;
+        const winH = 19;
+        const winW = 16;
+        const r = Math.random();
+        if (r > 0.36) {
+          // Warm office tungsten, cool overcast reflection, or subtle tenant accent
+          const tint = r > 0.90 ? accentHex : (r > 0.56 ? '#e2d1b3' : '#93c5fd');
+          const g = ctx.createLinearGradient(x, winY, x, winY + winH);
+          g.addColorStop(0, tint);
+          g.addColorStop(1, '#1e293b');
+          ctx.globalAlpha = r > 0.72 ? 0.85 : 0.45;
+          ctx.fillStyle = g;
+          ctx.fillRect(x, winY, winW, winH);
+          ctx.globalAlpha = 1;
+          // Occasional interior venetian blind partial cover
+          if (Math.random() > 0.55) {
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+            ctx.fillRect(x, winY, winW, 6 + Math.floor(Math.random() * 5));
+          }
+        } else {
+          // Dark tinted sky-reflecting unlit glass pane
+          const g = ctx.createLinearGradient(x, winY, x, winY + winH);
+          g.addColorStop(0, '#0f172a');
+          g.addColorStop(1, '#1e293b');
+          ctx.fillStyle = g;
+          ctx.fillRect(x, winY, winW, winH);
+        }
+        // Dark aluminum window mullion frame highlight
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, winY + 0.5, winW - 1, winH - 1);
       }
     }
     const tex = new THREE.CanvasTexture(c);
@@ -435,10 +497,20 @@ export class OpenWorldMap {
 
       if (b.label) {
         for (const faceZ of [1, -1]) {
-          const canopy = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.78, 0.35, 2.2), canopyMat);
-          canopy.position.set(b.x, 4.4, b.z + faceZ * (b.d * 0.5 + 1.0));
-          const shopBand = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.66, 2.9, 0.22), neonMat);
-          shopBand.position.set(b.x, 1.8, b.z + faceZ * (b.d * 0.5 + 0.08));
+          const canopy = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.78, 0.34, 2.3), canopyMat);
+          canopy.position.set(b.x, 4.3, b.z + faceZ * (b.d * 0.5 + 1.05));
+          canopy.castShadow = true;
+          const shopBand = new THREE.Mesh(
+            new THREE.BoxGeometry(b.w * 0.68, 3.1, 0.28),
+            new THREE.MeshStandardMaterial({
+              color: 0x0f172a,
+              emissive: accent,
+              emissiveIntensity: 0.32,
+              roughness: 0.2,
+              metalness: 0.55
+            })
+          );
+          shopBand.position.set(b.x, 1.85, b.z + faceZ * (b.d * 0.5 + 0.08));
           this.group.add(canopy, shopBand);
         }
       }
@@ -459,18 +531,12 @@ export class OpenWorldMap {
         this.group.add(hvac);
       }
 
-      const neonTrim = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.45, 0.7, b.d + 0.45), neonMat);
-      neonTrim.position.set(b.x, b.h - 0.5, b.z);
-      this.group.add(neonTrim);
-
-      if (idx % 2 === 0) {
-        const stripGeo = new THREE.BoxGeometry(0.42, b.h - 2, 0.42);
-        const s1 = new THREE.Mesh(stripGeo, neonMat);
-        s1.position.set(b.x - b.w * 0.5 - 0.1, b.h * 0.5, b.z + b.d * 0.5 + 0.1);
-        const s2 = new THREE.Mesh(stripGeo, neonMat);
-        s2.position.set(b.x + b.w * 0.5 + 0.1, b.h * 0.5, b.z - b.d * 0.5 - 0.1);
-        this.group.add(s1, s2);
-      }
+      // Clean architectural rooftop parapet & muted accent cornice strip
+      const parapet = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.55, 0.55, b.d + 0.55), roofMat);
+      parapet.position.set(b.x, b.h - 0.25, b.z);
+      const trimLine = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.62, 0.2, b.d + 0.62), neonMat);
+      trimLine.position.set(b.x, b.h - 0.65, b.z);
+      this.group.add(parapet, trimLine);
 
       this.colliders.push({
         minX: b.x - b.w * 0.5 - 0.4,
@@ -522,12 +588,22 @@ export class OpenWorldMap {
       }
     });
 
-    const trunkGeo = new THREE.CylinderGeometry(0.22, 0.3, 2.7, 6);
-    trunkGeo.translate(0, 1.35, 0);
-    const crownGeo = new THREE.DodecahedronGeometry(1.8, 0);
-    crownGeo.translate(0, 3.6, 0);
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x452f21, roughness: 0.9 });
-    const sakuraMat = new THREE.MeshStandardMaterial({ color: 0xf472b6, roughness: 0.72 });
+    // Botanical Multi-Cluster Urban Trees (Alternating lush Zelkova green & subtle Cherry Blossom) + Planters
+    const planterGeo = new THREE.BoxGeometry(2.2, 0.36, 2.2);
+    planterGeo.translate(0, 0.18, 0);
+    const trunkGeo = new THREE.CylinderGeometry(0.16, 0.28, 2.9, 7);
+    trunkGeo.translate(0, 1.45, 0);
+    const canopyMainGeo = new THREE.IcosahedronGeometry(1.55, 1);
+    canopyMainGeo.translate(0, 3.85, 0);
+    const canopySideAGeo = new THREE.IcosahedronGeometry(1.15, 1);
+    canopySideAGeo.translate(0.92, 3.25, 0.48);
+    const canopySideBGeo = new THREE.IcosahedronGeometry(1.05, 1);
+    canopySideBGeo.translate(-0.88, 3.35, -0.52);
+
+    const planterMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.85 });
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x3f2e21, roughness: 0.92 });
+    const leafGreenMat = new THREE.MeshStandardMaterial({ color: 0x2f6b3c, roughness: 0.78 });
+    const sakuraMat = new THREE.MeshStandardMaterial({ color: 0xf4a5c7, roughness: 0.76 });
 
     const treeSpots: [number, number][] = [];
     for (const tz of [-115, -75, 5, 165, 206]) {
@@ -535,28 +611,92 @@ export class OpenWorldMap {
         treeSpots.push([tx, tz]);
       }
     }
+    const planterInst = new THREE.InstancedMesh(planterGeo, planterMat, treeSpots.length);
     const trunkInst = new THREE.InstancedMesh(trunkGeo, trunkMat, treeSpots.length);
-    const crownInst = new THREE.InstancedMesh(crownGeo, sakuraMat, treeSpots.length);
-    crownInst.castShadow = true;
     const dummy = new THREE.Object3D();
+
+    const greenSpots = treeSpots.filter((_, i) => i % 3 !== 0);
+    const sakuraSpots = treeSpots.filter((_, i) => i % 3 === 0);
+    const addCrownSet = (spots: [number, number][], mat: THREE.Material) => {
+      const m1 = new THREE.InstancedMesh(canopyMainGeo, mat, spots.length);
+      const m2 = new THREE.InstancedMesh(canopySideAGeo, mat, spots.length);
+      const m3 = new THREE.InstancedMesh(canopySideBGeo, mat, spots.length);
+      m1.castShadow = true;
+      spots.forEach(([tx, tz], i) => {
+        dummy.position.set(tx, 0, tz);
+        dummy.rotation.set(0, i * 1.4, 0);
+        dummy.scale.setScalar(0.9 + (i % 3) * 0.14);
+        dummy.updateMatrix();
+        m1.setMatrixAt(i, dummy.matrix);
+        m2.setMatrixAt(i, dummy.matrix);
+        m3.setMatrixAt(i, dummy.matrix);
+      });
+      m1.instanceMatrix.needsUpdate = true;
+      m2.instanceMatrix.needsUpdate = true;
+      m3.instanceMatrix.needsUpdate = true;
+      this.group.add(m1, m2, m3);
+    };
+
     treeSpots.forEach(([tx, tz], i) => {
       dummy.position.set(tx, 0, tz);
       dummy.rotation.set(0, i * 1.1, 0);
       dummy.scale.setScalar(0.9 + (i % 3) * 0.14);
       dummy.updateMatrix();
+      planterInst.setMatrixAt(i, dummy.matrix);
       trunkInst.setMatrixAt(i, dummy.matrix);
-      crownInst.setMatrixAt(i, dummy.matrix);
     });
+    planterInst.instanceMatrix.needsUpdate = true;
     trunkInst.instanceMatrix.needsUpdate = true;
-    crownInst.instanceMatrix.needsUpdate = true;
-    this.group.add(trunkInst, crownInst);
+    this.group.add(planterInst, trunkInst);
+    addCrownSet(greenSpots, leafGreenMat);
+    addCrownSet(sakuraSpots, sakuraMat);
 
-    const poleGeo = new THREE.CylinderGeometry(0.14, 0.18, 6.4, 8);
-    poleGeo.translate(0, 3.2, 0);
-    const bulbGeo = new THREE.BoxGeometry(1.1, 0.25, 0.45);
-    bulbGeo.translate(0.5, 6.2, 0);
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.7 });
-    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+    // Sidewalk Steel Bollards & Urban Benches for Ground-Level Human Scale
+    const benchGeo = new THREE.BoxGeometry(2.1, 0.55, 0.65);
+    benchGeo.translate(0, 0.28, 0);
+    const benchMat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6, metalness: 0.45 });
+    const benchCoords: [number, number][] = [
+      [56, -24], [56, 12], [112, -24], [112, 12], [58, 162], [110, 162], [160, 236], [190, 236]
+    ];
+    const benchInst = new THREE.InstancedMesh(benchGeo, benchMat, benchCoords.length);
+    benchCoords.forEach(([bx, bz], i) => {
+      dummy.position.set(bx, 0, bz);
+      dummy.rotation.set(0, i % 2 === 0 ? Math.PI * 0.5 : 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      benchInst.setMatrixAt(i, dummy.matrix);
+    });
+    benchInst.instanceMatrix.needsUpdate = true;
+    this.group.add(benchInst);
+
+    // Modern Dual-Arm Curved Streetlamps + Soft Ground Light Pools
+    const poleGeo = new THREE.CylinderGeometry(0.11, 0.16, 6.6, 8);
+    poleGeo.translate(0, 3.3, 0);
+    const armGeo = new THREE.BoxGeometry(1.5, 0.11, 0.12);
+    armGeo.translate(0.7, 6.45, 0);
+    const bulbGeo = new THREE.BoxGeometry(0.75, 0.14, 0.34);
+    bulbGeo.translate(1.25, 6.38, 0);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.75, roughness: 0.35 });
+    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7 });
+
+    const lampGlowCanvas = document.createElement('canvas');
+    lampGlowCanvas.width = 64;
+    lampGlowCanvas.height = 64;
+    const lgCtx = lampGlowCanvas.getContext('2d')!;
+    const lgGrad = lgCtx.createRadialGradient(32, 32, 2, 32, 32, 30);
+    lgGrad.addColorStop(0, 'rgba(254, 240, 138, 0.24)');
+    lgGrad.addColorStop(0.55, 'rgba(253, 224, 71, 0.08)');
+    lgGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    lgCtx.fillStyle = lgGrad;
+    lgCtx.fillRect(0, 0, 64, 64);
+    const lampGlowGeo = new THREE.PlaneGeometry(11, 11);
+    lampGlowGeo.rotateX(-Math.PI * 0.5);
+    const lampGlowMat = new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(lampGlowCanvas),
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
 
     const lampCoords: [number, number][] = [];
     for (const ax of [37, 131, 233]) {
@@ -565,18 +705,26 @@ export class OpenWorldMap {
       }
     }
     const poleInst = new THREE.InstancedMesh(poleGeo, poleMat, lampCoords.length);
+    const armInst = new THREE.InstancedMesh(armGeo, poleMat, lampCoords.length);
     const bulbInst = new THREE.InstancedMesh(bulbGeo, bulbMat, lampCoords.length);
+    const lampGlowInst = new THREE.InstancedMesh(lampGlowGeo, lampGlowMat, lampCoords.length);
     lampCoords.forEach(([lx, lz], i) => {
-      dummy.position.set(lx, 0, lz);
+      dummy.position.set(lx, 0.05, lz);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.setScalar(1);
       dummy.updateMatrix();
       poleInst.setMatrixAt(i, dummy.matrix);
+      armInst.setMatrixAt(i, dummy.matrix);
       bulbInst.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(lx + 1.6, 0.06, lz);
+      dummy.updateMatrix();
+      lampGlowInst.setMatrixAt(i, dummy.matrix);
     });
     poleInst.instanceMatrix.needsUpdate = true;
+    armInst.instanceMatrix.needsUpdate = true;
     bulbInst.instanceMatrix.needsUpdate = true;
-    this.group.add(poleInst, bulbInst);
+    lampGlowInst.instanceMatrix.needsUpdate = true;
+    this.group.add(poleInst, armInst, bulbInst, lampGlowInst);
   }
 
   private createHarborCoastDistrict(): void {
@@ -612,16 +760,31 @@ export class OpenWorldMap {
     pier.receiveShadow = true;
     this.group.add(pier);
 
+    const containerTexCanvas = document.createElement('canvas');
+    containerTexCanvas.width = 256;
+    containerTexCanvas.height = 128;
+    const cCtx = containerTexCanvas.getContext('2d')!;
+    cCtx.fillStyle = '#d4d4d8';
+    cCtx.fillRect(0, 0, 256, 128);
+    for (let x = 0; x < 256; x += 8) {
+      cCtx.fillStyle = (x / 8) % 2 === 0 ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.16)';
+      cCtx.fillRect(x, 4, 4, 120);
+    }
+    cCtx.strokeStyle = 'rgba(15, 23, 42, 0.55)';
+    cCtx.lineWidth = 6;
+    cCtx.strokeRect(3, 3, 250, 122);
+    const containerTex = new THREE.CanvasTexture(containerTexCanvas);
+
     const containerSpecs: { x: number; z: number; w: number; d: number; h: number; color: number }[] = [
-      { x: 64, z: 248, w: 16, d: 6, h: 6.5, color: 0xdc2626 },
-      { x: 84, z: 248, w: 16, d: 6, h: 3.4, color: 0x2563eb },
-      { x: 256, z: 248, w: 18, d: 7, h: 6.5, color: 0xf97316 },
-      { x: 278, z: 248, w: 16, d: 7, h: 3.4, color: 0x16a34a }
+      { x: 64, z: 248, w: 16, d: 6, h: 6.5, color: 0xb91c1c },
+      { x: 84, z: 248, w: 16, d: 6, h: 3.4, color: 0x1d4ed8 },
+      { x: 256, z: 248, w: 18, d: 7, h: 6.5, color: 0xc2410c },
+      { x: 278, z: 248, w: 16, d: 7, h: 3.4, color: 0x15803d }
     ];
     for (const c of containerSpecs) {
       const m = new THREE.Mesh(
         new THREE.BoxGeometry(c.w, c.h, c.d),
-        new THREE.MeshStandardMaterial({ color: c.color, roughness: 0.55, metalness: 0.35 })
+        new THREE.MeshStandardMaterial({ map: containerTex, color: c.color, roughness: 0.62, metalness: 0.42 })
       );
       m.position.set(c.x, c.h * 0.5, c.z);
       m.castShadow = true;

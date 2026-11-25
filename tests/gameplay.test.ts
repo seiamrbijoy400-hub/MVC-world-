@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import http from 'node:http';
 import * as THREE from 'three';
+import { WebSocket } from 'ws';
 
 // Minimal headless browser environment stubs for Three.js procedural canvas textures & localStorage
 const memStorage = new Map<string, string>();
@@ -44,6 +48,20 @@ if (typeof globalThis.window === 'undefined') {
 if (typeof globalThis.location === 'undefined') {
   (globalThis as unknown as Record<string, unknown>).location = { href: 'http://localhost/' };
 }
+if (typeof globalThis.ProgressEvent === 'undefined') {
+  (globalThis as unknown as Record<string, unknown>).ProgressEvent = class ProgressEvent {
+    type: string;
+    lengthComputable: boolean;
+    loaded: number;
+    total: number;
+    constructor(type: string, init?: { lengthComputable?: boolean; loaded?: number; total?: number }) {
+      this.type = type;
+      this.lengthComputable = Boolean(init?.lengthComputable);
+      this.loaded = Number(init?.loaded ?? 0);
+      this.total = Number(init?.total ?? 0);
+    }
+  };
+}
 // Allow Three.js FileLoader relative asset URLs (`/assets/...`) to fail gracefully in headless Node tests
 const OrigRequest = globalThis.Request;
 (globalThis as unknown as Record<string, unknown>).Request = class extends OrigRequest {
@@ -52,7 +70,23 @@ const OrigRequest = globalThis.Request;
     super(resolved, init);
   }
 };
-(globalThis as unknown as Record<string, unknown>).fetch = async () => new Response(new ArrayBuffer(0), { status: 404 });
+(globalThis as unknown as Record<string, unknown>).fetch = async (input: RequestInfo | URL) => {
+  const urlStr = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+  let pathname = urlStr;
+  try {
+    pathname = decodeURIComponent(new URL(urlStr, 'http://127.0.0.1').pathname);
+  } catch {
+    pathname = decodeURIComponent(urlStr);
+  }
+  if (pathname.startsWith('/assets/')) {
+    const diskPath = path.join(process.cwd(), 'public', pathname.slice(1));
+    if (fs.existsSync(diskPath)) {
+      const buf = fs.readFileSync(diskPath);
+      return new Response(buf, { status: 200 });
+    }
+  }
+  return new Response(new ArrayBuffer(0), { status: 404 });
+};
 
 import { CarPhysics, GearboxType } from '../src/physics/CarPhysics';
 import { CharacterController } from '../src/physics/CharacterController';
@@ -64,6 +98,7 @@ import { PoliceSystem } from '../src/game/PoliceSystem';
 import { PedestrianSystem } from '../src/ai/PedestrianSystem';
 import { WorldActivities, type CourierContractDef } from '../src/game/WorldActivities';
 import { CarMesh } from '../src/graphics/CarMesh';
+import { lanLobbyPlugin } from '../server/lanLobbyPlugin';
 import {
   separateVehiclePair,
   pushCharacterOutOfVehicles,
@@ -402,4 +437,196 @@ test('CollisionResolver & CarMesh: vehicle impulse, wall-safe character push, ha
   });
   assert.equal(m2HasValidSharedMap, true);
   m2.dispose();
+});
+
+test('Real FBX vehicle assets & sound files load cleanly and CarMesh toggles driver visibility', async () => {
+  const car = new CarMesh();
+  const internal = car as unknown as {
+    hqBodyGroup: THREE.Group | null;
+    fallbackGroup: THREE.Group;
+    driverGroup: THREE.Group;
+  };
+
+  // Poll briefly for async FBXLoader parsing of public/assets/models/*.fbx
+  const deadline = Date.now() + 3000;
+  while (!internal.hqBodyGroup && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+
+  assert.ok(internal.hqBodyGroup !== null, 'Expected public/assets/models/car 1203.fbx to load into hqBodyGroup');
+  assert.equal(internal.fallbackGroup.visible, false, 'Fallback chassis should hide once HQ FBX body loads');
+
+  let hasPlateMap = false;
+  internal.hqBodyGroup.traverse((child) => {
+    if ((child as THREE.Mesh).isMesh && child.name.toLowerCase() === 'plate') {
+      const mat = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+      if (mat.map?.userData?.shared) hasPlateMap = true;
+    }
+  });
+  assert.equal(hasPlateMap, true, 'Rear FBX plate mesh must receive shared Neo Velo license plate texture');
+
+  car.setDriverVisible(false);
+  assert.equal(internal.driverGroup.visible, false);
+  car.setDriverVisible(true);
+  assert.equal(internal.driverGroup.visible, true);
+
+  const requiredSounds = [
+    'low.wav',
+    'high ACC.wav',
+    'high Deacc.wav',
+    'TrackColision.wav'
+  ];
+  for (const file of requiredSounds) {
+    const p = path.join(process.cwd(), 'public', 'assets', 'sounds', file);
+    assert.ok(fs.existsSync(p), `Missing audio asset: ${file}`);
+    assert.ok(fs.statSync(p).size > 1024, `Audio asset empty/corrupt: ${file}`);
+  }
+
+  car.dispose();
+});
+
+test('LAN server plugin: live HTTP /api/lan-info + 2-client WebSocket sync & disconnect cleanup', async () => {
+  type MiddlewareFn = (req: http.IncomingMessage, res: http.ServerResponse) => void;
+  const routes = new Map<string, MiddlewareFn>();
+  const server = http.createServer((req, res) => {
+    const route = req.url?.split('?')[0] ?? '';
+    const fn = routes.get(route);
+    if (fn) fn(req, res);
+    else {
+      res.statusCode = 404;
+      res.end('Not found');
+    }
+  });
+
+  const plugin = lanLobbyPlugin();
+  (plugin.configureServer as (srv: unknown) => void)({
+    httpServer: server,
+    middlewares: {
+      use: (route: string, fn: MiddlewareFn) => routes.set(route, fn)
+    }
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address();
+  assert.ok(addr && typeof addr === 'object');
+  const port = addr.port;
+
+  // 1. Verify /api/lan-info HTTP endpoint
+  const lanJson = await new Promise<{ ips: string[]; port: number; preferredUrl: string }>((resolve, reject) => {
+    http.get(`http://127.0.0.1:${port}/api/lan-info`, (res) => {
+      assert.equal(res.statusCode, 200);
+      let raw = '';
+      res.on('data', (c) => (raw += c));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(raw));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+  assert.ok(Array.isArray(lanJson.ips) && lanJson.ips.length > 0);
+  assert.equal(lanJson.port, port);
+
+  // 2. Connect Host + Guest WebSockets
+  const connectWs = () =>
+    new Promise<{ ws: WebSocket; msgs: Record<string, unknown>[] }>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const msgs: Record<string, unknown>[] = [];
+      ws.on('message', (data) => {
+        msgs.push(JSON.parse(data.toString()));
+      });
+      ws.once('open', () => resolve({ ws, msgs }));
+      ws.once('error', reject);
+    });
+
+  const waitForMsg = async (
+    msgs: Record<string, unknown>[],
+    pred: (m: Record<string, unknown>) => boolean,
+    label: string
+  ) => {
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const hit = msgs.find(pred);
+      if (hit) return hit;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`Timed out waiting for WS message: ${label}`);
+  };
+
+  const host = await connectWs();
+  const guest = await connectWs();
+
+  try {
+    const hostWelcome = (await waitForMsg(host.msgs, (m) => m.type === 'WELCOME', 'host WELCOME')).payload as { clientId: string };
+    const guestWelcome = (await waitForMsg(guest.msgs, (m) => m.type === 'WELCOME', 'guest WELCOME')).payload as { clientId: string };
+    const hostId = hostWelcome.clientId;
+    const guestId = guestWelcome.clientId;
+    assert.ok(hostId && guestId && hostId !== guestId);
+
+    host.ws.send(JSON.stringify({
+      type: 'CREATE_ROOM',
+      payload: { playerName: 'HostApex', characterId: 'kaito', carColor: '#ff5500' }
+    }));
+    const createdRoom = (await waitForMsg(host.msgs, (m) => m.type === 'ROOM_STATE', 'CREATE_ROOM')).payload as {
+      room: { code: string; players: { id: string }[] };
+    };
+    const room = createdRoom.room;
+    assert.ok(room.code && room.players.length === 1);
+
+    guest.ws.send(JSON.stringify({
+      type: 'JOIN_ROOM',
+      payload: { code: room.code, playerName: 'GuestVelo', characterId: 'mika', carColor: '#0ea5e9' }
+    }));
+    await waitForMsg(
+      host.msgs,
+      (m) => m.type === 'ROOM_STATE' && ((m.payload as { room: { players: unknown[] } }).room.players.length === 2),
+      '2-player ROOM_STATE'
+    );
+
+    host.ws.send(JSON.stringify({ type: 'START_GAME' }));
+    await waitForMsg(guest.msgs, (m) => m.type === 'GAME_START', 'guest GAME_START');
+
+    host.ws.send(JSON.stringify({ type: 'CHAT', payload: { text: 'Ready at grid!' } }));
+    const chat = (await waitForMsg(
+      guest.msgs,
+      (m) => m.type === 'CHAT_MSG' && (m.payload as { text?: string }).text === 'Ready at grid!',
+      'guest CHAT_MSG Ready at grid!'
+    )).payload as { text: string; isSystem?: boolean };
+    assert.equal(chat.text, 'Ready at grid!');
+    assert.equal(chat.isSystem, false);
+
+    guest.ws.send(JSON.stringify({ type: 'PLAYER_STATE', payload: { x: 42, y: 0, z: -12, mode: 'CAR' } }));
+    const initialWorld = (await waitForMsg(
+      host.msgs,
+      (m) => m.type === 'WORLD_STATE' && Boolean((m.payload as { states: Record<string, unknown> }).states[guestId]),
+      'host receives guest WORLD_STATE'
+    )).payload as { states: Record<string, { x: number }> };
+    assert.equal(initialWorld.states[guestId].x, 42);
+
+    host.ws.send(JSON.stringify({ type: 'BALL_SYNC', payload: { x: 96, y: 0.5, z: -4, vx: 3, vy: 1, vz: 0 } }));
+    await waitForMsg(guest.msgs, (m) => m.type === 'BALL_SYNC', 'guest BALL_SYNC');
+
+    host.ws.send(JSON.stringify({ type: 'MELEE_HIT', payload: { targetId: guestId, damage: 20, dirX: 1, dirZ: 0 } }));
+    await waitForMsg(guest.msgs, (m) => m.type === 'MELEE_HIT', 'guest MELEE_HIT');
+
+    // Clear host buffer and disconnect guest -> verify ghost state cleanup in WORLD_STATE!
+    host.msgs.length = 0;
+    guest.ws.close();
+    await waitForMsg(
+      host.msgs,
+      (m) => m.type === 'ROOM_STATE' && ((m.payload as { room: { players: unknown[] } }).room.players.length === 1),
+      'host sees 1 player after guest leave'
+    );
+    await waitForMsg(
+      host.msgs,
+      (m) => m.type === 'WORLD_STATE' && !(guestId in (m.payload as { states: Record<string, unknown> }).states),
+      'host receives pruned WORLD_STATE without stale ghost'
+    );
+  } finally {
+    host.ws.close();
+    if (guest.ws.readyState === WebSocket.OPEN) guest.ws.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

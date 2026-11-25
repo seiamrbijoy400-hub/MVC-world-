@@ -519,6 +519,7 @@ class GameApp {
     // Park car at South Track-City Boulevard Junction facing the GP Track Gate
     this.physics.enforceTrackWalls = false;
     this.physics.resetToTrack(new THREE.Vector3(16, 0, 26), Math.PI * 0.42);
+    this.carMesh.setDriverVisible(false);
     this.parkActiveCar();
     this.hud.setStealPrompt(null);
     this.hud.hideKoOverlay();
@@ -566,6 +567,7 @@ class GameApp {
       this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
     }
     this.inCar = true;
+    this.carMesh.setDriverVisible(true);
     this.avatarMesh.root.visible = false;
     this.physics.enforceTrackWalls = true;
     this.physics.resetToTrack(new THREE.Vector3(0, 0, 2), 0);
@@ -818,6 +820,7 @@ class GameApp {
         return;
       }
       this.inCar = false;
+      this.carMesh.setDriverVisible(false);
       this.parkActiveCar();
       const rgt = this.physics.getRightVector();
       const exitPos = this.physics.position.clone().addScaledVector(rgt, -1.9);
@@ -925,6 +928,7 @@ class GameApp {
     this.parkedCars = this.parkedCars.filter((p) => p !== entry);
     this.physics = entry.physics;
     this.carMesh = entry.mesh;
+    this.carMesh.setDriverVisible(true);
     this.activeCarName = entry.name;
     this.activePoliceLights = entry.policeLights;
     this.configureActiveCar();
@@ -951,6 +955,7 @@ class GameApp {
     this.inCar = true;
     this.physics = physics;
     this.carMesh = mesh;
+    this.carMesh.setDriverVisible(true);
     this.activeCarName = label;
     this.activePoliceLights = policeLights;
     this.configureActiveCar();
@@ -981,6 +986,7 @@ class GameApp {
     this.inCar = true;
     this.physics = civic.physics;
     this.carMesh = civic.mesh;
+    this.carMesh.setDriverVisible(true);
     this.activeCarName = `${civic.name}'s Ride`;
     this.activePoliceLights = undefined;
     this.configureActiveCar();
@@ -1085,10 +1091,10 @@ class GameApp {
   }
 
   private setupLighting(): void {
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.72);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.26);
     this.scene.add(this.ambientLight);
 
-    this.sunLight = new THREE.DirectionalLight(0xfffbeb, 1.9);
+    this.sunLight = new THREE.DirectionalLight(0xfffbeb, 2.15);
     this.sunLight.position.set(80, 140, 60);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.width = 2048;
@@ -1106,7 +1112,7 @@ class GameApp {
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
-    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x166534, 0.55);
+    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x166534, 0.52);
     this.scene.add(this.hemiLight);
   }
 
@@ -1118,30 +1124,30 @@ class GameApp {
     if (tod === 'SUNSET') {
       this.scene.fog = new THREE.FogExp2(0xfb923c, 0.0014);
       this.sunLight.color.setHex(0xfdba74);
-      this.sunLight.intensity = 1.65;
-      this.ambientLight.intensity = 0.55;
+      this.sunLight.intensity = 1.85;
+      this.ambientLight.intensity = 0.22;
       this.hemiLight.color.setHex(0xfed7aa);
-      this.hemiLight.groundColor.setHex(0x312e81);
-      this.hemiLight.intensity = 0.5;
-      this.renderer.toneMappingExposure = 1.12;
+      this.hemiLight.groundColor.setHex(0x1e1b4b);
+      this.hemiLight.intensity = 0.44;
+      this.renderer.toneMappingExposure = 1.1;
     } else if (tod === 'NIGHT') {
       this.scene.fog = new THREE.FogExp2(0x090d16, 0.0018);
       this.sunLight.color.setHex(0x93c5fd);
-      this.sunLight.intensity = 0.52;
-      this.ambientLight.intensity = 0.42;
+      this.sunLight.intensity = 0.78;
+      this.ambientLight.intensity = 0.16;
       this.hemiLight.color.setHex(0x38bdf8);
       this.hemiLight.groundColor.setHex(0x090d16);
-      this.hemiLight.intensity = 0.45;
-      this.renderer.toneMappingExposure = 1.25;
+      this.hemiLight.intensity = 0.38;
+      this.renderer.toneMappingExposure = 1.22;
     } else {
       this.scene.fog = new THREE.FogExp2(0x93c5fd, 0.0011);
       this.sunLight.color.setHex(0xfffbeb);
-      this.sunLight.intensity = 1.9;
-      this.ambientLight.intensity = 0.72;
+      this.sunLight.intensity = 2.15;
+      this.ambientLight.intensity = 0.26;
       this.hemiLight.color.setHex(0xdbeafe);
       this.hemiLight.groundColor.setHex(0x166534);
-      this.hemiLight.intensity = 0.55;
-      this.renderer.toneMappingExposure = 1.08;
+      this.hemiLight.intensity = 0.52;
+      this.renderer.toneMappingExposure = 1.06;
     }
 
     this.baseAmbientIntensity = this.ambientLight.intensity;
@@ -1234,6 +1240,7 @@ class GameApp {
     physics.lastSafeRotation = physics.rotation.y;
 
     const mesh = new CarMesh();
+    mesh.setDriverVisible(false);
     mesh.setColor(spec.color);
     mesh.update(physics, 0, 0.016);
     this.scene.add(mesh.root);
@@ -1552,10 +1559,11 @@ class GameApp {
     });
 
     const soundBtn = document.getElementById('btn-sound')!;
+    const soundLabel = document.getElementById('sound-label');
     soundBtn.addEventListener('click', () => {
       const muted = this.sound.toggleMute();
       soundBtn.style.opacity = muted ? '0.45' : '1.0';
-      soundBtn.innerHTML = muted ? '<span>🔇</span><span>Muted</span>' : '<span>🔊</span><span>Audio</span>';
+      if (soundLabel) soundLabel.textContent = muted ? 'Muted' : 'Audio';
     });
 
     document.getElementById('res-again-btn')!.addEventListener('click', () => {
