@@ -62,7 +62,13 @@ import { OpenWorldMap } from '../src/graphics/OpenWorldMap';
 import { TrackEnvironment } from '../src/graphics/TrackEnvironment';
 import { PoliceSystem } from '../src/game/PoliceSystem';
 import { PedestrianSystem } from '../src/ai/PedestrianSystem';
-import { WorldActivities } from '../src/game/WorldActivities';
+import { WorldActivities, type CourierContractDef } from '../src/game/WorldActivities';
+import { CarMesh } from '../src/graphics/CarMesh';
+import {
+  separateVehiclePair,
+  pushCharacterOutOfVehicles,
+  resolveMovingVehicleImpactOnCharacter
+} from '../src/physics/CollisionResolver';
 
 test('CarPhysics: throttle + nitro accelerates, shifts gears, and tuning scales power cleanly', () => {
   const stock = new CarPhysics();
@@ -307,4 +313,93 @@ test('WorldActivities: sequential Rival Sprint checkpoints, win condition & clea
   assert.equal(checkpointsReached, kira.waypoints.length - 1, 'Should emit checkpoint callbacks before final gate');
   assert.equal(wonResult, true, 'Crossing all sprint checkpoints first should win rival sprint');
   assert.equal(activities.activeSprint, null, 'Active sprint state must clear on finish');
+});
+
+test('WorldActivities: repeatable Courier Time-Trial Gold reward & deadline failure', () => {
+  localStorage.clear();
+  const scene = new THREE.Scene();
+  const save = new SaveManager();
+  const track = new TrackEnvironment(scene);
+  const map = new OpenWorldMap(scene);
+
+  let lastResult: { medal: string; credits: number; best: boolean } | null = null;
+  const activities = new WorldActivities(scene, save, track, map, {
+    onSpeedTrapTriggered: () => {},
+    onDriftZoneCompleted: () => {},
+    onShardCollected: () => {},
+    onNearRivalPrompt: () => {},
+    onSprintEnded: () => {},
+    onCourierEnded: (_def: CourierContractDef, medal, _t, isNewBest, credits) => {
+      lastResult = { medal, credits, best: isNewBest };
+    }
+  });
+
+  const harborRun = activities.couriers.find((c) => c.id === 'courier_harbor')!;
+  assert.equal(activities.startCourierContract(harborRun), true);
+  assert.ok(activities.activeCourier !== null);
+
+  // Reach dropoff cleanly in 12s -> Gold medal + saves courierRecords
+  activities.update(12.0, 12.0, harborRun.destPos, 110, true, false, 0, false);
+  assert.deepEqual(lastResult, { medal: 'GOLD', credits: Math.round(harborRun.baseCredits * 1.8), best: true });
+  assert.equal(save.data.courierRecords[harborRun.id], 12);
+  assert.equal(activities.activeCourier, null);
+
+  // Replay and miss deadline beyond bronzeSec -> FAILED
+  lastResult = null;
+  assert.equal(activities.startCourierContract(harborRun), true);
+  activities.update(harborRun.bronzeSec + 1, 60, harborRun.startPos, 20, true, false, 0, false);
+  assert.deepEqual(lastResult, { medal: 'FAILED', credits: 0, best: false });
+  assert.equal(activities.activeCourier, null);
+});
+
+test('CollisionResolver & CarMesh: vehicle impulse, wall-safe character push, hazard damage, shared resource dispose', () => {
+  const carA = new CarPhysics();
+  const carB = new CarPhysics();
+  carA.resetToTrack(new THREE.Vector3(0, 0, 0), 0);
+  carB.resetToTrack(new THREE.Vector3(0, 0, 1.5), 0);
+  carA.velocity.set(0, 0, 10);
+  carB.velocity.set(0, 0, -10);
+
+  const evt = separateVehiclePair(carA, carB, carA);
+  assert.ok(evt !== null && evt.involvesPrimary, 'Head-on overlap must trigger collision impulse');
+  assert.ok(carA.velocity.z < 10 && carB.velocity.z > -10, 'Impulses must oppose relative motion');
+
+  // On-foot character caught between car and world collider stays clamped by collider
+  const char = new CharacterController();
+  char.resetAt(new THREE.Vector3(0.4, 0, 0), 0);
+  let clamped = false;
+  const pushed = pushCharacterOutOfVehicles(char, [carA], (pos) => {
+    if (pos.x > 0.8) {
+      pos.x = 0.8;
+      clamped = true;
+    }
+    return clamped;
+  });
+  assert.equal(pushed, true);
+  assert.ok(char.position.x <= 0.8 + 1e-6);
+
+  // Fast vehicle > 22 km/h damages character
+  carA.velocity.set(0, 0, 15); // 54 km/h
+  char.resetAt(new THREE.Vector3(carA.position.x, 0, carA.position.z + 1.0), 0);
+  const hitRes = resolveMovingVehicleImpactOnCharacter(char, [carA], 24, 3.0);
+  assert.equal(hitRes.hit, true);
+  assert.ok(char.hp < char.maxHp, 'High-speed vehicle hit must reduce HP');
+
+  // Disposing one CarMesh must NOT dispose shared textures still attached to surviving CarMesh
+  const m1 = new CarMesh();
+  const m2 = new CarMesh();
+  let m1SharedMapCount = 0;
+  m1.root.traverse((o) => {
+    const mat = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+    if (mat?.map?.userData?.shared) m1SharedMapCount++;
+  });
+  assert.ok(m1SharedMapCount >= 2, 'CarMesh should use shared underglow & shadow textures');
+  m1.dispose();
+  let m2HasValidSharedMap = true;
+  m2.root.traverse((o) => {
+    const mat = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+    if (mat?.map?.userData?.shared && !mat.map.image) m2HasValidSharedMap = false;
+  });
+  assert.equal(m2HasValidSharedMap, true);
+  m2.dispose();
 });

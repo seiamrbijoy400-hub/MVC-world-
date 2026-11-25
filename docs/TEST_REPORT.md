@@ -7,13 +7,13 @@
 Command executed after final edits:
 `pnpm run build` (`tsc && vite build`)
 - **Result:** Exit code `0`
-- **Modules:** `62 modules transformed`
-- **Bundle Output:** `dist/index.html` (45.11 kB), `dist/assets/index-CnkbByTV.js` (940.86 kB / 251.57 kB gzip) in `909ms`
+- **Modules:** `64 modules transformed`
+- **Bundle Output:** `dist/index.html` (46.25 kB), `dist/assets/index-DJI4mspW.js` (947.71 kB / 253.39 kB gzip) in `925ms`
 - **TypeScript Errors:** `0`
 
 ---
 
-## 2. Automated Headless Simulation Tests (`tests/gameplay.test.ts`) — PASS (6/6)
+## 2. Automated Headless Simulation Tests (`tests/gameplay.test.ts`) — PASS (8/8)
 Compiled via `./node_modules/.bin/tsc` and executed with `node --test` against real project TypeScript classes (with minimal in-memory `localStorage`, procedural `<canvas>` mock, and offline `404` fetch stub so Three.js mesh construction runs headless):
 
 | Test Case | Outcome | What Was Verified |
@@ -24,6 +24,8 @@ Compiled via `./node_modules/.bin/tsc` and executed with `node --test` against r
 | Crime -> Witness -> Police Dispatch -> Search/Escape -> Arrest | **PASS** | Punched pedestrian switches to `FLEE` while unharmed bystander witnesses (`WITNESS`) and dispatches police at `heat=1`; spawned cruiser is outside all building AABBs; standing by stopped cop triggers `onBusted` fine; breaking LOS behind buildings decays heat and fires `onEscaped`. Caught and fixed unreachable `onEscaped` and omniscient `spawnUnit` telemetry bugs. |
 | `SaveManager`: legacy migration, credits economy, rank progression | **PASS** | Older saves migrate cleanly with default `engineStage=0`, `unlockedUnderglows`, XP levels rank 1->2 at 500 XP, and `spendCredits()` clamps cleanly. |
 | `WorldActivities`: Rival 1v1 Sprint sequential checkpoints & teardown | **PASS** | Starts sprint with active `nextWpMarker`, emits intermediate `onSprintCheckpoint` updates, ends sprint with win callback, and clears `activeSprint`. |
+| `WorldActivities`: repeatable Courier Time-Trial Gold & timeout failure | **PASS** | Starts Courier run, awards Gold multiplier & persists `courierRecords` on timely finish; expires cleanly to `FAILED` beyond `bronzeSec`. |
+| `CollisionResolver` & `CarMesh`: impulse, wall-safe push, hazard, shared dispose | **PASS** | Opposite impulses on head-on overlap, character pushed out of hull remains clamped inside world collider, fast vehicle hit damages HP, disposing one `CarMesh` leaves shared textures intact on sibling mesh. |
 
 ---
 

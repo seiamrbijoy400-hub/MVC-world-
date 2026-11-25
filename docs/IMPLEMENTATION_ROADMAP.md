@@ -14,12 +14,17 @@
   - Fixed assaulted pedestrian behavior (`markVictimFlee`), on-foot collision/damage with all moving vehicles, car vs `SparringFighter` collision, `ownZenvo` GP race restore, and full Neo Velo street/Touge/Harbor minimap rendering (`HUD.ts`).
   - Created headless Node simulation suite (`tests/gameplay.test.ts`) verifying 6 core gameplay systems end-to-end.
 
+- **Sprint 6 (Current):**
+  - Eliminated GPU texture leaks on `HumanCharacterMesh` speech bubbles, emojis, and eye updates, plus `CityCruiserBot` reaction sprites (`RaceBotAI.ts`).
+  - Cached static FBX chassis/wheel loads once (`CarMesh.loadCachedFBX`), shared underglow/shadow/headlight CanvasTextures safely via `userData.shared`, and deduplicated `OpenWorldMap` building window textures & facade/plinth/roof materials.
+  - Extracted `GarageController` (`src/game/GarageController.ts`) and `CollisionResolver` (`src/physics/CollisionResolver.ts`) cleanly out of `src/main.ts`.
+  - Added 3 repeatable **Street Courier Time-Trial Contracts** (`WorldActivities.ts`, `SaveManager.ts`, `index.html`, `main.ts`) with Gold/Silver/Bronze payouts, live HUD countdown pill, amber dropoff beacon & minimap markers, and persistent `courierRecords`.
+  - Expanded headless simulation suite (`tests/gameplay.test.ts`) to 8/8 passing tests covering Courier Contracts, `CollisionResolver`, and `CarMesh` shared resource disposal.
+
 ---
 
 ## Next Priorities
-### Sprint 6 — Real Device QA, Performance & Modularization
+### Sprint 7 — Real Device QA & Final Polish
 1. **Live Browser / Android Chrome QA (HIGHEST VALUE):** Run `pnpm dev` / `pnpm preview` on target Android phone to measure real FPS across `HIGH`/`MED`/`LOW`, verify multi-touch steering + pedal/joystick ergonomics, verify FBX HQ car model loading, and check HUD safe-area clearances.
-2. **Modularize `src/main.ts`:** Extract `GarageController`, `CollisionResolver`, and `SessionManager` out of the 2,500-line `GameApp` class.
-3. **GPU Draw-Call Reduction for Mobile (`OpenWorldMap.ts`):** Share building window atlas textures across palette buckets instead of 2 `256×512` textures per building; verify draw calls with `renderer.info`.
-4. **LAN Multiplayer Verification:** Test two devices on Android hotspot using `server/lanLobbyPlugin.ts` WebSocket sync (character appearance, combat hits, ball sync).
-5. **Gameplay Depth:** Add repeatable Time-Trial / Delivery Sprint contracts at Harbor Cargo & Drift Garage once modularization lands.
+2. **LAN Multiplayer Verification:** Test two devices on Android hotspot using `server/lanLobbyPlugin.ts` WebSocket sync (character appearance, combat hits, ball sync).
+3. **Optional Code Splitting / Session Modularization:** Extract `SessionManager` / `MultiplayerSync` from `src/main.ts` if expanding mission scripting further.

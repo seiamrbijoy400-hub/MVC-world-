@@ -367,36 +367,56 @@ export class OpenWorldMap {
       { x: 318, z: 90, w: 18, d: 70, h: 58 }
     ];
 
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65, metalness: 0.2 });
+    const plinthMat = new THREE.MeshStandardMaterial({ color: 0x161e2e, roughness: 0.78, metalness: 0.15 });
+    const canopyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.4 });
+    const spireMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8 });
+    const baseTexCache = new Map<string, THREE.CanvasTexture>();
+    const facadeMatCache = new Map<string, THREE.MeshStandardMaterial>();
+    const neonMatCache = new Map<string, THREE.MeshBasicMaterial>();
+
+    const getFacadeMat = (accent: string, span: number, height: number): THREE.MeshStandardMaterial => {
+      const rx = Math.max(1, Math.round(span / 24));
+      const ry = Math.max(1, Math.round(height / 36));
+      const key = `${accent}:${rx}:${ry}`;
+      let mat = facadeMatCache.get(key);
+      if (!mat) {
+        let baseTex = baseTexCache.get(accent);
+        if (!baseTex) {
+          baseTex = this.createBuildingTexture(accent);
+          baseTexCache.set(accent, baseTex);
+        }
+        const scaledTex = baseTex.clone();
+        scaledTex.repeat.set(rx, ry);
+        scaledTex.needsUpdate = true;
+        mat = new THREE.MeshStandardMaterial({
+          map: scaledTex,
+          emissiveMap: scaledTex,
+          emissive: new THREE.Color('#ffffff'),
+          emissiveIntensity: 0.85,
+          roughness: 0.42,
+          metalness: 0.25
+        });
+        facadeMatCache.set(key, mat);
+        this.buildingMats.push(mat);
+      }
+      return mat;
+    };
+
+    const getNeonMat = (accent: string): THREE.MeshBasicMaterial => {
+      let mat = neonMatCache.get(accent);
+      if (!mat) {
+        mat = new THREE.MeshBasicMaterial({ color: accent });
+        neonMatCache.set(accent, mat);
+      }
+      return mat;
+    };
+
     buildingSpecs.forEach((b, idx) => {
       const accent = neonColors[idx % neonColors.length];
-      const baseTex = this.createBuildingTexture(accent);
-
-      // Scale UV repeats per face so windows keep natural proportions instead of stretching
-      const frontBackTex = baseTex.clone();
-      frontBackTex.repeat.set(Math.max(1, Math.round(b.w / 24)), Math.max(1, Math.round(b.h / 36)));
-      frontBackTex.needsUpdate = true;
-      const sideTex = baseTex.clone();
-      sideTex.repeat.set(Math.max(1, Math.round(b.d / 24)), Math.max(1, Math.round(b.h / 36)));
-      sideTex.needsUpdate = true;
-
-      const fbMat = new THREE.MeshStandardMaterial({
-        map: frontBackTex,
-        emissiveMap: frontBackTex,
-        emissive: new THREE.Color('#ffffff'),
-        emissiveIntensity: 0.85,
-        roughness: 0.42,
-        metalness: 0.25
-      });
-      const sideMat = new THREE.MeshStandardMaterial({
-        map: sideTex,
-        emissiveMap: sideTex,
-        emissive: new THREE.Color('#ffffff'),
-        emissiveIntensity: 0.85,
-        roughness: 0.42,
-        metalness: 0.25
-      });
-      this.buildingMats.push(fbMat, sideMat);
-      const roofMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65, metalness: 0.2 });
+      const fbMat = getFacadeMat(accent, b.w, b.h);
+      const sideMat = getFacadeMat(accent, b.d, b.h);
+      const neonMat = getNeonMat(accent);
 
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(b.w, b.h, b.d),
@@ -408,19 +428,16 @@ export class OpenWorldMap {
       this.group.add(mesh);
 
       // Ground-floor architectural plinth / sidewalk & storefront awning so buildings feel grounded
-      const plinthMat = new THREE.MeshStandardMaterial({ color: 0x161e2e, roughness: 0.78, metalness: 0.15 });
       const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.w + 2.4, 0.32, b.d + 2.4), plinthMat);
       plinth.position.set(b.x, 0.16, b.z);
       plinth.receiveShadow = true;
       this.group.add(plinth);
 
       if (b.label) {
-        const canopyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.4 });
-        const shopGlowMat = new THREE.MeshBasicMaterial({ color: accent });
         for (const faceZ of [1, -1]) {
           const canopy = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.78, 0.35, 2.2), canopyMat);
           canopy.position.set(b.x, 4.4, b.z + faceZ * (b.d * 0.5 + 1.0));
-          const shopBand = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.66, 2.9, 0.22), shopGlowMat);
+          const shopBand = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.66, 2.9, 0.22), neonMat);
           shopBand.position.set(b.x, 1.8, b.z + faceZ * (b.d * 0.5 + 0.08));
           this.group.add(canopy, shopBand);
         }
@@ -442,7 +459,6 @@ export class OpenWorldMap {
         this.group.add(hvac);
       }
 
-      const neonMat = new THREE.MeshBasicMaterial({ color: accent });
       const neonTrim = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.45, 0.7, b.d + 0.45), neonMat);
       neonTrim.position.set(b.x, b.h - 0.5, b.z);
       this.group.add(neonTrim);
@@ -499,7 +515,7 @@ export class OpenWorldMap {
       if (b.h > 44) {
         const spire = new THREE.Mesh(
           new THREE.CylinderGeometry(0.15, 0.45, 11, 6),
-          new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8 })
+          spireMat
         );
         spire.position.set(b.x, b.h + 15.5, b.z);
         this.group.add(spire);

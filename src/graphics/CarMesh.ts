@@ -3,6 +3,27 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { CarPhysics } from '../physics/CarPhysics';
 
 export class CarMesh {
+  private static fbxCache = new Map<string, Promise<THREE.Group>>();
+  private static sharedShadowTex: THREE.CanvasTexture | null = null;
+  private static sharedGlowTex: THREE.CanvasTexture | null = null;
+  private static sharedBeamTex: THREE.CanvasTexture | null = null;
+
+  private static loadCachedFBX(url: string): Promise<THREE.Group> {
+    let cached = CarMesh.fbxCache.get(url);
+    if (!cached) {
+      const loader = new FBXLoader();
+      cached = loader.loadAsync(url).then((group) => {
+        group.traverse((c) => {
+          const m = c as THREE.Mesh;
+          if (m.geometry) m.geometry.userData.shared = true;
+        });
+        return group;
+      });
+      CarMesh.fbxCache.set(url, cached);
+    }
+    return cached.then((tpl) => tpl.clone(true));
+  }
+
   public root: THREE.Group;
   public bodyGroup: THREE.Group;
   public fallbackGroup: THREE.Group;
@@ -55,22 +76,27 @@ export class CarMesh {
   }
 
   private createUnderglow(): void {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createRadialGradient(64, 128, 18, 64, 128, 64);
-    grad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
-    grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.38)');
-    grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 128, 256);
+    if (!CarMesh.sharedGlowTex) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+      const grad = ctx.createRadialGradient(64, 128, 18, 64, 128, 64);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+      grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.38)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 128, 256);
 
-    const tex = new THREE.CanvasTexture(canvas);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.userData.shared = true;
+      CarMesh.sharedGlowTex = tex;
+    }
+
     const geo = new THREE.PlaneGeometry(3.1, 5.6);
     geo.rotateX(-Math.PI * 0.5);
     this.underglowMat = new THREE.MeshBasicMaterial({
-      map: tex,
+      map: CarMesh.sharedGlowTex,
       color: 0x22d3ee,
       transparent: true,
       opacity: 0.65,
@@ -123,27 +149,32 @@ export class CarMesh {
     }
 
     // Ground volumetric-style headlight beam projection (cheap, high visual impact at night/sunset)
-    const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 256;
-    const ctx = c.getContext('2d')!;
-    const grad = ctx.createLinearGradient(0, 256, 0, 0);
-    grad.addColorStop(0, 'rgba(224, 242, 254, 0.42)');
-    grad.addColorStop(0.5, 'rgba(186, 230, 253, 0.14)');
-    grad.addColorStop(1, 'rgba(186, 230, 253, 0.0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.moveTo(46, 256);
-    ctx.lineTo(82, 256);
-    ctx.lineTo(126, 0);
-    ctx.lineTo(2, 0);
-    ctx.closePath();
-    ctx.fill();
+    if (!CarMesh.sharedBeamTex) {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 256;
+      const ctx = c.getContext('2d')!;
+      const grad = ctx.createLinearGradient(0, 256, 0, 0);
+      grad.addColorStop(0, 'rgba(224, 242, 254, 0.42)');
+      grad.addColorStop(0.5, 'rgba(186, 230, 253, 0.14)');
+      grad.addColorStop(1, 'rgba(186, 230, 253, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(46, 256);
+      ctx.lineTo(82, 256);
+      ctx.lineTo(126, 0);
+      ctx.lineTo(2, 0);
+      ctx.closePath();
+      ctx.fill();
+      const bTex = new THREE.CanvasTexture(c);
+      bTex.userData.shared = true;
+      CarMesh.sharedBeamTex = bTex;
+    }
 
     const beamGeo = new THREE.PlaneGeometry(9.5, 22);
     beamGeo.rotateX(-Math.PI * 0.5);
     const beamMat = new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(c),
+      map: CarMesh.sharedBeamTex,
       transparent: true,
       opacity: 0.0,
       blending: THREE.AdditiveBlending,
@@ -178,12 +209,12 @@ export class CarMesh {
   public dispose(): void {
     this.root.traverse((obj) => {
       const m = obj as THREE.Mesh;
-      if (m.geometry) m.geometry.dispose();
+      if (m.geometry && !m.geometry.userData?.shared) m.geometry.dispose();
       if (m.material) {
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         for (const mat of mats) {
           const anyMat = mat as THREE.MeshStandardMaterial;
-          if (anyMat.map) anyMat.map.dispose();
+          if (anyMat.map && !anyMat.map.userData?.shared) anyMat.map.dispose();
           mat.dispose();
         }
       }
@@ -191,22 +222,27 @@ export class CarMesh {
   }
 
   private createContactShadow(): void {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createRadialGradient(64, 128, 12, 64, 128, 64);
-    grad.addColorStop(0, 'rgba(0, 0, 0, 0.72)');
-    grad.addColorStop(0.6, 'rgba(0, 0, 0, 0.35)');
-    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 128, 256);
+    if (!CarMesh.sharedShadowTex) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 256;
+      const ctx = canvas.getContext('2d')!;
+      const grad = ctx.createRadialGradient(64, 128, 12, 64, 128, 64);
+      grad.addColorStop(0, 'rgba(0, 0, 0, 0.72)');
+      grad.addColorStop(0.6, 'rgba(0, 0, 0, 0.35)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 128, 256);
 
-    const tex = new THREE.CanvasTexture(canvas);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.userData.shared = true;
+      CarMesh.sharedShadowTex = tex;
+    }
+
     const geo = new THREE.PlaneGeometry(2.5, 5.1);
     geo.rotateX(-Math.PI * 0.5);
     const mat = new THREE.MeshBasicMaterial({
-      map: tex,
+      map: CarMesh.sharedShadowTex,
       transparent: true,
       depthWrite: false
     });
@@ -228,10 +264,8 @@ export class CarMesh {
   }
 
   private loadHQModels(): void {
-    const loader = new FBXLoader();
-
-    // 1. Load Car 1203 Body
-    loader.load('/assets/models/car 1203.fbx', (fbx) => {
+    // 1. Load Car 1203 Body (cached once across all vehicles)
+    CarMesh.loadCachedFBX('/assets/models/car 1203.fbx').then((fbx) => {
       const container = new THREE.Group();
       fbx.scale.setScalar(0.01);
       // Car 1203 faces +Z in FBX -> rotate 180 deg so front faces -Z
@@ -306,11 +340,11 @@ export class CarMesh {
       this.hqBodyGroup = container;
       this.bodyGroup.add(container);
       this.fallbackGroup.visible = false;
-    }, undefined, (err) => {
+    }).catch((err) => {
       console.warn('Could not load HQ car FBX, keeping procedural model:', err);
     });
 
-    // 2. Load Front & Rear HQ Wheels
+    // 2. Load Front & Rear HQ Wheels (cached once across all vehicles)
     const assignWheelMaterials = (wheelObj: THREE.Object3D) => {
       const tireMat = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.85, metalness: 0.08 });
       const rimMat = new THREE.MeshStandardMaterial({ color: 0xd4d4d8, roughness: 0.22, metalness: 0.88 });
@@ -330,7 +364,7 @@ export class CarMesh {
       });
     };
 
-    loader.load('/assets/models/wheel_front_right.fbx', (frontFbx) => {
+    CarMesh.loadCachedFBX('/assets/models/wheel_front_right.fbx').then((frontFbx) => {
       frontFbx.scale.setScalar(0.01);
       assignWheelMaterials(frontFbx);
 
@@ -338,14 +372,14 @@ export class CarMesh {
       for (let i = 0; i < 2; i++) {
         const spin = this.wheelSpinGroups[i];
         spin.clear();
-        const clone = frontFbx.clone();
+        const clone = i === 0 ? frontFbx.clone(true) : frontFbx;
         // Front right faces +X; mirror left wheel 180 deg around Y
         if (i === 0) clone.rotation.y = Math.PI;
         spin.add(clone);
       }
-    });
+    }).catch(() => {});
 
-    loader.load('/assets/models/wheel_back_right.fbx', (rearFbx) => {
+    CarMesh.loadCachedFBX('/assets/models/wheel_back_right.fbx').then((rearFbx) => {
       rearFbx.scale.setScalar(0.01);
       assignWheelMaterials(rearFbx);
 
@@ -353,11 +387,11 @@ export class CarMesh {
       for (let i = 2; i < 4; i++) {
         const spin = this.wheelSpinGroups[i];
         spin.clear();
-        const clone = rearFbx.clone();
+        const clone = i === 2 ? rearFbx.clone(true) : rearFbx;
         if (i === 2) clone.rotation.y = Math.PI;
         spin.add(clone);
       }
-    });
+    }).catch(() => {});
   }
 
   private createFallbackCar(): void {

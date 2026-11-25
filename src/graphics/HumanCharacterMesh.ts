@@ -257,6 +257,7 @@ function createSneakerGeometry(): THREE.ExtrudeGeometry {
 }
 
 export class HumanCharacterMesh {
+  private static sharedShadowTex: THREE.CanvasTexture | null = null;
   public root: THREE.Group;
   private hips: THREE.Group;
   private waist: THREE.Group;
@@ -668,21 +669,27 @@ export class HumanCharacterMesh {
   }
 
   private createContactShadow(): void {
-    const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createRadialGradient(64, 64, 10, 64, 64, 60);
-    grad.addColorStop(0, 'rgba(0, 0, 0, 0.52)');
-    grad.addColorStop(0.55, 'rgba(0, 0, 0, 0.22)');
-    grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 128, 128);
+    if (!HumanCharacterMesh.sharedShadowTex) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d')!;
+      const grad = ctx.createRadialGradient(64, 64, 10, 64, 64, 60);
+      grad.addColorStop(0, 'rgba(0, 0, 0, 0.52)');
+      grad.addColorStop(0.55, 'rgba(0, 0, 0, 0.22)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 128, 128);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.userData.shared = true;
+      HumanCharacterMesh.sharedShadowTex = tex;
+    }
 
     const geo = new THREE.PlaneGeometry(0.95, 0.95);
     geo.rotateX(-Math.PI * 0.5);
     const mat = new THREE.MeshBasicMaterial({
-      map: new THREE.CanvasTexture(canvas),
+      map: HumanCharacterMesh.sharedShadowTex,
       transparent: true,
       depthWrite: false
     });
@@ -854,6 +861,7 @@ export class HumanCharacterMesh {
   public setAppearance(app: Partial<CharacterAppearance>): void {
     const prevHair = this.appearance.hairStyle;
     const prevAcc = this.appearance.accessory;
+    const prevEyeColor = this.appearance.eyeColor;
     this.appearance = { ...this.appearance, ...app };
 
     this.hairMat.color.set(this.appearance.hairColor);
@@ -870,12 +878,14 @@ export class HumanCharacterMesh {
       }
     });
 
-    if (app.eyeColor) {
+    if (app.eyeColor && app.eyeColor !== prevEyeColor) {
+      const oldEyeTex = this.eyeMats[0]?.map;
       const newEyeTex = createHumanEyeTexture(this.appearance.eyeColor);
       for (const m of this.eyeMats) {
         m.map = newEyeTex;
         m.needsUpdate = true;
       }
+      if (oldEyeTex && oldEyeTex !== newEyeTex) oldEyeTex.dispose();
     }
     if (this.appearance.hairStyle !== prevHair) {
       this.buildHairStyle(this.appearance.hairStyle);
@@ -943,7 +953,10 @@ export class HumanCharacterMesh {
       this.bubbleSprite.scale.set(2.0, 0.62, 1);
       this.root.add(this.bubbleSprite);
     } else {
-      (this.bubbleSprite.material as THREE.SpriteMaterial).map = tex;
+      const mat = this.bubbleSprite.material as THREE.SpriteMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.map = tex;
+      mat.needsUpdate = true;
     }
     this.bubbleSprite.visible = true;
     this.bubbleTimer = 4.0;
@@ -971,7 +984,10 @@ export class HumanCharacterMesh {
       this.emojiSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
       this.root.add(this.emojiSprite);
     } else {
-      (this.emojiSprite.material as THREE.SpriteMaterial).map = tex;
+      const mat = this.emojiSprite.material as THREE.SpriteMaterial;
+      if (mat.map) mat.map.dispose();
+      mat.map = tex;
+      mat.needsUpdate = true;
     }
 
     this.emojiSprite.position.set(0, 2.25, 0);
@@ -1201,12 +1217,14 @@ export class HumanCharacterMesh {
   public dispose(): void {
     this.root.traverse((obj) => {
       const m = obj as THREE.Mesh | THREE.Sprite;
-      if ((m as THREE.Mesh).geometry) (m as THREE.Mesh).geometry.dispose();
+      if ((m as THREE.Mesh).geometry && !(m as THREE.Mesh).geometry.userData?.shared) {
+        (m as THREE.Mesh).geometry.dispose();
+      }
       if (m.material) {
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         for (const mat of mats) {
           const anyMat = mat as THREE.MeshStandardMaterial;
-          if (anyMat.map) anyMat.map.dispose();
+          if (anyMat.map && !anyMat.map.userData?.shared) anyMat.map.dispose();
           mat.dispose();
         }
       }

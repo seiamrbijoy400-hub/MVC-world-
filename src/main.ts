@@ -18,7 +18,13 @@ import { SaveManager } from './game/SaveManager';
 import type { CarArchetypeId, GraphicsQuality, WeatherMode } from './game/SaveManager';
 import { WeatherSystem } from './graphics/WeatherSystem';
 import { GhostSystem } from './game/GhostSystem';
-import { WorldActivities, type RivalSprintDef } from './game/WorldActivities';
+import { WorldActivities, type RivalSprintDef, type CourierContractDef } from './game/WorldActivities';
+import { GarageController } from './game/GarageController';
+import {
+  separateVehiclePair,
+  pushCharacterOutOfVehicles,
+  resolveMovingVehicleImpactOnCharacter
+} from './physics/CollisionResolver';
 import { PoliceSystem } from './game/PoliceSystem';
 import type { NetworkPlayerSync } from './network/LobbyProtocol';
 
@@ -89,9 +95,11 @@ class GameApp {
   private weather: WeatherSystem;
   private ghost: GhostSystem;
   private activities: WorldActivities;
+  private garage!: GarageController;
   private police: PoliceSystem;
   private ghostReplayEnabled = true;
   private nearbyRival: RivalSprintDef | null = null;
+  private nearbyCourier: CourierContractDef | null = null;
   private currentDistrictId: DistrictId | null = null;
   private baseAmbientIntensity = 0.72;
   private baseHemiIntensity = 0.55;
@@ -387,6 +395,7 @@ class GameApp {
         this.award(150, 120);
       },
       onNearRivalPrompt: (rival) => this.setRivalPrompt(rival),
+      onNearCourierPrompt: (c) => this.setCourierPrompt(c),
       onSprintCheckpoint: (wpIdx, totalWps) => {
         this.sound.playBeep(880, 0.08);
         this.hud.showNotification(
@@ -412,6 +421,22 @@ class GameApp {
         } else {
           this.sound.playBeep(220, 0.3);
           this.hud.showNotification(`RIVAL WINS: ${def.rivalName}`, def.tauntLose, 4.0);
+        }
+        this.refreshProfile();
+      },
+      onCourierEnded: (def, medal, timeSec, isNewBest, credits, xp) => {
+        this.setCourierPrompt(null);
+        if (medal === 'FAILED') {
+          this.sound.playBeep(190, 0.3);
+          this.hud.showNotification('DELIVERY EXPIRED', `${def.title} missed deadline — try again!`, 2.6);
+        } else {
+          this.sound.playRankUpFanfare();
+          this.hud.showNotification(
+            `${medal} DELIVERY: ${def.title}`,
+            `${timeSec.toFixed(2)}s${isNewBest ? ' • NEW BEST' : ''} (+₡${credits})`,
+            3.2
+          );
+          this.award(xp, credits);
         }
         this.refreshProfile();
       }
@@ -487,7 +512,9 @@ class GameApp {
     this.gameState = GameState.OPEN_WORLD;
     this.inCar = false;
     this.activities.cancelSprint();
+    this.activities.cancelCourier();
     this.setRivalPrompt(null);
+    this.setCourierPrompt(null);
     this.ghost.updatePlayback(false, 0);
     // Park car at South Track-City Boulevard Junction facing the GP Track Gate
     this.physics.enforceTrackWalls = false;
@@ -780,8 +807,8 @@ class GameApp {
       this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
       return;
     }
-    if (this.activities.activeSprint) {
-      this.hud.showNotification('SPRINT IN PROGRESS', 'Finish the 1v1 before leaving the car!', 1.6);
+    if (this.activities.activeSprint || this.activities.activeCourier) {
+      this.hud.showNotification('RUN IN PROGRESS', 'Finish the current run before leaving the car!', 1.6);
       return;
     }
 
@@ -943,6 +970,7 @@ class GameApp {
       2.6
     );
     this.setRivalPrompt(null);
+    this.setCourierPrompt(null);
   }
 
   private stealCar(civic: VehicleEntry): void {
@@ -1427,6 +1455,37 @@ class GameApp {
     );
   }
 
+  private setCourierPrompt(contract: CourierContractDef | null): void {
+    this.nearbyCourier = contract;
+    const el = document.getElementById('courier-prompt');
+    if (!el) return;
+    if (!contract || !this.inCar || this.gameState !== GameState.OPEN_WORLD) {
+      el.style.display = 'none';
+      return;
+    }
+    const nameEl = document.getElementById('courier-prompt-name');
+    const subEl = document.getElementById('courier-prompt-sub');
+    if (nameEl) nameEl.textContent = contract.title.toUpperCase();
+    if (subEl) {
+      const best = this.save.data.courierRecords[contract.id];
+      subEl.textContent = `${contract.routeDesc} • Gold < ${contract.goldSec}s${best ? ` (Best ${best.toFixed(1)}s)` : ''}`;
+    }
+    el.style.display = 'flex';
+  }
+
+  private startNearbyCourier(): void {
+    const c = this.nearbyCourier;
+    if (!c || !this.inCar || this.gameState !== GameState.OPEN_WORLD) return;
+    if (!this.activities.startCourierContract(c)) return;
+    this.setCourierPrompt(null);
+    this.sound.playBeep(920, 0.16);
+    this.hud.showNotification(
+      `${c.title.toUpperCase()}`,
+      `Reach the AMBER dropoff within ${c.bronzeSec}s (Gold < ${c.goldSec}s)!`,
+      3.2
+    );
+  }
+
   private showRaceResults(stats: LapStats): void {
     this.gameState = GameState.FINISHED;
     this.physics.enforceTrackWalls = false;
@@ -1539,14 +1598,29 @@ class GameApp {
       if (e.code === 'KeyV') cycleCam();
       if (e.code === 'KeyM') soundBtn.click();
       if (e.code === 'KeyY') this.startNearbyRival();
-      if (e.code === 'KeyB') {
-        const gm = document.getElementById('garage-modal')!;
-        if (gm.classList.contains('open')) this.closeGarageModal();
-        else this.openGarageModal();
-      }
+      if (e.code === 'KeyU') this.startNearbyCourier();
+      if (e.code === 'KeyB') this.garage.toggle();
     });
 
-    this.setupGarageHandlers();
+    this.garage = new GarageController({
+      save: this.save,
+      getPlayerZenvo: () => this.ownZenvo,
+      getActiveMesh: () => this.carMesh,
+      getHeat: () => this.police.heat,
+      clearHeat: () => this.police.clearHeat(false),
+      onRefreshProfile: () => this.refreshProfile(),
+      onNotify: (title, desc, dur) => this.hud.showNotification(title, desc, dur),
+      onPlayBeep: (freq, dur) => this.sound.playBeep(freq, dur),
+      onPlaySuccess: () => this.sound.playRankUpFanfare(),
+      onPlayChime: () => this.sound.playDiscoveryChime(),
+      onPlayDoor: () => this.sound.playCarDoor(),
+      onPauseChange: (paused) => {
+        this.isPaused = paused;
+        if (paused) this.sound.pauseAudio();
+        else this.sound.resumeAudio();
+      },
+      clearAllInputs: () => this.hud.clearAllInputs()
+    });
 
     document.querySelectorAll('.cam-options .option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1606,6 +1680,7 @@ class GameApp {
     });
 
     document.getElementById('btn-start-rival')?.addEventListener('click', () => this.startNearbyRival());
+    document.getElementById('btn-start-courier')?.addEventListener('click', () => this.startNearbyCourier());
 
     document.querySelectorAll('.assist-options .option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1641,197 +1716,6 @@ class GameApp {
     });
   }
 
-  private setupGarageHandlers(): void {
-    const garageModal = document.getElementById('garage-modal')!;
-    const closeBtn = document.getElementById('garage-close-btn')!;
-    document.getElementById('btn-garage')?.addEventListener('click', () => {
-      document.getElementById('more-drawer')?.classList.remove('open');
-      this.openGarageModal();
-    });
-    document.getElementById('btn-open-garage-prompt')?.addEventListener('click', () => this.openGarageModal());
-    closeBtn.addEventListener('click', () => this.closeGarageModal());
-    garageModal.addEventListener('click', (e) => {
-      if (e.target === garageModal) this.closeGarageModal();
-    });
-
-    const engineCosts = [500, 1200, 2400];
-    document.getElementById('btn-upgrade-engine')?.addEventListener('click', () => {
-      const st = this.save.data.engineStage;
-      if (st >= 3) return;
-      const cost = engineCosts[st];
-      if (this.save.data.credits < cost) {
-        this.sound.playBeep(200, 0.16);
-        this.hud.showNotification('INSUFFICIENT CREDITS', `Need ₡${cost.toLocaleString()} for Engine Stage ${st + 1}`, 1.8);
-        return;
-      }
-      this.save.spendCredits(cost);
-      this.save.data.engineStage = st + 1;
-      this.save.saveNow();
-      this.ownZenvo.physics.applyTuning(this.save.data.engineStage, this.save.data.nitroStage);
-      this.sound.playRankUpFanfare();
-      this.refreshProfile();
-      this.refreshGarageModal();
-      this.hud.showNotification(`ENGINE STAGE ${st + 1}`, `+${(st + 1) * 8}% Supercharger Torque installed!`, 2.0);
-    });
-
-    const nitroCosts = [450, 1000, 2000];
-    document.getElementById('btn-upgrade-nitro')?.addEventListener('click', () => {
-      const st = this.save.data.nitroStage;
-      if (st >= 3) return;
-      const cost = nitroCosts[st];
-      if (this.save.data.credits < cost) {
-        this.sound.playBeep(200, 0.16);
-        this.hud.showNotification('INSUFFICIENT CREDITS', `Need ₡${cost.toLocaleString()} for Nitro Stage ${st + 1}`, 1.8);
-        return;
-      }
-      this.save.spendCredits(cost);
-      this.save.data.nitroStage = st + 1;
-      this.save.saveNow();
-      this.ownZenvo.physics.applyTuning(this.save.data.engineStage, this.save.data.nitroStage);
-      this.sound.playRankUpFanfare();
-      this.refreshProfile();
-      this.refreshGarageModal();
-      this.hud.showNotification(`NITRO STAGE ${st + 1}`, 'Stronger boost thrust & faster bottle recharge!', 2.0);
-    });
-
-    document.getElementById('btn-garage-clear-heat')?.addEventListener('click', () => {
-      if (this.police.heat <= 0) {
-        this.hud.showNotification('CLEAN RECORD', 'Police are not chasing you right now.', 1.4);
-        return;
-      }
-      const cost = 400;
-      if (this.save.data.credits < cost) {
-        this.sound.playBeep(200, 0.16);
-        this.hud.showNotification('INSUFFICIENT CREDITS', `Need ₡${cost} for fresh plates & respray`, 1.8);
-        return;
-      }
-      this.save.spendCredits(cost);
-      this.save.saveNow();
-      this.police.clearHeat(false);
-      this.sound.playCarDoor();
-      this.sound.playDiscoveryChime();
-      this.refreshProfile();
-      this.refreshGarageModal();
-      this.hud.showNotification('FRESH RESPRAY', 'Police scanners cleared!', 2.0);
-    });
-  }
-
-  private openGarageModal(): void {
-    this.hud.clearAllInputs();
-    this.refreshGarageModal();
-    document.getElementById('garage-modal')!.classList.add('open');
-    this.isPaused = true;
-    this.sound.pauseAudio();
-  }
-
-  private closeGarageModal(): void {
-    document.getElementById('garage-modal')!.classList.remove('open');
-    this.isPaused = false;
-    this.sound.resumeAudio();
-  }
-
-  private refreshGarageModal(): void {
-    const crEl = document.getElementById('garage-credits');
-    if (crEl) crEl.textContent = Math.round(this.save.data.credits).toLocaleString();
-
-    const engSt = this.save.data.engineStage;
-    const engCosts = [500, 1200, 2400];
-    const engLv = document.getElementById('garage-engine-lv');
-    const engDesc = document.getElementById('garage-engine-desc');
-    const engBtn = document.getElementById('btn-upgrade-engine') as HTMLButtonElement | null;
-    if (engLv) engLv.textContent = `Stage ${engSt}/3`;
-    if (engDesc) engDesc.textContent = engSt === 0 ? 'Stock V8 Output (+0% torque)' : `Twin-Supercharged Stage ${engSt} (+${engSt * 8}% torque)`;
-    if (engBtn) {
-      engBtn.textContent = engSt >= 3 ? 'MAXED' : `Upgrade ₡${engCosts[engSt].toLocaleString()}`;
-      engBtn.disabled = engSt >= 3 || this.save.data.credits < engCosts[engSt];
-      engBtn.style.opacity = engBtn.disabled ? '0.5' : '1';
-    }
-
-    const nitSt = this.save.data.nitroStage;
-    const nitCosts = [450, 1000, 2000];
-    const nitLv = document.getElementById('garage-nitro-lv');
-    const nitDesc = document.getElementById('garage-nitro-desc');
-    const nitBtn = document.getElementById('btn-upgrade-nitro') as HTMLButtonElement | null;
-    if (nitLv) nitLv.textContent = `Stage ${nitSt}/3`;
-    if (nitDesc) nitDesc.textContent = nitSt === 0 ? 'Standard N2O Bottle' : `High-Flow Stage ${nitSt} (+${nitSt * 6}% boost & faster regen)`;
-    if (nitBtn) {
-      nitBtn.textContent = nitSt >= 3 ? 'MAXED' : `Upgrade ₡${nitCosts[nitSt].toLocaleString()}`;
-      nitBtn.disabled = nitSt >= 3 || this.save.data.credits < nitCosts[nitSt];
-      nitBtn.style.opacity = nitBtn.disabled ? '0.5' : '1';
-    }
-
-    const heatBtn = document.getElementById('btn-garage-clear-heat') as HTMLButtonElement | null;
-    if (heatBtn) {
-      heatBtn.disabled = this.police.heat <= 0 || this.save.data.credits < 400;
-      heatBtn.style.opacity = heatBtn.disabled ? '0.45' : '1';
-      heatBtn.textContent = this.police.heat > 0 ? 'Respray ₡400' : 'Clean';
-    }
-
-    const glowRow = document.getElementById('garage-underglow-row');
-    if (glowRow) {
-      const palette = [
-        { hex: '#22d3ee', label: 'Cyan' },
-        { hex: '#ec4899', label: 'Pink' },
-        { hex: '#facc15', label: 'Gold' },
-        { hex: '#22c55e', label: 'Neon' },
-        { hex: '#ff5500', label: 'Apex' },
-        { hex: '#a855f7', label: 'Violet' },
-        { hex: 'OFF', label: 'Off' }
-      ];
-      glowRow.innerHTML = '';
-      for (const item of palette) {
-        const unlocked = this.save.data.unlockedUnderglows.includes(item.hex);
-        const equipped = this.save.data.underglowColor === item.hex;
-        const btn = document.createElement('button');
-        btn.className = `option-btn${equipped ? ' selected' : ''}`;
-        btn.style.flex = '0 0 auto';
-        btn.style.padding = '6px 10px';
-        btn.style.fontSize = '11px';
-        if (item.hex !== 'OFF') {
-          btn.style.borderBottom = `3px solid ${item.hex}`;
-        }
-        btn.textContent = unlocked ? item.label : `${item.label} ₡350`;
-        btn.addEventListener('click', () => {
-          if (!this.save.data.unlockedUnderglows.includes(item.hex)) {
-            if (this.save.data.credits < 350) {
-              this.sound.playBeep(200, 0.16);
-              this.hud.showNotification('INSUFFICIENT CREDITS', 'Need ₡350 to unlock this neon kit', 1.6);
-              return;
-            }
-            this.save.spendCredits(350);
-            this.save.data.unlockedUnderglows.push(item.hex);
-          }
-          this.save.data.underglowColor = item.hex;
-          this.save.saveNow();
-          this.ownZenvo.mesh.setUnderglowColor(item.hex);
-          this.carMesh.setUnderglowColor(item.hex);
-          this.sound.playDiscoveryChime();
-          this.refreshProfile();
-          this.refreshGarageModal();
-        });
-        glowRow.appendChild(btn);
-      }
-    }
-
-    const statsEl = document.getElementById('garage-stats-grid');
-    if (statsEl) {
-      const s = this.save.data;
-      const cards: Array<[string, string]> = [
-        ['Top Speed', `${s.maxSpeedKmh} km/h`],
-        ['Best Drift Combo', `${s.bestDriftCombo.toLocaleString()} pts`],
-        ['Apex Logs', `${s.discoveredShards.length} / 12`],
-        ['Rivals Defeated', `${s.rivalsDefeated.length} / 4`],
-        ['Districts', `${s.discoveredDistricts.length} / 5`],
-        ['Longest Airtime', `${s.maxAirTime.toFixed(1)}s`],
-        ['Cars Stolen', `${s.carsStolen}`],
-        ['Goals / KOs', `${s.goalsScored} / ${s.knockouts}`]
-      ];
-      statsEl.innerHTML = cards
-        .map(([k, v]) => `<div class="result-card"><span>${k}</span><strong style="font-size:14px;">${v}</strong></div>`)
-        .join('');
-    }
-  }
-
   private syncOptionSelection(selector: string, attr: string, val: string): void {
     document.querySelectorAll(selector).forEach((el) => {
       el.classList.toggle('selected', el.getAttribute(attr) === val);
@@ -1844,42 +1728,6 @@ class GameApp {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
-  }
-
-  private separateVehiclePair(a: CarPhysics, b: CarPhysics, nearFocus: boolean): void {
-    const minDist = 3.1;
-    const dx = a.position.x - b.position.x;
-    const dz = a.position.z - b.position.z;
-    const dSq = dx * dx + dz * dz;
-    if (dSq >= minDist * minDist || dSq <= 0.0001) return;
-
-    const d = Math.sqrt(dSq);
-    const nx = dx / d;
-    const nz = dz / d;
-    const overlap = (minDist - d) * 0.5;
-    a.position.x += nx * overlap;
-    a.position.z += nz * overlap;
-    b.position.x -= nx * overlap;
-    b.position.z -= nz * overlap;
-
-    const rvx = a.velocity.x - b.velocity.x;
-    const rvz = a.velocity.z - b.velocity.z;
-    const relDot = rvx * nx + rvz * nz;
-    if (relDot < 0) {
-      const impulse = -relDot * 0.68;
-      a.velocity.x += nx * impulse;
-      a.velocity.z += nz * impulse;
-      b.velocity.x -= nx * impulse;
-      b.velocity.z -= nz * impulse;
-      if (nearFocus && Math.abs(relDot) > 5) {
-        const impactKmh = Math.abs(relDot) * 3.6;
-        this.sound.playCrash(impactKmh);
-        this.particles.emitSparks(a.position, 8);
-        if (this.inCar && (a === this.physics || b === this.physics)) {
-          this.cameraShake = Math.max(this.cameraShake, Math.min(0.32, impactKmh / 145));
-        }
-      }
-    }
   }
 
   private resolveCarVsCarCollisions(): void {
@@ -1896,8 +1744,16 @@ class GameApp {
     const focus = this.inCar ? this.physics.position : this.charCtrl.position;
     for (let i = 0; i < vehicles.length; i++) {
       for (let j = i + 1; j < vehicles.length; j++) {
-        const nearFocus = Math.hypot(vehicles[i].position.x - focus.x, vehicles[i].position.z - focus.z) < 55;
-        this.separateVehiclePair(vehicles[i], vehicles[j], nearFocus);
+        const evt = separateVehiclePair(vehicles[i], vehicles[j], this.physics);
+        if (!evt) continue;
+        const nearFocus = Math.hypot(evt.pos.x - focus.x, evt.pos.z - focus.z) < 55;
+        if (nearFocus) {
+          this.sound.playCrash(evt.impactKmh);
+          this.particles.emitSparks(evt.pos, 8);
+          if (this.inCar && evt.involvesPrimary) {
+            this.cameraShake = Math.max(this.cameraShake, Math.min(0.32, evt.impactKmh / 145));
+          }
+        }
       }
     }
   }
@@ -2069,32 +1925,19 @@ class GameApp {
         this.charCtrl.update(dt, charInputs, this.footCamYaw);
 
         // Character vs every car hull (parked, civic, police, moving traffic, race bots, sprint rival)
-        const carHulls = [
-          this.physics,
-          ...this.parkedCars.map((p) => p.physics),
-          ...this.civicCars.map((c) => c.physics),
-          ...this.police.units.map((u) => u.physics),
-          ...this.cityCruisers.map((c) => c.physics),
-          ...this.raceBots.map((b) => b.physics),
-          ...(this.activities.activeSprint ? [this.activities.activeSprint.rivalPhysics] : [])
-        ];
-        let pushedByCarThisFrame = false;
-        for (const hull of carHulls) {
-          const dx = this.charCtrl.position.x - hull.position.x;
-          const dz = this.charCtrl.position.z - hull.position.z;
-          const carRad = 1.75;
-          const dSq = dx * dx + dz * dz;
-          if (dSq < carRad * carRad && dSq > 0.0001) {
-            const d = Math.sqrt(dSq);
-            this.charCtrl.position.x = hull.position.x + (dx / d) * carRad;
-            this.charCtrl.position.z = hull.position.z + (dz / d) * carRad;
-            pushedByCarThisFrame = true;
-          }
-        }
-        // After car push, re-resolve against world buildings so we can't be pushed into walls.
-        if (pushedByCarThisFrame) {
-          this.openWorld.resolveCollision(this.charCtrl.position, this.charCtrl.velocity, 0.45);
-        }
+        pushCharacterOutOfVehicles(
+          this.charCtrl,
+          [
+            this.physics,
+            ...this.parkedCars.map((p) => p.physics),
+            ...this.civicCars.map((c) => c.physics),
+            ...this.police.units.map((u) => u.physics),
+            ...this.cityCruisers.map((c) => c.physics),
+            ...this.raceBots.map((b) => b.physics),
+            ...(this.activities.activeSprint ? [this.activities.activeSprint.rivalPhysics] : [])
+          ],
+          (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad)
+        );
 
         this.avatarMesh.root.position.copy(this.charCtrl.position);
         this.avatarMesh.root.rotation.y = this.charCtrl.yaw;
@@ -2181,16 +2024,36 @@ class GameApp {
 
       const nearStartGate = this.gameState === GameState.OPEN_WORLD
         && !this.activities.activeSprint
+        && !this.activities.activeCourier
         && Math.hypot(activePos.x - 0, activePos.z - (-4)) < 14;
       this.hud.setRacePrompt(nearStartGate);
 
       const nearDriftGarage = this.gameState === GameState.OPEN_WORLD
         && !this.activities.activeSprint
+        && !this.activities.activeCourier
         && Math.hypot(activePos.x - 84, activePos.z - 15) < 12;
       if (nearDriftGarage !== this.lastGaragePrompt) {
         this.lastGaragePrompt = nearDriftGarage;
         const gp = document.getElementById('garage-prompt');
         if (gp) gp.style.display = nearDriftGarage ? 'flex' : 'none';
+      }
+
+      const timerPill = document.getElementById('activity-timer-pill');
+      if (timerPill) {
+        if (this.activities.activeCourier) {
+          const ac = this.activities.activeCourier;
+          const rem = Math.max(0, ac.def.bronzeSec - ac.elapsed);
+          timerPill.textContent = `📦 ${ac.def.title.toUpperCase()} • ${rem.toFixed(1)}s LEFT`;
+          timerPill.style.borderColor = rem < 8 ? '#ef4444' : '#f59e0b';
+          timerPill.style.display = 'block';
+        } else if (this.activities.activeSprint) {
+          const sp = this.activities.activeSprint;
+          timerPill.textContent = `⚡ VS ${sp.def.rivalName.toUpperCase()} • CP ${sp.playerWpIdx + 1}/${sp.def.waypoints.length} • ${sp.elapsed.toFixed(1)}s`;
+          timerPill.style.borderColor = '#ec4899';
+          timerPill.style.display = 'block';
+        } else {
+          timerPill.style.display = 'none';
+        }
       }
 
       // Update Checkpoint Portal Visuals
@@ -2233,30 +2096,21 @@ class GameApp {
         // Any fast vehicle (police, traffic, race bot) clipping you on foot hurts.
         if (this.policeHitCooldown > 0) this.policeHitCooldown -= dt;
         if (!this.inCar && !this.charCtrl.isDead && this.policeHitCooldown <= 0) {
-          const movingHazards: CarPhysics[] = [
-            ...this.police.units.map((u) => u.physics),
-            ...this.cityCruisers.map((c) => c.physics),
-            ...this.raceBots.map((b) => b.physics)
-          ];
-          for (const haz of movingHazards) {
-            if (haz.speedKmh < 24) continue;
-            const d = Math.hypot(
-              haz.position.x - this.charCtrl.position.x,
-              haz.position.z - this.charCtrl.position.z
-            );
-            if (d < 3.0 && Math.abs(haz.position.y - this.charCtrl.position.y) < 2.2) {
-              const away = this.charCtrl.position.clone().sub(haz.position);
-              away.y = 0;
-              if (away.lengthSq() < 0.001) away.set(0, 0, 1);
-              away.normalize();
-              const dmg = Math.min(40, Math.round(haz.speedKmh * 0.45));
-              this.charCtrl.takeDamage(dmg, away.x, away.z);
-              this.policeHitCooldown = 1.2;
-              this.cameraShake = 0.3;
-              this.sound.playCrash(haz.speedKmh);
-              this.particles.emitSparks(this.charCtrl.position, 8);
-              break;
-            }
+          const impact = resolveMovingVehicleImpactOnCharacter(
+            this.charCtrl,
+            [
+              ...this.police.units.map((u) => u.physics),
+              ...this.cityCruisers.map((c) => c.physics),
+              ...this.raceBots.map((b) => b.physics)
+            ],
+            24,
+            3.0
+          );
+          if (impact.hit) {
+            this.policeHitCooldown = 1.2;
+            this.cameraShake = 0.3;
+            this.sound.playCrash(impact.speedKmh);
+            this.particles.emitSparks(this.charCtrl.position, 8);
           }
         }
       } else if (this.police.isActive) {
@@ -2388,6 +2242,20 @@ class GameApp {
       ...this.activities.rivals
         .filter(r => !this.save.data.rivalsDefeated.includes(r.id))
         .map(r => ({ x: r.startPos.x, z: r.startPos.z, color: '#ec4899', shape: 'ring' as const, size: 3.0 })),
+      ...this.activities.couriers.map(c => ({
+        x: c.startPos.x,
+        z: c.startPos.z,
+        color: '#f59e0b',
+        shape: 'square' as const,
+        size: 2.5
+      })),
+      ...(this.activities.activeCourier ? [{
+        x: this.activities.activeCourier.def.destPos.x,
+        z: this.activities.activeCourier.def.destPos.z,
+        color: '#fbbf24',
+        shape: 'ring' as const,
+        size: 4.6
+      }] : []),
       ...(this.activities.activeSprint ? [
         {
           x: this.activities.activeSprint.rivalPhysics.position.x,

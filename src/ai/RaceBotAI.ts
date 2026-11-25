@@ -273,6 +273,7 @@ export class CityCruiserBot {
     ctx.fillText(emoji, 64, 68);
 
     const mat = this.emojiSprite.material as THREE.SpriteMaterial;
+    if (mat.map) mat.map.dispose();
     mat.map = new THREE.CanvasTexture(c);
     mat.needsUpdate = true;
     this.emojiSprite.visible = true;

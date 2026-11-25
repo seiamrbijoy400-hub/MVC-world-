@@ -1109,6 +1109,18 @@
       <button id="btn-start-rival" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;background:#ec4899;">Challenge (Y)</button>
     </div>
 
+    <!-- Street Courier Time-Trial Prompt -->
+    <div id="courier-prompt" class="glass-card" style="position:absolute;top:132px;left:50%;transform:translateX(-50%);display:none;pointer-events:auto;align-items:center;gap:12px;border:2px solid #f59e0b;z-index:25;">
+      <div>
+        <div style="font-size:12px;font-weight:900;color:#fbbf24;">📦 <span id="courier-prompt-name">COURIER EXPRESS</span></div>
+        <div id="courier-prompt-sub" style="font-size:10px;color:#cbd5e1;">Timed Delivery Contract</div>
+      </div>
+      <button id="btn-start-courier" class="primary-cta" style="width:auto;padding:8px 14px;font-size:12px;margin:0;background:#d97706;">Start Run (U)</button>
+    </div>
+
+    <!-- Active Courier / Sprint Live Timer Pill -->
+    <div id="activity-timer-pill" class="glass-card" style="position:absolute;top:12px;left:50%;transform:translateX(-50%);display:none;padding:6px 14px;border:1.5px solid #f59e0b;font-size:12px;font-weight:900;color:#fde68a;z-index:22;pointer-events:none;white-space:nowrap;"></div>
+
     <!-- Animated Emoji Reactions & Live Chat -->
     <div class="social-bar">
       <div class="emoji-strip">
@@ -1357,6 +1369,7 @@
           <tr><td class="key-badge">A / D or ← / →</td><td>Steer / Walk</td></tr>
           <tr><td class="key-badge">Space / Shift</td><td>Handbrake (Car) / Jump (Foot) / Nitro &amp; Sprint</td></tr>
           <tr><td class="key-badge">F / H / G</td><td>Enter Car / Horn Challenge / Start GP</td></tr>
+          <tr><td class="key-badge">B / Y / U</td><td>Garage / Rival Sprint / Courier Run</td></tr>
           <tr><td class="key-badge">E / Q / C</td><td>Shift Up / Down / Clutch</td></tr>
           <tr><td class="key-badge">R / V / M</td><td>Reset / Camera / Mute</td></tr>
         </table>

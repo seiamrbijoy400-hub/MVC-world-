@@ -49,6 +49,7 @@ export interface SaveData {
 
   speedTrapRecords: Record<string, number>;
   driftZoneRecords: Record<string, number>;
+  courierRecords: Record<string, number>;
   discoveredShards: string[];
   discoveredDistricts: string[];
   rivalsDefeated: string[];
@@ -107,6 +108,7 @@ export function createDefaultSave(): SaveData {
 
     speedTrapRecords: {},
     driftZoneRecords: {},
+    courierRecords: {},
     discoveredShards: [],
     discoveredDistricts: [],
     rivalsDefeated: [],
@@ -138,6 +140,7 @@ export class SaveManager {
             : ['#22d3ee', 'OFF'],
           speedTrapRecords: { ...(parsed.speedTrapRecords || {}) },
           driftZoneRecords: { ...(parsed.driftZoneRecords || {}) },
+          courierRecords: { ...(parsed.courierRecords || {}) },
           discoveredShards: Array.isArray(parsed.discoveredShards) ? parsed.discoveredShards : [],
           discoveredDistricts: Array.isArray(parsed.discoveredDistricts) ? parsed.discoveredDistricts : [],
           rivalsDefeated: Array.isArray(parsed.rivalsDefeated) ? parsed.rivalsDefeated : [],

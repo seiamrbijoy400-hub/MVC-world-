@@ -67,13 +67,42 @@ export interface ActiveSprintState {
   finishMarker: THREE.Mesh;
 }
 
+export interface CourierContractDef {
+  id: string;
+  title: string;
+  routeDesc: string;
+  startPos: THREE.Vector3;
+  destPos: THREE.Vector3;
+  goldSec: number;
+  silverSec: number;
+  bronzeSec: number;
+  baseCredits: number;
+  baseXp: number;
+  portalMesh: THREE.Mesh;
+}
+
+export interface ActiveCourierState {
+  def: CourierContractDef;
+  elapsed: number;
+  destBeacon: THREE.Mesh;
+}
+
 export interface ActivityCallbacks {
   onSpeedTrapTriggered: (trap: SpeedTrapDef, speedKmh: number, isNewBest: boolean) => void;
   onDriftZoneCompleted: (zone: DriftZoneDef, score: number, medal: 'GOLD' | 'SILVER' | 'BRONZE' | 'NONE', isNewBest: boolean) => void;
   onShardCollected: (shard: ApexShardDef, totalFound: number, totalCount: number) => void;
   onNearRivalPrompt: (rival: RivalSprintDef | null) => void;
+  onNearCourierPrompt?: (contract: CourierContractDef | null) => void;
   onSprintCheckpoint?: (wpIdx: number, totalWps: number) => void;
   onSprintEnded: (def: RivalSprintDef, playerWon: boolean, timeSec: number) => void;
+  onCourierEnded?: (
+    def: CourierContractDef,
+    medal: 'GOLD' | 'SILVER' | 'BRONZE' | 'FAILED',
+    timeSec: number,
+    isNewBest: boolean,
+    credits: number,
+    xp: number
+  ) => void;
 }
 
 export class WorldActivities {
@@ -87,12 +116,15 @@ export class WorldActivities {
   public driftZones: DriftZoneDef[] = [];
   public shards: ApexShardDef[] = [];
   public rivals: RivalSprintDef[] = [];
+  public couriers: CourierContractDef[] = [];
 
   public activeDriftZone: DriftZoneDef | null = null;
   public activeDriftZoneScore = 0;
 
   public activeSprint: ActiveSprintState | null = null;
   public nearbyRival: RivalSprintDef | null = null;
+  public activeCourier: ActiveCourierState | null = null;
+  public nearbyCourier: CourierContractDef | null = null;
 
   constructor(
     scene: THREE.Scene,
@@ -111,6 +143,7 @@ export class WorldActivities {
     this.buildDriftZones();
     this.buildApexShards();
     this.buildRivalSprints();
+    this.buildCourierContracts();
   }
 
   private buildSpeedTraps(): void {
@@ -411,6 +444,91 @@ export class WorldActivities {
     this.activeSprint = null;
   }
 
+  private buildCourierContracts(): void {
+    const specs: Omit<CourierContractDef, 'portalMesh'>[] = [
+      {
+        id: 'courier_harbor',
+        title: 'Harbor Parts Express',
+        routeDesc: 'Core Plaza → South Stunt Pier',
+        startPos: new THREE.Vector3(46, 0, 30),
+        destPos: new THREE.Vector3(168, 0, 256),
+        goldSec: 26,
+        silverSec: 34,
+        bronzeSec: 46,
+        baseCredits: 320,
+        baseXp: 160
+      },
+      {
+        id: 'courier_touge',
+        title: 'Touge Summit Delivery',
+        routeDesc: 'North Touge Gate → Red Torii Overlook',
+        startPos: new THREE.Vector3(122, 0, -160),
+        destPos: new THREE.Vector3(155, 6, -296),
+        goldSec: 25,
+        silverSec: 33,
+        bronzeSec: 45,
+        baseCredits: 380,
+        baseXp: 190
+      },
+      {
+        id: 'courier_akiba',
+        title: 'Akiba Midnight Run',
+        routeDesc: 'Harbor Inn → Akiba Cyber Tower',
+        startPos: new THREE.Vector3(122, 0, 150),
+        destPos: new THREE.Vector3(224, 0, -160),
+        goldSec: 27,
+        silverSec: 36,
+        bronzeSec: 48,
+        baseCredits: 400,
+        baseXp: 210
+      }
+    ];
+
+    const ringGeo = new THREE.RingGeometry(3.4, 4.5, 28);
+    ringGeo.rotateX(-Math.PI * 0.5);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.82,
+      side: THREE.DoubleSide
+    });
+
+    for (const c of specs) {
+      const portalMesh = new THREE.Mesh(ringGeo, ringMat);
+      portalMesh.position.set(c.startPos.x, 0.14, c.startPos.z);
+      this.scene.add(portalMesh);
+      this.couriers.push({ ...c, portalMesh });
+    }
+  }
+
+  public startCourierContract(contract: CourierContractDef): boolean {
+    if (this.activeSprint || this.activeCourier) return false;
+    const destBeacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(5.2, 5.2, 16, 22, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xf59e0b,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    );
+    destBeacon.position.set(contract.destPos.x, contract.destPos.y + 8, contract.destPos.z);
+    this.scene.add(destBeacon);
+    this.activeCourier = { def: contract, elapsed: 0, destBeacon };
+    this.nearbyCourier = null;
+    this.cb.onNearCourierPrompt?.(null);
+    return true;
+  }
+
+  public cancelCourier(): void {
+    if (!this.activeCourier) return;
+    this.scene.remove(this.activeCourier.destBeacon);
+    this.activeCourier.destBeacon.geometry.dispose();
+    (this.activeCourier.destBeacon.material as THREE.Material).dispose();
+    this.activeCourier = null;
+  }
+
   public update(
     dt: number,
     timeSec: number,
@@ -510,7 +628,7 @@ export class WorldActivities {
 
     // 4. Rival Sprint Portals & Active Sprint Race
     let closestRival: RivalSprintDef | null = null;
-    if (!this.activeSprint && !isTimedCircuitRace) {
+    if (!this.activeSprint && !this.activeCourier && !isTimedCircuitRace) {
       for (const r of this.rivals) {
         if (this.save.data.rivalsDefeated.includes(r.id)) {
           r.portalMesh.visible = false;
@@ -532,6 +650,67 @@ export class WorldActivities {
     if (closestRival?.id !== this.nearbyRival?.id) {
       this.nearbyRival = closestRival;
       this.cb.onNearRivalPrompt(closestRival);
+    }
+
+    // 5. Repeatable Street Courier Time-Trial Contracts
+    let closestCourier: CourierContractDef | null = null;
+    if (!this.activeSprint && !this.activeCourier && !isTimedCircuitRace) {
+      for (const c of this.couriers) {
+        c.portalMesh.visible = true;
+        const pulse = 0.92 + Math.sin(timeSec * 3.8 + c.startPos.x) * 0.08;
+        c.portalMesh.scale.set(pulse, 1, pulse);
+        const d = Math.hypot(playerPos.x - c.startPos.x, playerPos.z - c.startPos.z);
+        if (d < 8 && inCar) {
+          closestCourier = c;
+        }
+      }
+    } else {
+      for (const c of this.couriers) c.portalMesh.visible = false;
+    }
+
+    if (closestCourier?.id !== this.nearbyCourier?.id) {
+      this.nearbyCourier = closestCourier;
+      this.cb.onNearCourierPrompt?.(closestCourier);
+    }
+
+    if (this.activeCourier) {
+      const ac = this.activeCourier;
+      ac.elapsed += dt;
+      ac.destBeacon.rotation.y = timeSec * 1.8;
+
+      const dDest = Math.hypot(
+        playerPos.x - ac.def.destPos.x,
+        playerPos.y - ac.def.destPos.y,
+        playerPos.z - ac.def.destPos.z
+      );
+      if (dDest < 9.5 && inCar) {
+        const def = ac.def;
+        const timeSecTaken = ac.elapsed;
+        this.cancelCourier();
+        const medal: 'GOLD' | 'SILVER' | 'BRONZE' = timeSecTaken <= def.goldSec
+          ? 'GOLD'
+          : (timeSecTaken <= def.silverSec ? 'SILVER' : 'BRONZE');
+        const mult = medal === 'GOLD' ? 1.8 : (medal === 'SILVER' ? 1.3 : 1.0);
+        const prev = this.save.data.courierRecords[def.id];
+        const isNewBest = prev === undefined || timeSecTaken < prev;
+        if (isNewBest) {
+          this.save.data.courierRecords[def.id] = Number(timeSecTaken.toFixed(2));
+          this.save.scheduleSave();
+        }
+        this.cb.onCourierEnded?.(
+          def,
+          medal,
+          timeSecTaken,
+          isNewBest,
+          Math.round(def.baseCredits * mult),
+          Math.round(def.baseXp * mult)
+        );
+      } else if (ac.elapsed > ac.def.bronzeSec) {
+        const def = ac.def;
+        const timeSecTaken = ac.elapsed;
+        this.cancelCourier();
+        this.cb.onCourierEnded?.(def, 'FAILED', timeSecTaken, false, 0, 0);
+      }
     }
 
     // Active 1v1 Sprint Update
