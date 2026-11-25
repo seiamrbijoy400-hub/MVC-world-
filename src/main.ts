@@ -1847,6 +1847,12 @@ class GameApp {
     const rawDt = (currentTime - this.lastTime) * 0.001;
     const dt = Math.min(rawDt, 0.04);
     this.lastTime = currentTime;
+
+    // Backgrounded tab: skip simulation/render to save battery and avoid
+    // running a full game loop against a suspended AudioContext.
+    if (document.hidden) {
+      return;
+    }
     this.elapsedSec += dt;
 
     const focusPos = this.inCar ? this.physics.position : this.charCtrl.position;

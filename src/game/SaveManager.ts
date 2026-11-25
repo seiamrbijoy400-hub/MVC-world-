@@ -135,6 +135,12 @@ export class SaveManager {
           ...parsed,
           engineStage: Math.max(0, Math.min(3, Number(parsed.engineStage) || 0)),
           nitroStage: Math.max(0, Math.min(3, Number(parsed.nitroStage) || 0)),
+          graphicsQuality: (['HIGH', 'MED', 'LOW'].includes(parsed.graphicsQuality) ? parsed.graphicsQuality : 'HIGH'),
+          weatherMode: (['CLEAR', 'RAIN', 'STORM'].includes(parsed.weatherMode) ? parsed.weatherMode : 'CLEAR'),
+          assistMode: (parsed.assistMode === 'PRO' ? 'PRO' : 'ARCADE'),
+          carArchetype: (['HYPER', 'DRIFT', 'TOUGE'].includes(parsed.carArchetype) ? parsed.carArchetype : 'HYPER'),
+          atmospherePref: (['DAY', 'SUNSET', 'NIGHT', 'AUTO'].includes(parsed.atmospherePref) ? parsed.atmospherePref : 'SUNSET'),
+          gearbox: (parsed.gearbox === GearboxType.MANUAL ? GearboxType.MANUAL : GearboxType.AUTO),
           unlockedUnderglows: Array.isArray(parsed.unlockedUnderglows) && parsed.unlockedUnderglows.length > 0
             ? parsed.unlockedUnderglows
             : ['#22d3ee', 'OFF'],
@@ -161,7 +167,7 @@ export class SaveManager {
   public scheduleSave(): void {
     if (this.saveQueued) return;
     this.saveQueued = true;
-    setTimeout(() => this.saveNow(), 300);
+    setTimeout(() => this.saveNow(), 600);
   }
 
   public resetAll(): void {
