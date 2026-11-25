@@ -736,8 +736,27 @@ test('GLTFCharacterMesh: loads both rigs, drives animation states and recolors p
   assert.equal(actor.isRealistic, true, 'male GLB should load instead of the procedural fallback');
   assert.equal(heroine.isRealistic, true, 'female GLB should load instead of the procedural fallback');
 
-  const internal = actor as unknown as { instance: { materials: THREE.MeshStandardMaterial[] }; root: THREE.Group };
+  const internal = actor as unknown as {
+    instance: { materials: THREE.MeshStandardMaterial[]; group: THREE.Group };
+    root: THREE.Group;
+  };
   assert.ok(internal.instance.materials.length >= 3, 'Each character owns cloned materials for color variants');
+
+  // Regression: SkinnedMesh.clone() shares the source skeleton, leaving the
+  // visible mesh bound to bones outside its own scene (frozen/invisible rig).
+  let skinnedCount = 0;
+  let locallyBound = 0;
+  internal.instance.group.traverse((o) => {
+    const mesh = o as THREE.SkinnedMesh;
+    if (!mesh.isSkinnedMesh) return;
+    skinnedCount++;
+    const firstBone = mesh.skeleton.bones[0];
+    let belongsToInstance = false;
+    internal.instance.group.traverse((b) => { if (b === firstBone) belongsToInstance = true; });
+    if (belongsToInstance) locallyBound++;
+  });
+  assert.ok(skinnedCount > 0, 'GLB characters must contain skinned meshes');
+  assert.equal(locallyBound, skinnedCount, 'Every clone must own its skeleton bones, not share the template skeleton');
   const before = internal.instance.materials[0].color.clone();
   actor.setAppearance({
     hairStyle: 'spiky', hairColor: '#1c1917', eyeColor: '#4a2f1b', jacketColor: '#ff5500',
@@ -756,4 +775,32 @@ test('GLTFCharacterMesh: loads both rigs, drives animation states and recolors p
   assert.equal(actor.root.children.length, 1, 'Only the shared GLB instance stays attached to the actor');
   actor.dispose();
   heroine.dispose();
+});
+
+test('GLTFCharacterMesh: punch drives the hand forward (-Z), matching hit detection', async () => {
+  const idle = new GLTFCharacterMesh('/assets/models/male.glb', 'kaito', '', null, 0, false);
+  const punching = new GLTFCharacterMesh('/assets/models/male.glb', 'kaito', '', null, 0, false);
+  const deadline = Date.now() + 4000;
+  while ((!idle.isRealistic || !punching.isRealistic) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const handZ = (actor: GLTFCharacterMesh): number => {
+    const inst = (actor as unknown as {
+      instance: { group: THREE.Group; bones: Map<string, THREE.Bone> };
+    }).instance;
+    inst.group.updateMatrixWorld(true);
+    const hand = inst.bones.get('handR');
+    assert.ok(hand, 'right hand bone must be indexed');
+    return hand.getWorldPosition(new THREE.Vector3()).z;
+  };
+
+  // Same clip/time for both; only the additive punch pose differs.
+  idle.updateAnimation(0.16, 'IDLE');
+  punching.updateAnimation(0.16, 'PUNCH');
+  assert.ok(
+    handZ(punching) < handZ(idle) - 0.15,
+    'Punch must move the hand toward -Z (character forward), not behind the body'
+  );
+  idle.dispose();
+  punching.dispose();
 });

@@ -5,7 +5,7 @@
 
 ## Completed Sprints
 - **Sprint 3 & 4:** Ghost pitch fix, shard 3D pickup radius, drift zone ground sampling, Harbor seawall & Touge ramp gap alignment, unmirrored building signs + per-face UV scaling, Nitro touch/tachometer HUD, input blur safety, District discovery.
-- **Sprint 8 (GLB Characters):** Replaced procedural-only humans with shared male/female rigged GLBs (CC BY 4.0, credited in Settings + `docs/ASSET_LICENSES.md`). Native clips drive idle/walk/run/jump; combat poses are layered in code; NPCs vary by rig, tint and scale; procedural fallback retained. 13/13 tests pass.
+- **Sprint 8 (GLB Characters):** Replaced procedural-only humans with shared male/female rigged GLBs (CC BY 4.0, credited in Settings + `docs/ASSET_LICENSES.md`). Native clips drive idle/walk/run/jump; combat poses are layered in code; NPCs vary by rig, tint and scale; procedural fallback retained. 14/14 tests pass (including skeleton ownership and forward-punch regressions).
 - **Sprint 4.5 (Checkpoint `bb7c08b`):** `RoadGraph.ts` Dijkstra routing & building `hasLineOfSight()`, `PedestrianSystem.ts` (14 patrolling NPCs, crime witness & fleeing), stopped traffic/police hijacking, `CarMesh.dispose()` & `HumanCharacterMesh.dispose()`, hit stun & prone KO poses, footstep/jump/land/punch/door SFX.
 - **Sprint 5 (`03e6334`):**
   - Fixed `CarPhysics` rear traction clamping so Stage 1–3 Engine & Nitro tuning deliver measurable acceleration/speed (`CarPhysics.ts`).

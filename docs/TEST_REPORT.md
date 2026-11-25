@@ -13,8 +13,8 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (13/13)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`13` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (14/14)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`14` pass, `0` fail, `0` skipped):
 
 | Test Case | Outcome | What Was Verified |
 | :--- | :---: | :--- |
@@ -53,4 +53,9 @@ Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests"
 - New modules `src/graphics/CharacterAnimationMap.ts`, `src/graphics/GLTFCharacterCache.ts`, rewritten `src/graphics/GLTFCharacterMesh.ts`: male/female Sketchfab GLBs are parsed once, cloned per character with per-instance materials and independent `AnimationMixer`s, normalized to 1.78m, and driven by their own native clip names.
 - `PUNCH`/`HIT`/`KO` get short additive procedural poses layered over the rig's idle clip (source GLBs have no combat clips); pedestrians alternate rigs plus outfit/hair/skin tints and scale to avoid clone-looking crowds; chat/emoji bubbles preserved.
 - Procedural `HumanCharacterMesh` remains a graceful fallback when a GLB fails. Lobby shows a model-ready/fallback badge and Settings lists CC BY 4.0 credits from the GLB `asset.extras` metadata.
-- Tests: 13/13 pass (added GLB integrity, CC metadata, clip-mapping and runtime load coverage). Live on-screen look of the rigs still needs a physical WebGL browser (none attached in this environment).
+- Tests: 14/14 pass (added GLB integrity, CC metadata, clip-mapping and runtime load coverage). Live on-screen look of the rigs still needs a physical WebGL browser (none attached in this environment).
+
+## Sprint 8 — Character Visibility & Punch Fix (2026-11-26)
+- `SkeletonUtils.clone()` now remaps skeleton bones per instance. Plain `Object3D.clone()` had shared the template skeleton, leaving rigged meshes frozen/invisible — the cause of “character not showing” and broken-looking fights.
+- Corrected the additive punch swing sign: both rigs face `-Z` (eye bones sit at `-Z`), so the right arm now swings forward into the hit direction instead of backward. Hit recoil signs were flipped consistently.
+- New regressions assert every skinned clone owns its skeleton bones and that punching moves the right hand toward `-Z`.

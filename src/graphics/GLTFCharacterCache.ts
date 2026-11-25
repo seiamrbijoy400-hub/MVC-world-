@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkinnedScene } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { CharacterAppearance } from '../network/LobbyProtocol';
 import { MODEL_URLS, type CharacterModelId } from './CharacterAnimationMap';
 
@@ -136,7 +137,10 @@ export function loadCharacterTemplate(model: CharacterModelId): Promise<Characte
 }
 
 export function instantiateCharacter(template: CharacterTemplate): CharacterInstance {
-  const scene = template.scene.clone(true);
+  // Object3D.clone() shares the SkinnedMesh skeleton with the template, which
+  // leaves cloned meshes bound to bones outside their own scene (frozen/invisible
+  // rigs). SkeletonUtils.clone remaps bones into each instance.
+  const scene = cloneSkinnedScene(template.scene) as THREE.Group;
   const scale = 1.78 / template.height;
   scene.scale.setScalar(scale);
   scene.position.y = -template.groundOffset * scale;

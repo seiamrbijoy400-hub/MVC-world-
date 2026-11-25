@@ -208,14 +208,16 @@ export class GLTFCharacterMesh {
 
     if (state === 'PUNCH') {
       const swing = Math.sin(Math.min(1, this.poseTime / 0.36) * Math.PI);
-      rotate('upperArmR', new THREE.Vector3(0, 0, 1), swing * 1.18);
-      rotate('lowerArmR', new THREE.Vector3(0, 0, 1), swing * 0.22);
-      rotate('chest', new THREE.Vector3(0, 1, 0), -swing * 0.16);
-      rotate('head', new THREE.Vector3(0, 1, 0), swing * 0.1);
+      // Both rigs face -Z (eye bones sit at -Z). A negative local-Z swing drives
+      // the right hand forward, toward the direction the controller hits in.
+      rotate('upperArmR', new THREE.Vector3(0, 0, 1), -swing * 1.18);
+      rotate('lowerArmR', new THREE.Vector3(0, 0, 1), -swing * 0.22);
+      rotate('chest', new THREE.Vector3(0, 1, 0), swing * 0.16);
+      rotate('head', new THREE.Vector3(0, 1, 0), -swing * 0.1);
     } else if (state === 'HIT') {
       const recoil = Math.exp(-this.poseTime * 5.5);
-      rotate('upperArmL', new THREE.Vector3(0, 0, 1), -recoil * 0.5);
-      rotate('upperArmR', new THREE.Vector3(0, 0, 1), -recoil * 0.5);
+      rotate('upperArmL', new THREE.Vector3(0, 0, 1), recoil * 0.5);
+      rotate('upperArmR', new THREE.Vector3(0, 0, 1), recoil * 0.5);
       rotate('head', new THREE.Vector3(1, 0, 0), recoil * 0.3);
       rotate('chest', new THREE.Vector3(1, 0, 0), recoil * 0.16);
     } else if (state === 'KO') {
