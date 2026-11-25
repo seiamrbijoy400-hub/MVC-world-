@@ -647,10 +647,8 @@
 
     /* Wanted / Police HUD */
     .wanted-hud {
-      position: absolute;
-      top: 84px;
-      right: 16px;
       display: none;
+      width: fit-content;
       align-items: center;
       gap: 4px;
       padding: 7px 11px;
@@ -993,6 +991,16 @@
         <div class="minimap-container">
           <canvas id="minimap-canvas" width="140" height="140"></canvas>
         </div>
+
+        <!-- Police heat: lives in the left stack so it never collides with chat/emoji -->
+        <div id="wanted-hud" class="wanted-hud">
+          <span class="wanted-label">WANTED</span>
+          <span class="wanted-star">★</span>
+          <span class="wanted-star">★</span>
+          <span class="wanted-star">★</span>
+          <span class="wanted-star">★</span>
+          <span class="wanted-star">★</span>
+        </div>
       </div>
 
       <div class="top-buttons">
@@ -1004,16 +1012,6 @@
         <button id="btn-chat-toggle" class="hud-btn" title="In-Game Chat (T)"><span>💬</span></button>
         <button id="btn-horn" class="hud-btn" title="Car Horn / City Challenge (H)"><span>📯</span></button>
         <button id="btn-more" class="hud-btn" title="More Options"><span>☰</span></button>
-      </div>
-
-      <!-- Police heat -->
-      <div id="wanted-hud" class="wanted-hud">
-        <span class="wanted-label">WANTED</span>
-        <span class="wanted-star">★</span>
-        <span class="wanted-star">★</span>
-        <span class="wanted-star">★</span>
-        <span class="wanted-star">★</span>
-        <span class="wanted-star">★</span>
       </div>
 
       <!-- Car theft prompt -->

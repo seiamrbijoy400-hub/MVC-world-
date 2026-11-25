@@ -276,17 +276,19 @@ export class PoliceSystem {
       if (unit.physics.speedKmh < targetSpeed - 6) {
         throttle = dist > 60 ? 1.0 : 0.82;
       } else if (unit.physics.speedKmh > targetSpeed + 10) {
-        brake = 0.7;
+        // Only brake while actually moving: a held brake at a standstill would
+        // make the automatic gearbox drop into reverse.
+        brake = unit.physics.speedKmh > 12 ? 0.7 : 0;
       }
 
       if (!playerInCar && dist < 14) {
         // Creep up to arrest range, then hold the car still instead of running the player over.
         if (dist > 6) {
           throttle = unit.physics.speedKmh < 20 ? 0.34 : 0;
-          brake = unit.physics.speedKmh > 28 ? 0.65 : 0;
+          brake = unit.physics.speedKmh > 30 ? 0.6 : 0;
         } else {
           throttle = 0;
-          brake = unit.physics.speedKmh > 6 ? 0.85 : 0.35;
+          brake = unit.physics.speedKmh > 6 ? 0.45 : 0;
         }
       }
 
