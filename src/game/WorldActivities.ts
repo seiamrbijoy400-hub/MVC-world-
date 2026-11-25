@@ -113,10 +113,10 @@ export class WorldActivities {
 
   private buildSpeedTraps(): void {
     const defs = [
-      { id: 'trap_gp_straight', name: 'GP Main Straight Radar', x: 0, z: -85, targetKmh: 220 },
-      { id: 'trap_neon_blvd', name: 'Neo Velo Expressway', x: 122, z: -100, targetKmh: 185 },
-      { id: 'trap_harbor_coast', name: 'Harbor Coastal Strip', x: 170, z: 224, targetKmh: 195 },
-      { id: 'trap_touge_summit', name: 'Touge Summit Pass', x: 155, z: -296, targetKmh: 175 }
+      { id: 'trap_gp_straight', name: 'GP Main Straight Radar', x: 0, z: -85, targetKmh: 220, rotY: 0 },
+      { id: 'trap_neon_blvd', name: 'Neo Velo Expressway', x: 122, z: -100, targetKmh: 185, rotY: 0 },
+      { id: 'trap_harbor_coast', name: 'Harbor Coastal Strip', x: 170, z: 224, targetKmh: 195, rotY: Math.PI * 0.5 },
+      { id: 'trap_touge_summit', name: 'Touge Summit Pass', x: 155, z: -296, targetKmh: 175, rotY: Math.PI * 0.5 }
     ];
 
     const pillarGeo = new THREE.CylinderGeometry(0.18, 0.22, 6.0, 10);
@@ -134,6 +134,7 @@ export class WorldActivities {
       beam.position.set(0, 5.5, 0);
       grp.add(p1, p2, beam);
       grp.position.set(d.x, yBase, d.z);
+      grp.rotation.y = d.rotY;
       this.scene.add(grp);
 
       this.speedTraps.push({
@@ -182,7 +183,7 @@ export class WorldActivities {
       { id: 'shard_6', title: 'Apex Log #06: Stunt Apex', lore: '"Airborne over the stunt ramp — gravity is only a suggestion."', x: 84, y: 4.5, z: 90 },
       { id: 'shard_7', title: 'Apex Log #07: Rocket Pitch', lore: '"Even supercars need a halftime break with a giant soccer ball."', x: 174, y: 1.4, z: 124 },
       { id: 'shard_8', title: 'Apex Log #08: Harbor Cargo', lore: '"Smugglers used to race containers down the coast at dawn."', x: 74, y: 1.4, z: 262 },
-      { id: 'shard_9', title: 'Apex Log #09: Pier Leap', lore: '"Full throttle off the south pier — don\'t lift."', x: 168, y: 5.5, z: 264 },
+      { id: 'shard_9', title: 'Apex Log #09: Pier Leap', lore: '"Full throttle off the south pier — don\'t lift."', x: 168, y: 5.2, z: 285 },
       { id: 'shard_10', title: 'Apex Log #10: Lighthouse', lore: '"The eastern beacon guides racers home through neon storms."', x: 288, y: 1.4, z: 258 },
       { id: 'shard_11', title: 'Apex Log #11: Touge Torii', lore: '"Under the red gate lies the purest drift tarmac in Neo Velo."', x: 155, y: 7.4, z: -296 },
       { id: 'shard_12', title: 'Apex Log #12: Zero\'s Secret', lore: '"Apex Zero isn\'t gone — they\'re waiting for someone worthy."', x: 242, y: 7.4, z: -272 }

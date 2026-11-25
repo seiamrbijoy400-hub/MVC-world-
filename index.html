@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Zenvo Open World — Hotspot LAN &amp; Racing</title>
+  <title>APEX ZERO: Neon Velo — Open World Racing &amp; Action</title>
   <style>
     * {
       box-sizing: border-box;
@@ -327,7 +327,7 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 12px 16px;
+      padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
       z-index: 10;
     }
     #hud-overlay.hidden { display: none; }
@@ -487,6 +487,35 @@
     .bar-gas { background: #22c55e; }
     .bar-brake { background: #ef4444; }
     .bar-clutch { background: #eab308; }
+    .bar-nitro { background: linear-gradient(90deg, #0ea5e9, #38bdf8); }
+    .touch-btn.nitro { background: rgba(14, 165, 233, 0.45); border-color: rgba(56, 189, 248, 0.8); width: 56px; height: 56px; font-size: 11px; }
+    .touch-btn.nitro.pressed { background: rgba(14, 165, 233, 0.95); box-shadow: 0 0 18px rgba(56, 189, 248, 0.75); }
+    .district-pill {
+      width: fit-content;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(9, 13, 22, 0.78);
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.7px;
+      color: #e0f2fe;
+      pointer-events: none;
+    }
+    .busted-meter {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      width: 210px;
+      padding: 7px 11px;
+      border-radius: 10px;
+      background: rgba(69, 10, 10, 0.88);
+      border: 1.5px solid #ef4444;
+      pointer-events: none;
+    }
+    .busted-meter-label { font-size: 10px; font-weight: 900; letter-spacing: 1px; color: #fecaca; }
+    .busted-meter-track { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.2); overflow: hidden; }
+    #busted-meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #f97316, #ef4444); transition: width 0.08s linear; }
 
     /* Mobile Touch Controls */
     #mobile-controls, #foot-controls {
@@ -764,6 +793,15 @@
       .touch-btn.gas { width: 64px; height: 64px; }
       .touch-btn.brake { width: 54px; height: 54px; }
     }
+    @media (max-height: 460px) {
+      .profile-card { padding: 5px 10px; min-width: 162px; }
+      .lap-info { padding: 5px 10px; gap: 10px; }
+      .minimap-container { width: 78px; height: 78px; }
+      #tachometer-canvas { width: 122px; height: 122px; }
+      #race-prompt { top: 56px !important; padding: 6px 10px !important; }
+      #rival-prompt { top: 106px !important; padding: 6px 10px !important; }
+      #steal-prompt { bottom: 112px; }
+    }
 
     /* Modals */
     .modal-backdrop {
@@ -815,8 +853,8 @@
     <div class="lobby-panel">
       <div class="lobby-header">
         <div>
-          <div class="brand-title">HOTSPOT &amp; GARAGE</div>
-          <div class="brand-sub">Play with Friends on Hotspot • Customize Anime Character</div>
+          <div class="brand-title">APEX ZERO: NEON VELO</div>
+          <div class="brand-sub">Hotspot LAN &amp; Open World • Customize Driver</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <div id="lan-status-badge" class="lan-status-badge offline">CONNECTING...</div>
@@ -834,7 +872,7 @@
         </div>
 
         <div>
-          <span class="section-label">Anime Character</span>
+          <span class="section-label">Driver Character</span>
           <div class="char-grid">
             <div class="char-card selected" data-char="kaito">
               <div class="char-dot" style="background:#ff5500;"></div>
@@ -992,6 +1030,8 @@
           <canvas id="minimap-canvas" width="140" height="140"></canvas>
         </div>
 
+        <div id="hud-district" class="district-pill">NEO VELO</div>
+
         <!-- Police heat: lives in the left stack so it never collides with chat/emoji -->
         <div id="wanted-hud" class="wanted-hud">
           <span class="wanted-label">WANTED</span>
@@ -1000,6 +1040,11 @@
           <span class="wanted-star">★</span>
           <span class="wanted-star">★</span>
           <span class="wanted-star">★</span>
+        </div>
+
+        <div id="busted-meter" class="busted-meter">
+          <span class="busted-meter-label">BUSTING — SPRINT OR FIGHT!</span>
+          <div class="busted-meter-track"><div id="busted-meter-fill"></div></div>
         </div>
       </div>
 
@@ -1085,6 +1130,7 @@
         <div class="telemetry-bars">
           <div class="bar-item"><span class="bar-title">GAS</span><div class="bar-bg"><div id="bar-gas" class="bar-fill bar-gas"></div></div></div>
           <div class="bar-item"><span class="bar-title">BRAKE</span><div class="bar-bg"><div id="bar-brake" class="bar-fill bar-brake"></div></div></div>
+          <div class="bar-item"><span class="bar-title">NITRO</span><div class="bar-bg"><div id="bar-nitro" class="bar-fill bar-nitro"></div></div></div>
           <div id="clutch-bar-wrap" class="bar-item"><span class="bar-title">CLUTCH</span><div class="bar-bg"><div id="bar-clutch" class="bar-fill bar-clutch"></div></div></div>
         </div>
         <canvas id="tachometer-canvas" width="220" height="220"></canvas>
@@ -1106,6 +1152,7 @@
         <button id="touch-shift-up" class="touch-btn" style="width:46px;height:46px;font-size:11px;">▲</button>
         <button id="touch-shift-down" class="touch-btn" style="width:46px;height:46px;font-size:11px;">▼</button>
       </div>
+      <button id="touch-nitro" class="touch-btn nitro">NITRO</button>
       <button id="touch-handbrake" class="touch-btn" style="width:54px;height:54px;font-size:10px;">DRIFT</button>
       <button id="touch-brake" class="touch-btn brake">BRAKE</button>
       <button id="touch-gas" class="touch-btn gas">GAS</button>
@@ -1129,7 +1176,7 @@
   <div id="studio-modal" class="modal-backdrop">
     <div class="modal-box">
       <div class="modal-title">
-        <span>🎨 Anime Avatar Studio</span>
+        <span>🎨 Driver Style Studio</span>
         <button id="studio-close-btn" class="modal-close">&times;</button>
       </div>
       <div id="studio-body"></div>
@@ -1164,6 +1211,24 @@
         <div class="options-row assist-options">
           <button class="option-btn selected" data-assist="ARCADE">Drift Assist</button>
           <button class="option-btn" data-assist="PRO">Pro Sim</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Chassis Spec</label>
+        <div class="options-row archetype-options">
+          <button class="option-btn selected" data-arch="HYPER">Hyper</button>
+          <button class="option-btn" data-arch="DRIFT">Drift</button>
+          <button class="option-btn" data-arch="TOUGE">Touge Grip</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label>Graphics Quality (Mobile FPS)</label>
+        <div class="options-row quality-options">
+          <button class="option-btn selected" data-quality="HIGH">High</button>
+          <button class="option-btn" data-quality="MED">Medium</button>
+          <button class="option-btn" data-quality="LOW">Low</button>
         </div>
       </div>
 
@@ -1233,7 +1298,7 @@
         <table class="keys-table">
           <tr><td class="key-badge">W / S or ↑ / ↓</td><td>Throttle / Brake &amp; Auto Reverse</td></tr>
           <tr><td class="key-badge">A / D or ← / →</td><td>Steer / Walk</td></tr>
-          <tr><td class="key-badge">Space / J</td><td>Handbrake / Jump / Fight</td></tr>
+          <tr><td class="key-badge">Space / Shift</td><td>Handbrake (Car) / Jump (Foot) / Nitro &amp; Sprint</td></tr>
           <tr><td class="key-badge">F / H / G</td><td>Enter Car / Horn Challenge / Start GP</td></tr>
           <tr><td class="key-badge">E / Q / C</td><td>Shift Up / Down / Clutch</td></tr>
           <tr><td class="key-badge">R / V / M</td><td>Reset / Camera / Mute</td></tr>

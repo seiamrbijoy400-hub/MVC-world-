@@ -54,6 +54,10 @@ export class HUD {
   private wantedEl: HTMLElement;
   private wantedStars: HTMLElement[] = [];
   private lastWanted = -1;
+  private districtEl: HTMLElement | null;
+  private lastDistrict = '';
+  private bustedMeterEl: HTMLElement | null;
+  private bustedMeterFill: HTMLElement | null;
   private stealPromptEl: HTMLElement;
   private stealPromptName: HTMLElement;
   private koOverlay: HTMLElement;
@@ -62,6 +66,7 @@ export class HUD {
 
   private barGas: HTMLElement;
   private barBrake: HTMLElement;
+  private barNitro: HTMLElement | null;
   private barClutch: HTMLElement;
   private clutchWrap: HTMLElement;
 
@@ -78,7 +83,8 @@ export class HUD {
     clutch: false,
     shiftUp: false,
     shiftDown: false,
-    reset: false
+    reset: false,
+    nitro: false
   };
 
   public charInputs: CharacterInputs = {
@@ -95,6 +101,7 @@ export class HUD {
   private touchGas = false;
   private touchBrake = false;
   private touchHandbrake = false;
+  private touchNitro = false;
   private touchClutch = false;
   private touchShiftUp = false;
   private touchShiftDown = false;
@@ -161,6 +168,9 @@ export class HUD {
 
     this.wantedEl = document.getElementById('wanted-hud')!;
     this.wantedStars = Array.from(document.querySelectorAll('#wanted-hud .wanted-star')) as HTMLElement[];
+    this.districtEl = document.getElementById('hud-district');
+    this.bustedMeterEl = document.getElementById('busted-meter');
+    this.bustedMeterFill = document.getElementById('busted-meter-fill');
     this.stealPromptEl = document.getElementById('steal-prompt')!;
     this.stealPromptName = document.getElementById('steal-prompt-name')!;
     this.koOverlay = document.getElementById('ko-overlay')!;
@@ -169,6 +179,7 @@ export class HUD {
 
     this.barGas = document.getElementById('bar-gas')!;
     this.barBrake = document.getElementById('bar-brake')!;
+    this.barNitro = document.getElementById('bar-nitro');
     this.barClutch = document.getElementById('bar-clutch')!;
     this.clutchWrap = document.getElementById('clutch-bar-wrap')!;
 
@@ -186,9 +197,49 @@ export class HUD {
       }
     }, { passive: true });
 
+    // Prevent stuck keys/touch buttons on tab switch, blur, or OS gesture interruption
+    window.addEventListener('blur', () => this.clearAllInputs());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.clearAllInputs();
+    });
+
     this.setupKeyboardListeners();
     this.setupTouchListeners();
     this.setupSocialListeners();
+  }
+
+  public clearAllInputs(): void {
+    this.keysDown.clear();
+    this.touchSteerLeft = false;
+    this.touchSteerRight = false;
+    this.touchGas = false;
+    this.touchBrake = false;
+    this.touchHandbrake = false;
+    this.touchNitro = false;
+    this.touchClutch = false;
+    this.touchShiftUp = false;
+    this.touchShiftDown = false;
+    this.footJump = false;
+    this.footPunch = false;
+    this.keyShiftUp = false;
+    this.keyShiftDown = false;
+    this.keyReset = false;
+    this.joystick.reset();
+    document.querySelectorAll('.touch-btn.pressed').forEach((el) => el.classList.remove('pressed'));
+  }
+
+  public setDistrict(name: string, accentColor = '#38bdf8'): void {
+    if (!this.districtEl || name === this.lastDistrict) return;
+    this.lastDistrict = name;
+    this.districtEl.textContent = name.toUpperCase();
+    this.districtEl.style.borderColor = accentColor;
+  }
+
+  public setBustedProgress(pct: number): void {
+    if (!this.bustedMeterEl || !this.bustedMeterFill) return;
+    const clamped = Math.max(0, Math.min(1, pct));
+    this.bustedMeterEl.style.display = clamped > 0.01 ? 'flex' : 'none';
+    this.bustedMeterFill.style.width = `${Math.round(clamped * 100)}%`;
   }
 
   public isTypingChat(): boolean {
@@ -282,6 +333,9 @@ export class HUD {
     );
     if (!changed) return;
 
+    if (onFoot !== this.isOnFoot) {
+      this.clearAllInputs();
+    }
     this.isOnFoot = onFoot;
     this.lastCanEnter = canEnterCar;
     this.lastHpShown = roundedHp;
@@ -463,6 +517,7 @@ export class HUD {
     bindBtn('touch-gas', () => { this.touchGas = true; }, () => { this.touchGas = false; });
     bindBtn('touch-brake', () => { this.touchBrake = true; }, () => { this.touchBrake = false; });
     bindBtn('touch-handbrake', () => { this.touchHandbrake = true; }, () => { this.touchHandbrake = false; });
+    bindBtn('touch-nitro', () => { this.touchNitro = true; }, () => { this.touchNitro = false; });
     bindBtn('touch-clutch', () => { this.touchClutch = true; }, () => { this.touchClutch = false; });
     bindBtn('touch-shift-up', () => { this.touchShiftUp = true; }, () => { this.touchShiftUp = false; });
     bindBtn('touch-shift-down', () => { this.touchShiftDown = true; }, () => { this.touchShiftDown = false; });
@@ -493,7 +548,7 @@ export class HUD {
 
   public pollInputs(gearbox: GearboxType): CarInputs {
     if (this.isTypingChat()) {
-      return { throttle: 0, brake: 0, steer: 0, handbrake: false, clutch: false, shiftUp: false, shiftDown: false, reset: false };
+      return { throttle: 0, brake: 0, steer: 0, handbrake: false, clutch: false, shiftUp: false, shiftDown: false, reset: false, nitro: false };
     }
     let kbThrottle = (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) ? 1.0 : 0;
     let kbBrake = (this.keysDown.has('KeyS') || this.keysDown.has('ArrowDown')) ? 1.0 : 0;
@@ -502,10 +557,11 @@ export class HUD {
     if (this.keysDown.has('KeyD') || this.keysDown.has('ArrowRight')) kbSteer += 1.0;
 
     const kbHandbrake = this.keysDown.has('Space');
+    const kbNitro = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.keysDown.has('KeyN');
     const kbClutch = this.keysDown.has('KeyC');
 
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    let gpThrottle = 0, gpBrake = 0, gpSteer = 0, gpHandbrake = false, gpShiftUp = false, gpShiftDown = false;
+    let gpThrottle = 0, gpBrake = 0, gpSteer = 0, gpHandbrake = false, gpNitro = false, gpShiftUp = false, gpShiftDown = false;
 
     if (gamepads && gamepads[0]) {
       const gp = gamepads[0];
@@ -513,6 +569,7 @@ export class HUD {
       if (gp.buttons[7]) gpThrottle = gp.buttons[7].value;
       if (gp.buttons[6]) gpBrake = gp.buttons[6].value;
       if (gp.buttons[0] && gp.buttons[0].pressed) gpHandbrake = true;
+      if (gp.buttons[1] && gp.buttons[1].pressed) gpNitro = true;
       if (gp.buttons[5] && gp.buttons[5].pressed) gpShiftUp = true;
       if (gp.buttons[4] && gp.buttons[4].pressed) gpShiftDown = true;
     }
@@ -524,6 +581,7 @@ export class HUD {
     this.inputs.brake = Math.max(kbBrake, gpBrake, this.touchBrake ? 1.0 : 0);
     this.inputs.steer = Math.max(-1, Math.min(1, kbSteer + gpSteer));
     this.inputs.handbrake = kbHandbrake || gpHandbrake || this.touchHandbrake;
+    this.inputs.nitro = kbNitro || gpNitro || this.touchNitro;
     this.inputs.clutch = kbClutch || this.touchClutch;
     this.inputs.shiftUp = this.keyShiftUp || this.touchShiftUp || gpShiftUp;
     this.inputs.shiftDown = this.keyShiftDown || this.touchShiftDown || gpShiftDown;
@@ -581,6 +639,9 @@ export class HUD {
     }
 
     if (!this.isOnFoot) {
+      if (this.barNitro) {
+        this.barNitro.style.width = `${Math.round(Math.max(0, Math.min(100, physics.nitro)))}%`;
+      }
       this.renderTachometer(physics);
     }
     this.renderMinimap(playerPos, track, extraMarkers);
@@ -676,6 +737,23 @@ export class HUD {
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 10px sans-serif';
     ctx.fillText('KM/H', cx, cy + 69);
+
+    // Bottom arc Nitrous gauge directly inside tachometer so mobile users see Nitro too
+    const nNorm = Math.max(0, Math.min(1, physics.nitro / 100));
+    const nStart = Math.PI * 0.28;
+    const nEnd = Math.PI * 0.72;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius - 4, nStart, nEnd);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.18)';
+    ctx.stroke();
+    if (nNorm > 0.01) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius - 4, nEnd - (nEnd - nStart) * nNorm, nEnd);
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = physics.isNitroActive ? '#facc15' : '#38bdf8';
+      ctx.stroke();
+    }
   }
 
   private renderMinimap(

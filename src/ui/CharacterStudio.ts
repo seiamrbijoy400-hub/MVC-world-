@@ -134,7 +134,7 @@ export class CharacterStudio {
         ${swatchRow('hairColor', HAIR_COLORS)}
       </div>
       <div class="setting-group">
-        <label>Anime Eye Color</label>
+        <label>Eye Color</label>
         ${swatchRow('eyeColor', EYE_COLORS)}
       </div>
       <div class="setting-group">

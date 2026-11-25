@@ -263,12 +263,13 @@ export class OpenWorldMap {
   }
 
   private createCityRoads(): void {
-    const plazaGeo = new THREE.PlaneGeometry(315, 595);
+    // Base city deck ends cleanly at z = 232 where the Harbor Concrete Quay begins
+    const plazaGeo = new THREE.PlaneGeometry(315, 576);
     plazaGeo.rotateX(-Math.PI * 0.5);
     const plazaMat = new THREE.MeshStandardMaterial({ map: this.createCityPlazaTexture(), roughness: 0.88 });
     this.roadMats.push(plazaMat);
     const plaza = new THREE.Mesh(plazaGeo, plazaMat);
-    plaza.position.set(174, -0.02, -45);
+    plaza.position.set(174, -0.02, -56);
     plaza.receiveShadow = true;
     this.group.add(plaza);
 
@@ -368,36 +369,77 @@ export class OpenWorldMap {
 
     buildingSpecs.forEach((b, idx) => {
       const accent = neonColors[idx % neonColors.length];
-      const tex = this.createBuildingTexture(accent);
-      const wallMat = new THREE.MeshStandardMaterial({
-        map: tex,
-        emissiveMap: tex,
+      const baseTex = this.createBuildingTexture(accent);
+
+      // Scale UV repeats per face so windows keep natural proportions instead of stretching
+      const frontBackTex = baseTex.clone();
+      frontBackTex.repeat.set(Math.max(1, Math.round(b.w / 24)), Math.max(1, Math.round(b.h / 36)));
+      frontBackTex.needsUpdate = true;
+      const sideTex = baseTex.clone();
+      sideTex.repeat.set(Math.max(1, Math.round(b.d / 24)), Math.max(1, Math.round(b.h / 36)));
+      sideTex.needsUpdate = true;
+
+      const fbMat = new THREE.MeshStandardMaterial({
+        map: frontBackTex,
+        emissiveMap: frontBackTex,
         emissive: new THREE.Color('#ffffff'),
         emissiveIntensity: 0.85,
         roughness: 0.42,
         metalness: 0.25
       });
-      this.buildingMats.push(wallMat);
-      const roofMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+      const sideMat = new THREE.MeshStandardMaterial({
+        map: sideTex,
+        emissiveMap: sideTex,
+        emissive: new THREE.Color('#ffffff'),
+        emissiveIntensity: 0.85,
+        roughness: 0.42,
+        metalness: 0.25
+      });
+      this.buildingMats.push(fbMat, sideMat);
+      const roofMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.65, metalness: 0.2 });
 
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(b.w, b.h, b.d),
-        [wallMat, wallMat, roofMat, roofMat, wallMat, wallMat]
+        [sideMat, sideMat, roofMat, roofMat, fbMat, fbMat]
       );
       mesh.position.set(b.x, b.h * 0.5, b.z);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       this.group.add(mesh);
 
+      // Ground-floor architectural plinth / sidewalk & storefront awning so buildings feel grounded
+      const plinthMat = new THREE.MeshStandardMaterial({ color: 0x161e2e, roughness: 0.78, metalness: 0.15 });
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.w + 2.4, 0.32, b.d + 2.4), plinthMat);
+      plinth.position.set(b.x, 0.16, b.z);
+      plinth.receiveShadow = true;
+      this.group.add(plinth);
+
+      if (b.label) {
+        const canopyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.4 });
+        const shopGlowMat = new THREE.MeshBasicMaterial({ color: accent });
+        for (const faceZ of [1, -1]) {
+          const canopy = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.78, 0.35, 2.2), canopyMat);
+          canopy.position.set(b.x, 4.4, b.z + faceZ * (b.d * 0.5 + 1.0));
+          const shopBand = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.66, 2.9, 0.22), shopGlowMat);
+          shopBand.position.set(b.x, 1.8, b.z + faceZ * (b.d * 0.5 + 0.08));
+          this.group.add(canopy, shopBand);
+        }
+      }
+
       if (b.h >= 44) {
         const tierH = 10;
         const tier = new THREE.Mesh(
           new THREE.BoxGeometry(b.w * 0.65, tierH, b.d * 0.65),
-          [wallMat, wallMat, roofMat, roofMat, wallMat, wallMat]
+          [sideMat, sideMat, roofMat, roofMat, fbMat, fbMat]
         );
         tier.position.set(b.x, b.h + tierH * 0.5, b.z);
         tier.castShadow = true;
         this.group.add(tier);
+      } else {
+        // Low-rise rooftop HVAC / utility unit for silhouette variety
+        const hvac = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.26, 2.2, b.d * 0.26), roofMat);
+        hvac.position.set(b.x - b.w * 0.18, b.h + 1.1, b.z + b.d * 0.14);
+        this.group.add(hvac);
       }
 
       const neonMat = new THREE.MeshBasicMaterial({ color: accent });
@@ -415,10 +457,10 @@ export class OpenWorldMap {
       }
 
       this.colliders.push({
-        minX: b.x - b.w * 0.5,
-        maxX: b.x + b.w * 0.5,
-        minZ: b.z - b.d * 0.5,
-        maxZ: b.z + b.d * 0.5,
+        minX: b.x - b.w * 0.5 - 0.4,
+        maxX: b.x + b.w * 0.5 + 0.4,
+        minZ: b.z - b.d * 0.5 - 0.4,
+        maxZ: b.z + b.d * 0.5 + 0.4,
         height: b.h
       });
 
@@ -439,15 +481,18 @@ export class OpenWorldMap {
         sCtx.fillText(b.label, 128, 32);
 
         const sTex = new THREE.CanvasTexture(sCanvas);
+        const signMat = new THREE.MeshBasicMaterial({ map: sTex });
         const sign = new THREE.Mesh(
           new THREE.PlaneGeometry(b.w * 0.72, 4.5),
-          new THREE.MeshBasicMaterial({ map: sTex, side: THREE.DoubleSide })
+          signMat
         );
         sign.position.set(b.x, Math.min(b.h - 4, 12), b.z + b.d * 0.5 + 0.25);
         this.group.add(sign);
 
-        const signBack = sign.clone();
+        // Rotate north-facing sign 180° around Y so text never renders mirrored!
+        const signBack = new THREE.Mesh(new THREE.PlaneGeometry(b.w * 0.72, 4.5), signMat);
         signBack.position.set(b.x, Math.min(b.h - 4, 12), b.z - b.d * 0.5 - 0.25);
+        signBack.rotation.y = Math.PI;
         this.group.add(signBack);
       }
 
@@ -519,18 +564,35 @@ export class OpenWorldMap {
   }
 
   private createHarborCoastDistrict(): void {
-    const oceanGeo = new THREE.PlaneGeometry(340, 105, 40, 16);
+    // Ocean starts cleanly south of the Harbor Concrete Quay (z = 268)
+    const oceanGeo = new THREE.PlaneGeometry(360, 110, 40, 16);
     oceanGeo.rotateX(-Math.PI * 0.5);
     const oceanSetup = createAnimeWaterMaterial(0.0);
     this.oceanUniforms = oceanSetup.uniforms;
     const oceanMesh = new THREE.Mesh(oceanGeo, oceanSetup.material);
-    oceanMesh.position.set(175, -0.8, 295);
+    oceanMesh.position.set(175, -0.8, 323);
     this.group.add(oceanMesh);
 
-    const pierGeo = new THREE.BoxGeometry(56, 0.4, 62);
+    // Harbor Concrete Quay spanning full waterfront (houses cargo containers, shards #08/#10, lighthouse)
+    const quayMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.82 });
+    this.roadMats.push(quayMat);
+    const quay = new THREE.Mesh(new THREE.BoxGeometry(282, 0.4, 38), quayMat);
+    quay.position.set(176, -0.15, 250);
+    quay.receiveShadow = true;
+    this.group.add(quay);
+
+    // Waterfront safety rail along z = 268 (gap at x = 140..196 for the South Stunt Pier)
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.5, metalness: 0.35 });
+    const westRail = new THREE.Mesh(new THREE.BoxGeometry(105, 0.7, 0.45), railMat);
+    westRail.position.set(87.5, 0.35, 268);
+    const eastRail = new THREE.Mesh(new THREE.BoxGeometry(121, 0.7, 0.45), railMat);
+    eastRail.position.set(256.5, 0.35, 268);
+    this.group.add(westRail, eastRail);
+
+    const pierGeo = new THREE.BoxGeometry(56, 0.4, 34);
     const pierMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
     const pier = new THREE.Mesh(pierGeo, pierMat);
-    pier.position.set(168, -0.15, 265);
+    pier.position.set(168, -0.15, 282);
     pier.receiveShadow = true;
     this.group.add(pier);
 
@@ -577,20 +639,21 @@ export class OpenWorldMap {
     this.group.add(lhBase, lhBand, lhBeacon);
     this.colliders.push({ minX: 294, maxX: 302, minZ: 254, maxZ: 262, height: 24 });
 
-    this.addRamp(168, 254, 12, 16, 4.2, 'SOUTH', 0x22d3ee);
-    this.boostPads.push({ x: 168, z: 236, radius: 3.8, dirX: 0, dirZ: 1 });
+    this.addRamp(168, 278, 12, 16, 4.2, 'SOUTH', 0x22d3ee);
+    this.boostPads.push({ x: 168, z: 256, radius: 3.8, dirX: 0, dirZ: 1 });
     const pad = new THREE.Mesh(
       new THREE.PlaneGeometry(5.5, 7.5),
       new THREE.MeshBasicMaterial({ color: 0x22d3ee, side: THREE.DoubleSide })
     );
     pad.rotation.x = -Math.PI * 0.5;
-    pad.position.set(168, 0.06, 236);
+    pad.position.set(168, 0.08, 256);
     this.group.add(pad);
   }
 
   private createMountainTougeDistrict(): void {
-    this.addRamp(48, -296, 18, 24, 6.0, 'EAST', 0x334155);
-    this.addRamp(262, -296, 18, 24, 6.0, 'WEST', 0x334155);
+    // Ramps span x=38..60 (EAST) and x=250..272 (WEST) so they meet tougeDeckZone [60..250] seamlessly!
+    this.addRamp(49, -296, 24, 22, 6.0, 'EAST', 0x334155);
+    this.addRamp(261, -296, 24, 22, 6.0, 'WEST', 0x334155);
 
     const deckGeo = new THREE.BoxGeometry(190, 6.0, 88);
     const deckMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.78 });
@@ -600,6 +663,15 @@ export class OpenWorldMap {
     deck.receiveShadow = true;
     deck.castShadow = true;
     this.group.add(deck);
+
+    // Touge centerline stripe on the deck so players can read the racing line
+    const tougeLine = new THREE.Mesh(
+      new THREE.PlaneGeometry(186, 0.45),
+      new THREE.MeshBasicMaterial({ color: 0xfacc15 })
+    );
+    tougeLine.rotation.x = -Math.PI * 0.5;
+    tougeLine.position.set(155, 6.02, -296);
+    this.group.add(tougeLine);
 
     const edgeMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
     const northRail = new THREE.Mesh(new THREE.BoxGeometry(190, 0.7, 0.4), edgeMat);
@@ -616,16 +688,28 @@ export class OpenWorldMap {
     const topBeam = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.1, 28), toriiMat);
     topBeam.position.set(155, 14.8, -296);
     this.group.add(pL, pR, topBeam);
+    this.colliders.push(
+      { minX: 154.3, maxX: 155.7, minZ: -308.7, maxZ: -307.3, height: 15 },
+      { minX: 154.3, maxX: 155.7, minZ: -284.7, maxZ: -283.3, height: 15 }
+    );
 
     const ewRoadMat = new THREE.MeshStandardMaterial({ map: this.createCityRoadTexture(false), roughness: 0.8 });
     this.roadMats.push(ewRoadMat);
     for (const ax of [32, 278]) {
-      const roadGeo = new THREE.PlaneGeometry(16, 145);
+      const roadGeo = new THREE.PlaneGeometry(16, 152);
       roadGeo.rotateX(-Math.PI * 0.5);
       const road = new THREE.Mesh(roadGeo, ewRoadMat);
-      road.position.set(ax, 0.03, -230);
+      road.position.set(ax, 0.03, -234);
       road.receiveShadow = true;
       this.group.add(road);
+
+      // Paved turning apron connecting N-S road to ramp entrance
+      const apronGeo = new THREE.PlaneGeometry(20, 26);
+      apronGeo.rotateX(-Math.PI * 0.5);
+      const apron = new THREE.Mesh(apronGeo, deckMat);
+      apron.position.set(ax === 32 ? 34 : 276, 0.035, -296);
+      apron.receiveShadow = true;
+      this.group.add(apron);
     }
   }
 
@@ -936,20 +1020,22 @@ export class OpenWorldMap {
     if (pos.z < WORLD_BOUNDS.minZ + radius) { pos.z = WORLD_BOUNDS.minZ + radius; if (vel.z < 0) vel.z *= -0.4; hit = true; }
     if (pos.z > WORLD_BOUNDS.maxZ - radius) { pos.z = WORLD_BOUNDS.maxZ - radius; if (vel.z > 0) vel.z *= -0.4; hit = true; }
 
-    if (pos.z > 244 - radius && !(pos.x >= 140 && pos.x <= 196 && pos.z <= 294)) {
-      pos.z = 244 - radius;
+    // Harbor seawall at z = 268 (open across pier x = 140..196 up to z = 296)
+    if (pos.z > 268 - radius && !(pos.x >= 140 && pos.x <= 196 && pos.z <= 296)) {
+      pos.z = 268 - radius;
       if (vel.z > 0) vel.z *= -0.35;
       hit = true;
     }
 
     for (const b of this.colliders) {
-      if (this.resolveCircleVsAABB(pos, vel, radius, b.minX, b.maxX, b.minZ, b.maxZ)) {
+      if (pos.y < b.height && this.resolveCircleVsAABB(pos, vel, radius, b.minX, b.maxX, b.minZ, b.maxZ)) {
         hit = true;
       }
     }
 
     const td = this.tougeDeckZone;
-    if (pos.y < td.height - 0.8) {
+    const onTougeRampMouth = pos.z >= -308 && pos.z <= -284;
+    if (pos.y < td.height - 0.8 && !(onTougeRampMouth && pos.y >= 4.2)) {
       if (this.resolveCircleVsAABB(pos, vel, radius, td.minX, td.maxX, td.minZ, td.maxZ)) {
         hit = true;
       }

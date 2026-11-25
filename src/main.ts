@@ -4,7 +4,7 @@ import { CharacterController } from './physics/CharacterController';
 import { CarMesh } from './graphics/CarMesh';
 import { HumanCharacterMesh } from './graphics/HumanCharacterMesh';
 import { TrackEnvironment, TimeOfDay } from './graphics/TrackEnvironment';
-import { OpenWorldMap } from './graphics/OpenWorldMap';
+import { OpenWorldMap, DISTRICTS, type DistrictId } from './graphics/OpenWorldMap';
 import { ParticleSystem } from './graphics/ParticleSystem';
 import { SoundManager } from './audio/SoundManager';
 import { LapManager, LapStats } from './game/LapManager';
@@ -14,7 +14,7 @@ import { LobbyClient } from './network/LobbyClient';
 import { LobbyUI, LobbyConfig } from './ui/LobbyUI';
 import { CharacterStudio } from './ui/CharacterStudio';
 import { SaveManager } from './game/SaveManager';
-import type { WeatherMode } from './game/SaveManager';
+import type { CarArchetypeId, GraphicsQuality, WeatherMode } from './game/SaveManager';
 import { WeatherSystem } from './graphics/WeatherSystem';
 import { GhostSystem } from './game/GhostSystem';
 import { WorldActivities, type RivalSprintDef } from './game/WorldActivities';
@@ -74,6 +74,7 @@ class GameApp {
   private police: PoliceSystem;
   private ghostReplayEnabled = true;
   private nearbyRival: RivalSprintDef | null = null;
+  private currentDistrictId: DistrictId | null = null;
   private baseAmbientIntensity = 0.72;
   private baseHemiIntensity = 0.55;
   private baseSunIntensity = 1.9;
@@ -396,6 +397,7 @@ class GameApp {
 
     this.spawnCityCruisers();
     this.spawnCivicCars();
+    this.applyGraphicsQuality(this.save.data.graphicsQuality);
     const savedTod = this.save.data.atmospherePref === 'AUTO' ? 'SUNSET' : this.save.data.atmospherePref;
     this.setAtmosphere(savedTod);
     this.bindMultiplayerEvents();
@@ -438,7 +440,7 @@ class GameApp {
     this.lapManager.resetRace(0);
     this.hud.setVisible(true, this.physics.gearboxType);
     this.hud.setOnFootMode(true, true, 100, this.physics.gearboxType);
-    this.hud.showNotification('ZENVO OPEN WORLD', 'Tap DRIVE to get in car, or explore Metro City!', 3.0);
+    this.hud.showNotification('APEX ZERO: NEON VELO', 'Tap DRIVE to get in car, or explore Neo Velo!', 3.0);
   }
 
   private startTimedCircuitRace(laps = 3): void {
@@ -1117,9 +1119,40 @@ class GameApp {
     this.syncOptionSelection('.ghost-options .option-btn', 'data-ghost', this.ghostReplayEnabled ? 'ON' : 'OFF');
     this.syncOptionSelection('.music-options .option-btn', 'data-music', this.sound.isMusicEnabled ? 'ON' : 'OFF');
     this.syncOptionSelection('.assist-options .option-btn', 'data-assist', this.physics.assistMode);
+    this.syncOptionSelection('.archetype-options .option-btn', 'data-arch', this.save.data.carArchetype);
+    this.syncOptionSelection('.quality-options .option-btn', 'data-quality', this.save.data.graphicsQuality);
     this.syncOptionSelection('.gearbox-options .option-btn', 'data-gearbox', this.physics.gearboxType);
     this.syncOptionSelection('.tod-options .option-btn', 'data-tod', this.timeOfDay);
     this.syncOptionSelection('.cam-options .option-btn', 'data-cam', this.cameraView);
+  }
+
+  private applyGraphicsQuality(q: GraphicsQuality): void {
+    const dpr = window.devicePixelRatio || 1;
+    if (q === 'LOW') {
+      this.renderer.setPixelRatio(Math.min(dpr, 1.0));
+      this.renderer.shadowMap.enabled = false;
+      this.sunLight.castShadow = false;
+    } else if (q === 'MED') {
+      this.renderer.setPixelRatio(Math.min(dpr, 1.35));
+      this.renderer.shadowMap.enabled = true;
+      this.sunLight.castShadow = true;
+      if (this.sunLight.shadow.mapSize.width !== 1024) {
+        this.sunLight.shadow.mapSize.set(1024, 1024);
+        this.sunLight.shadow.map?.dispose();
+        this.sunLight.shadow.map = null;
+      }
+    } else {
+      this.renderer.setPixelRatio(Math.min(dpr, 2.0));
+      this.renderer.shadowMap.enabled = true;
+      this.sunLight.castShadow = true;
+      if (this.sunLight.shadow.mapSize.width !== 2048) {
+        this.sunLight.shadow.mapSize.set(2048, 2048);
+        this.sunLight.shadow.map?.dispose();
+        this.sunLight.shadow.map = null;
+      }
+    }
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.syncOptionSelection('.quality-options .option-btn', 'data-quality', q);
   }
 
   private setWeatherMode(mode: WeatherMode): void {
@@ -1223,10 +1256,12 @@ class GameApp {
     camBtn.addEventListener('click', cycleCam);
 
     document.getElementById('btn-hotspot')!.addEventListener('click', () => {
+      this.hud.clearAllInputs();
       this.lobbyUI.setVisible(true);
     });
 
     document.getElementById('btn-studio')?.addEventListener('click', () => {
+      this.hud.clearAllInputs();
       this.studio.open(!this.studio.isOpen);
     });
 
@@ -1266,6 +1301,7 @@ class GameApp {
 
     const modal = document.getElementById('settings-modal')!;
     const openModal = () => {
+      this.hud.clearAllInputs();
       modal.classList.add('open');
       this.isPaused = true;
       this.sound.pauseAudio();
@@ -1361,6 +1397,27 @@ class GameApp {
         this.save.data.assistMode = assist;
         this.save.scheduleSave();
         this.syncOptionSelection('.assist-options .option-btn', 'data-assist', assist);
+      });
+    });
+
+    document.querySelectorAll('.archetype-options .option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const arch = btn.getAttribute('data-arch') as CarArchetypeId;
+        this.physics.applyArchetype(arch);
+        this.save.data.carArchetype = arch;
+        this.save.scheduleSave();
+        this.syncOptionSelection('.archetype-options .option-btn', 'data-arch', arch);
+        this.hud.showNotification(`SPEC: ${arch}`, 'Handling & suspension tuned', 1.5);
+      });
+    });
+
+    document.querySelectorAll('.quality-options .option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const q = btn.getAttribute('data-quality') as GraphicsQuality;
+        this.save.data.graphicsQuality = q;
+        this.save.scheduleSave();
+        this.applyGraphicsQuality(q);
+        this.hud.showNotification(`GRAPHICS: ${q}`, q === 'LOW' ? 'Shadows off • Max mobile FPS' : 'Display quality updated', 1.6);
       });
     });
   }
@@ -1635,6 +1692,21 @@ class GameApp {
 
       // Check proximity to In-World GP Race Start Portal (0, 0, -4)
       const activePos = this.inCar ? this.physics.position : this.charCtrl.position;
+
+      // District tracking & first-discovery bonus
+      const districtId = this.openWorld.getDistrictAt(activePos.x, activePos.z);
+      if (districtId !== this.currentDistrictId) {
+        this.currentDistrictId = districtId;
+        const info = DISTRICTS[districtId];
+        this.hud.setDistrict(info.name, info.accentColor);
+        if (!this.save.data.discoveredDistricts.includes(districtId)) {
+          this.save.data.discoveredDistricts.push(districtId);
+          this.save.scheduleSave();
+          this.sound.playDiscoveryChime();
+          this.hud.showNotification(`NEW DISTRICT: ${info.name}`, `${info.jpName} • ${info.subtitle}`, 3.0);
+          this.award(100, 150);
+        }
+      }
 
       // Open-world activities: speed traps, drift zones, Apex Logs, rival sprints
       this.activities.update(
