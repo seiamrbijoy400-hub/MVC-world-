@@ -17,6 +17,7 @@ export class CarMesh {
   public brakeLightMaterials: THREE.MeshBasicMaterial[] = [];
   public reverseLightMaterials: THREE.MeshBasicMaterial[] = [];
   private currentColor = new THREE.Color(0xff5500);
+  public currentColorHex = '#ff5500';
 
   // Active spoiler, contact shadow, neon underglow, nitro jets & working headlights
   public spoiler: THREE.Group | null = null;
@@ -168,9 +169,25 @@ export class CarMesh {
 
   public setColor(hexColor: string | number): void {
     this.currentColor.set(hexColor);
+    this.currentColorHex = '#' + this.currentColor.getHexString();
     for (const mat of this.bodyMaterials) {
       mat.color.copy(this.currentColor);
     }
+  }
+
+  public dispose(): void {
+    this.root.traverse((obj) => {
+      const m = obj as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) {
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) {
+          const anyMat = mat as THREE.MeshStandardMaterial;
+          if (anyMat.map) anyMat.map.dispose();
+          mat.dispose();
+        }
+      }
+    });
   }
 
   private createContactShadow(): void {

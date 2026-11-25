@@ -202,6 +202,10 @@ export class CarPhysics {
     const angle = heading !== undefined ? heading : this.lastSafeRotation;
     this.rotation.set(0, angle, 0);
     this.quaternion.setFromEuler(this.rotation);
+    if (pos) {
+      this.lastSafePosition.copy(this.position);
+      this.lastSafeRotation = angle;
+    }
 
     this.velocity.set(0, 0, 0);
     this.yawRate = 0;

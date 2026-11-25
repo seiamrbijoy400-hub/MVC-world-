@@ -9,6 +9,7 @@ import { ParticleSystem } from './graphics/ParticleSystem';
 import { SoundManager } from './audio/SoundManager';
 import { LapManager, LapStats } from './game/LapManager';
 import { RaceBot, CityCruiserBot, SparringFighter } from './ai/RaceBotAI';
+import { PedestrianSystem } from './ai/PedestrianSystem';
 import { HUD, MinimapActor, TouchMode } from './ui/HUD';
 import { LobbyClient } from './network/LobbyClient';
 import { LobbyUI, LobbyConfig } from './ui/LobbyUI';
@@ -39,6 +40,22 @@ interface RemotePeer {
   carMesh: CarMesh;
   charMesh: HumanCharacterMesh;
   lastState: NetworkPlayerSync;
+}
+
+interface CivicSpawnSpec {
+  x: number;
+  z: number;
+  heading: number;
+  color: string;
+  name: string;
+  archetype: CarArchetypeId;
+}
+
+interface VehicleEntry {
+  physics: CarPhysics;
+  mesh: CarMesh;
+  name: string;
+  spawnSpec?: CivicSpawnSpec;
 }
 
 class GameApp {
@@ -82,16 +99,18 @@ class GameApp {
   private raceBots: RaceBot[] = [];
   private cityCruisers: CityCruiserBot[] = [];
   private sparringFighters: SparringFighter[] = [];
+  private pedestrians!: PedestrianSystem;
   private remotePeers = new Map<string, RemotePeer>();
 
   /** Player-owned cars left in the world (own Zenvo + anything stolen and abandoned). */
-  private parkedCars: { physics: CarPhysics; mesh: CarMesh; name: string }[] = [];
+  private parkedCars: VehicleEntry[] = [];
   /** Stealable civilian cars parked around the city. */
-  private civicCars: { physics: CarPhysics; mesh: CarMesh; name: string }[] = [];
-  private nearbyCivic: { physics: CarPhysics; mesh: CarMesh; name: string } | null = null;
+  private civicCars: VehicleEntry[] = [];
+  private nearbyCivic: VehicleEntry | null = null;
   private activeCarName = 'Your Zenvo';
   private assaultHeatCooldown = 0;
   private policeHitCooldown = 0;
+  private footstepTimer = 0;
   private koReason: 'WASTED' | 'BUSTED' | null = null;
   private sampleUnifiedGround!: (x: number, z: number) => GroundSample;
 
@@ -155,6 +174,11 @@ class GameApp {
       this.save.scheduleSave();
       this.award(80, 120);
     };
+    this.openWorld.onPropSmashed = (pos) => {
+      this.sound.playCrash(22);
+      this.particles.emitSparks(pos, 6);
+      this.lapManager.addStyleBonus(25, 0.1);
+    };
 
     this.sampleUnifiedGround = (x: number, z: number): GroundSample => {
       const base = this.track.sampleGround(x, z);
@@ -200,6 +224,7 @@ class GameApp {
     this.charCtrl.groundHeightSampler = (x, z) => this.sampleUnifiedGround(x, z).height;
     this.charCtrl.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
     this.charCtrl.onPunchStrike = (origin, fwd) => this.handlePlayerPunch(origin, fwd);
+    this.charCtrl.onLand = (impact) => this.sound.playLand(impact);
     this.charCtrl.respawnPoint = new THREE.Vector3(13.8, 0, 24.5);
     this.charCtrl.onDeath = () => {
       this.koReason = 'WASTED';
@@ -269,11 +294,37 @@ class GameApp {
           this.hud.showNotification('CLEAN', 'You lost the police.', 1.8);
         }
       },
+      onBustProgress: (pct) => this.hud.setBustedProgress(pct),
       onBusted: (fine, heat) => this.handleBusted(fine, heat),
+      onEscaped: () => {
+        this.hud.showNotification('ESCAPED!', '+80 XP • Clean getaway', 2.2);
+        this.award(80, 100);
+      },
       onImpact: (impact, pos) => {
         this.sound.playCrash(impact);
         this.particles.emitSparks(pos, 8);
+        if (this.inCar && pos.distanceTo(this.physics.position) < 6) {
+          this.cameraShake = Math.max(this.cameraShake, Math.min(0.35, impact / 150));
+        }
       }
+    };
+
+    this.pedestrians = new PedestrianSystem(
+      this.scene,
+      this.openWorld,
+      (x, z) => this.sampleUnifiedGround(x, z).height,
+      14
+    );
+    this.pedestrians.onCrimeReported = (reason, reporterPos) => {
+      this.sound.playCrimeAlarm();
+      this.police.addHeat(1, reason, reporterPos);
+      this.hud.showNotification('WITNESS REPORT', `Pedestrian called police: ${reason}`, 2.0);
+    };
+    this.pedestrians.onPedestrianKnockedOut = (ped) => {
+      this.save.data.knockouts++;
+      this.save.scheduleSave();
+      this.police.addHeat(1, 'ASSAULT ON CIVILIAN', ped.controller.position);
+      this.pedestrians.alertDanger(ped.controller.position, 24);
     };
 
     this.lapManager = new LapManager(
@@ -304,6 +355,9 @@ class GameApp {
         );
         if (isNewBest) this.award(120, 200);
         else if (speedKmh >= trap.targetKmh) this.award(25, 40);
+        if (this.gameState === GameState.OPEN_WORLD && speedKmh >= 245 && trap.id !== 'trap_gp_straight') {
+          this.police.addHeat(1, 'EXTREME SPEEDING', this.physics.position);
+        }
       },
       onDriftZoneCompleted: (zone, score, medal, isNewBest) => {
         this.sound.playDiscoveryChime();
@@ -502,6 +556,8 @@ class GameApp {
         if (!states[id]) {
           this.scene.remove(peer.carMesh.root);
           this.scene.remove(peer.charMesh.root);
+          peer.carMesh.dispose();
+          peer.charMesh.dispose();
           this.remotePeers.delete(id);
         }
       }
@@ -605,7 +661,7 @@ class GameApp {
   }
 
   private handlePlayerPunch(origin: THREE.Vector3, fwd: THREE.Vector3): void {
-    this.sound.playGearShift();
+    this.sound.playPunchWhoosh();
     this.avatarMesh.triggerPunchVisual();
 
     // 1. Kick giant soccer ball if nearby
@@ -629,12 +685,13 @@ class GameApp {
           this.sound.playCrash(28);
           this.particles.emitSparks(f.controller.position, killed ? 22 : 10);
           this.cameraShake = 0.16;
+          this.pedestrians.alertDanger(origin, 20);
 
           if (killed) {
             this.save.data.knockouts++;
             this.save.scheduleSave();
             this.award(120, 160);
-            this.police.addHeat(2, 'ASSAULT');
+            this.police.addHeat(2, 'ASSAULT', origin);
             this.hud.showNotification(
               `${f.name.toUpperCase()} DOWN`,
               'Knockout. The city noticed that. Expect police.',
@@ -643,8 +700,27 @@ class GameApp {
             this.sound.playRankUpFanfare();
           } else if (this.assaultHeatCooldown <= 0) {
             this.assaultHeatCooldown = 6;
-            this.police.addHeat(1, 'ASSAULT');
+            this.pedestrians.notifyCrime(origin, 'STREET ASSAULT', 28);
           }
+        }
+      }
+    }
+
+    // 2b. Hit City Pedestrians (triggers panic & witness reporting!)
+    for (const ped of this.pedestrians.agents) {
+      if (ped.controller.isDead) continue;
+      const toP = ped.controller.position.clone().sub(origin);
+      const d = Math.hypot(toP.x, toP.z);
+      if (d < 2.4 && d > 0.01) {
+        toP.y = 0;
+        toP.normalize();
+        if (toP.dot(fwd) > 0.05) {
+          ped.controller.takeDamage(26, fwd.x, fwd.z);
+          this.sound.playCrash(24);
+          this.particles.emitSparks(ped.controller.position, 8);
+          this.cameraShake = 0.14;
+          this.pedestrians.alertDanger(origin, 22);
+          this.pedestrians.notifyCrime(origin, 'ASSAULT ON CIVILIAN', 32);
         }
       }
     }
@@ -692,6 +768,7 @@ class GameApp {
       this.footCamYaw = this.physics.rotation.y;
       this.avatarMesh.root.visible = true;
       this.avatarMesh.root.position.copy(this.charCtrl.position);
+      this.sound.playCarDoor();
       this.sound.updateTireSkid(0);
       this.hud.setOnFootMode(true, true, this.charCtrl.hp, this.physics.gearboxType);
       this.hud.showNotification('ON FOOT', 'Walk/Run • Fight [J] • Drive [F]', 1.8);
@@ -704,13 +781,35 @@ class GameApp {
         return;
       }
 
+      // Check stopped police cruiser theft!
+      const cop = this.police.takeNearestUnit(this.charCtrl.position, 4.4);
+      if (cop) {
+        this.hijackVehicle(cop.physics, cop.mesh, 'Police Cruiser', 2, 'POLICE VEHICLE STOLEN');
+        return;
+      }
+
+      // Check stopped city traffic cruiser hijacking!
+      const trafficIdx = this.cityCruisers.findIndex((c) => {
+        if (c.physics.speedKmh > 22) return false;
+        return Math.hypot(
+          this.charCtrl.position.x - c.physics.position.x,
+          this.charCtrl.position.z - c.physics.position.z
+        ) < 4.4;
+      });
+      if (trafficIdx !== -1) {
+        const cruiser = this.cityCruisers.splice(trafficIdx, 1)[0];
+        const stolen = cruiser.detachForTheft();
+        this.hijackVehicle(stolen.physics, stolen.mesh, `${stolen.name}'s Coupe`, 1, 'VEHICLE HIJACKED');
+        return;
+      }
+
       const civic = this.findNearestCivicCar(4.2);
       if (civic) {
         this.stealCar(civic);
         return;
       }
 
-      this.hud.showNotification('NO CAR IN REACH', 'Walk up to your car or a parked civilian car.', 1.6);
+      this.hud.showNotification('NO CAR IN REACH', 'Walk up to your car, traffic, or a parked ride.', 1.6);
     }
   }
 
@@ -720,8 +819,8 @@ class GameApp {
     this.parkedCars.push({ physics: this.physics, mesh: this.carMesh, name: this.activeCarName });
   }
 
-  private findNearestParkedCar(radius: number): { physics: CarPhysics; mesh: CarMesh; name: string } | null {
-    let best: { physics: CarPhysics; mesh: CarMesh; name: string } | null = null;
+  private findNearestParkedCar(radius: number): VehicleEntry | null {
+    let best: VehicleEntry | null = null;
     let bestDist = radius;
     for (const entry of this.parkedCars) {
       const d = Math.hypot(
@@ -736,8 +835,8 @@ class GameApp {
     return best;
   }
 
-  private findNearestCivicCar(radius: number): { physics: CarPhysics; mesh: CarMesh; name: string } | null {
-    let best: { physics: CarPhysics; mesh: CarMesh; name: string } | null = null;
+  private findNearestCivicCar(radius: number): VehicleEntry | null {
+    let best: VehicleEntry | null = null;
     let bestDist = radius;
     for (const entry of this.civicCars) {
       const d = Math.hypot(
@@ -752,7 +851,7 @@ class GameApp {
     return best;
   }
 
-  private enterOwnedCar(entry: { physics: CarPhysics; mesh: CarMesh; name: string }): void {
+  private enterOwnedCar(entry: VehicleEntry): void {
     this.inCar = true;
     this.parkedCars = this.parkedCars.filter((p) => p !== entry);
     this.physics = entry.physics;
@@ -760,13 +859,42 @@ class GameApp {
     this.activeCarName = entry.name;
     this.configureActiveCar();
     this.avatarMesh.root.visible = false;
+    this.sound.playCarDoor();
     this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
     this.hud.setStealPrompt(null);
     this.hud.showNotification('DRIVING', 'Drive to Green Gate on Track to Race!', 1.6);
     this.setRivalPrompt(this.nearbyRival);
   }
 
-  private stealCar(civic: { physics: CarPhysics; mesh: CarMesh; name: string }): void {
+  private hijackVehicle(
+    physics: CarPhysics,
+    mesh: CarMesh,
+    label: string,
+    directHeat: number,
+    crimeReason: string
+  ): void {
+    this.sound.init();
+    this.parkActiveCar();
+    this.inCar = true;
+    this.physics = physics;
+    this.carMesh = mesh;
+    this.activeCarName = label;
+    this.configureActiveCar();
+    this.avatarMesh.root.visible = false;
+    this.save.data.carsStolen++;
+    this.save.scheduleSave();
+    this.sound.playCarDoor();
+    this.sound.playGearShift();
+    const witnessed = this.pedestrians.notifyCrime(physics.position, crimeReason, 32);
+    this.pedestrians.alertDanger(physics.position, 22);
+    this.police.addHeat(witnessed ? directHeat + 1 : directHeat, crimeReason, physics.position);
+    this.hud.setStealPrompt(null);
+    this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
+    this.hud.showNotification(crimeReason, `${label} is yours — lose the heat!`, 2.6);
+    this.setRivalPrompt(null);
+  }
+
+  private stealCar(civic: VehicleEntry): void {
     this.sound.init();
     this.parkActiveCar();
     this.civicCars = this.civicCars.filter((c) => c !== civic);
@@ -780,34 +908,40 @@ class GameApp {
 
     this.save.data.carsStolen++;
     this.save.scheduleSave();
+    this.sound.playCarDoor();
     this.sound.playGearShift();
     this.sound.playBeep(460, 0.22);
-    this.police.addHeat(2, 'GRAND THEFT AUTO');
+
+    const witnessed = this.pedestrians.notifyCrime(civic.physics.position, 'GRAND THEFT AUTO', 30);
+    if (!witnessed) {
+      // Unwitnessed theft still risks a car alarm, but rewards stealth!
+      this.police.addHeat(1, 'CAR ALARM TRIGGERED', civic.physics.position);
+    }
+    this.pedestrians.alertDanger(civic.physics.position, 18);
+
     this.hud.setStealPrompt(null);
     this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
     this.hud.showNotification(
-      'VEHICLE STOLEN',
-      `${civic.name}'s car is yours. Lose the police to keep it.`,
+      witnessed ? 'WITNESSED THEFT!' : 'VEHICLE STOLEN',
+      witnessed
+        ? `Pedestrian spotted you stealing ${civic.name}'s car!`
+        : `${civic.name}'s car hotwired — lose the police to keep it.`,
       3.0
     );
     this.setRivalPrompt(null);
 
-    // Respawn a fresh replacement at the original spot after 90 seconds so the city never runs dry.
-    const spawnSpec = {
-      x: civic.physics.lastSafePosition.x || civic.physics.position.x,
-      z: civic.physics.lastSafePosition.z || civic.physics.position.z,
-      heading: civic.physics.lastSafeRotation || civic.physics.rotation.y,
-      color: (civic.mesh.root.userData.color as string) || '#6b7280',
-      name: civic.name
-    };
-    window.setTimeout(() => {
-      // Only respawn if the car is no longer in the player's hands (they may have abandoned it).
-      const stillOwnedByPlayer = this.physics === civic.physics
-        || this.parkedCars.some((p) => p.physics === civic.physics);
-      if (!stillOwnedByPlayer) {
-        this.createCivicCar(spawnSpec);
-      }
-    }, 90_000);
+    // Respawn a fresh replacement at the exact original home spot & color after 90s.
+    if (civic.spawnSpec) {
+      const home = civic.spawnSpec;
+      window.setTimeout(() => {
+        const occupied = this.civicCars.some(
+          (c) => Math.hypot(c.physics.position.x - home.x, c.physics.position.z - home.z) < 4
+        );
+        if (!occupied) {
+          this.createCivicCar(home);
+        }
+      }, 90_000);
+    }
   }
 
   /** Re-applies the player-car callbacks after swapping into a different chassis. */
@@ -986,15 +1120,15 @@ class GameApp {
     );
   }
 
-  /** Parked civilian cars: the actual car-theft targets you can hotwire on foot. */
+  /** Parked civilian cars: varied specs & archetypes you can hotwire on foot. */
   private spawnCivicCars(): void {
-    const specs: Array<{ x: number; z: number; heading: number; color: string; name: string }> = [
-      { x: 24, z: 34, heading: -1.2, color: '#0ea5e9', name: 'Aiko' },
-      { x: 50.5, z: 62, heading: 0, color: '#f97316', name: 'Takeda' },
-      { x: 50.5, z: 108, heading: Math.PI, color: '#22c55e', name: 'Rin' },
-      { x: 118, z: 2, heading: Math.PI * 0.5, color: '#e11d48', name: 'Jiro' },
-      { x: 50.5, z: -72, heading: 0, color: '#a855f7', name: 'Nao' },
-      { x: 170, z: -157, heading: Math.PI * 0.5, color: '#facc15', name: 'Ken' }
+    const specs: CivicSpawnSpec[] = [
+      { x: 24, z: 34, heading: -1.2, color: '#0ea5e9', name: 'Aiko', archetype: 'TOUGE' },
+      { x: 50.5, z: 62, heading: 0, color: '#f97316', name: 'Takeda', archetype: 'DRIFT' },
+      { x: 50.5, z: 108, heading: Math.PI, color: '#22c55e', name: 'Rin', archetype: 'TOUGE' },
+      { x: 118, z: 2, heading: Math.PI * 0.5, color: '#e11d48', name: 'Jiro', archetype: 'HYPER' },
+      { x: 50.5, z: -72, heading: 0, color: '#a855f7', name: 'Nao', archetype: 'DRIFT' },
+      { x: 170, z: -157, heading: Math.PI * 0.5, color: '#facc15', name: 'Ken', archetype: 'HYPER' }
     ];
 
     for (const spec of specs) {
@@ -1002,35 +1136,48 @@ class GameApp {
     }
   }
 
-  private createCivicCar(spec: { x: number; z: number; heading: number; color: string; name: string }): void {
+  private createCivicCar(spec: CivicSpawnSpec): void {
     const physics = new CarPhysics();
     physics.enforceTrackWalls = false;
     physics.groundHeightSampler = this.sampleUnifiedGround;
     physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
+    physics.applyArchetype(spec.archetype);
 
     const ground = this.sampleUnifiedGround(spec.x, spec.z);
     physics.resetToTrack(new THREE.Vector3(spec.x, ground.height, spec.z), spec.heading);
     // Nudge out of any building collider so the car never spawns inside a wall.
     this.openWorld.resolveCollision(physics.position, new THREE.Vector3(), 1.5);
     physics.position.y = this.sampleUnifiedGround(physics.position.x, physics.position.z).height;
+    physics.lastSafePosition.copy(physics.position);
+    physics.lastSafeRotation = physics.rotation.y;
 
     const mesh = new CarMesh();
     mesh.setColor(spec.color);
-    mesh.root.position.copy(physics.position);
-    mesh.root.rotation.y = physics.rotation.y;
+    mesh.update(physics, 0, 0.016);
     this.scene.add(mesh.root);
 
-    this.civicCars.push({ physics, mesh, name: spec.name });
+    this.civicCars.push({ physics, mesh, name: spec.name, spawnSpec: spec });
   }
 
-  private syncParkedMeshes(): void {
-    for (const c of this.civicCars) {
-      c.mesh.root.position.copy(c.physics.position);
-      c.mesh.root.rotation.y = c.physics.rotation.y;
-    }
+  private updateParkedVehicles(dt: number): void {
+    const idleInput = {
+      throttle: 0,
+      brake: 0,
+      steer: 0,
+      handbrake: true,
+      clutch: false,
+      shiftUp: false,
+      shiftDown: false,
+      reset: false
+    };
     for (const c of this.parkedCars) {
-      c.mesh.root.position.copy(c.physics.position);
-      c.mesh.root.rotation.y = c.physics.rotation.y;
+      if (c.physics.speedKmh > 0.6 || c.physics.isAirborne) {
+        c.physics.update(dt, idleInput, false);
+      }
+      c.mesh.update(c.physics, 0, dt);
+    }
+    for (const c of this.civicCars) {
+      c.mesh.update(c.physics, 0, dt);
     }
   }
 
@@ -1671,17 +1818,42 @@ class GameApp {
         this.avatarMesh.updateAnimation(dt, this.charCtrl.animState);
         this.avatarMesh.setNameAndHp(this.lobbyUI.config.playerName, this.charCtrl.hp);
 
-        this.physics.update(dt, { throttle: 0, brake: 1, steer: 0, handbrake: true, clutch: false, shiftUp: false, shiftDown: false, reset: false }, false);
+        this.physics.update(dt, { throttle: 0, brake: 0, steer: 0, handbrake: true, clutch: false, shiftUp: false, shiftDown: false, reset: false }, false);
         this.carMesh.update(this.physics, 0, dt);
-        this.sound.updateEngineSound(1000, 9500, 0, false, false, 0);
+        this.sound.updateEngineSound(1000, 9500, 0, false, false, 0, false);
         this.sound.updateTireSkid(0);
 
+        // Footstep cadence when walking/running on ground
+        if (this.charCtrl.isGrounded && (this.charCtrl.animState === 'WALK' || this.charCtrl.animState === 'RUN')) {
+          const isSprint = this.charCtrl.animState === 'RUN';
+          this.footstepTimer -= dt;
+          if (this.footstepTimer <= 0) {
+            this.sound.playFootstep(isSprint);
+            this.footstepTimer = isSprint ? 0.28 : 0.44;
+          }
+        } else {
+          this.footstepTimer = 0.06;
+        }
+        if (charInputs.jump && this.charCtrl.velocity.y > 7.5) {
+          this.sound.playJump();
+        }
+
         const nearCar = this.findNearestParkedCar(5.0) !== null;
+        const nearCop = this.police.units.find(
+          (u) => u.physics.speedKmh < 22 && Math.hypot(this.charCtrl.position.x - u.physics.position.x, this.charCtrl.position.z - u.physics.position.z) < 4.4
+        ) || null;
+        const nearTraffic = this.cityCruisers.find(
+          (c) => c.physics.speedKmh < 22 && Math.hypot(this.charCtrl.position.x - c.physics.position.x, this.charCtrl.position.z - c.physics.position.z) < 4.4
+        ) || null;
         this.nearbyCivic = this.findNearestCivicCar(4.2);
-        const canAct = nearCar || this.nearbyCivic !== null;
+
+        const stealLabel = nearCop
+          ? 'Police Cruiser'
+          : (nearTraffic ? `${nearTraffic.name}'s Coupe` : (this.nearbyCivic ? this.nearbyCivic.name : null));
+        const canAct = nearCar || stealLabel !== null;
         this.hud.setOnFootMode(true, canAct, this.charCtrl.hp, this.physics.gearboxType);
-        this.hud.setFootAction(canAct, nearCar ? 'Drive Car' : (this.nearbyCivic ? 'Steal Car' : 'Walk to Car'));
-        this.hud.setStealPrompt(!nearCar && this.nearbyCivic ? this.nearbyCivic.name : null);
+        this.hud.setFootAction(canAct, nearCar ? 'Drive Car' : (stealLabel ? 'Steal Car' : 'Walk to Car'));
+        this.hud.setStealPrompt(!nearCar ? stealLabel : null);
       }
 
       // Lap timer ticks even when player is on foot during a timed race
@@ -1692,6 +1864,10 @@ class GameApp {
 
       // Check proximity to In-World GP Race Start Portal (0, 0, -4)
       const activePos = this.inCar ? this.physics.position : this.charCtrl.position;
+      const activeVel = this.inCar ? this.physics.velocity : this.charCtrl.velocity;
+
+      // Update ocean waves & smashable traffic cones!
+      this.openWorld.updateWorldDynamics(dt, this.elapsedSec, activePos, activeVel, this.inCar);
 
       // District tracking & first-discovery bonus
       const districtId = this.openWorld.getDistrictAt(activePos.x, activePos.z);
@@ -1735,11 +1911,17 @@ class GameApp {
         bot.update(dt, canDrive, allTrackCars, playerProg);
       }
 
+      // Update Living Neo Velo Pedestrians (walking, fleeing, witnessing & reporting crimes)
+      this.pedestrians.update(dt, activePos, this.physics.position, this.physics.speedKmh, this.inCar);
+
       // Update Friendly City Traffic Cruisers
       const cityPositions = this.cityCruisers.map(c => c.physics.position);
+      const pedPositions = this.pedestrians.agents
+        .filter((p) => !p.controller.isDead)
+        .map((p) => p.controller.position);
       const footRef = !this.inCar ? this.charCtrl.position : null;
       for (const cruiser of this.cityCruisers) {
-        cruiser.update(dt, this.physics.position, footRef, cityPositions);
+        cruiser.update(dt, this.physics.position, footRef, cityPositions, pedPositions);
       }
 
       // Police heat, pursuit, sirens and on-foot arrests
@@ -1748,7 +1930,8 @@ class GameApp {
           dt,
           activePos,
           this.inCar || this.charCtrl.isDead,
-          this.inCar ? this.physics : null
+          this.inCar ? this.physics : null,
+          this.charCtrl.isDead
         );
         this.sound.updateSiren(
           this.police.units.length > 0,
@@ -1783,7 +1966,7 @@ class GameApp {
       }
 
       this.resolveCarVsCarCollisions();
-      this.syncParkedMeshes();
+      this.updateParkedVehicles(dt);
 
       // Update City Sparring Fighters
       for (const f of this.sparringFighters) {
@@ -1865,6 +2048,9 @@ class GameApp {
         .filter(f => !f.isDead)
         .map(f => ({ x: f.controller.position.x, z: f.controller.position.z, color: '#fb923c' })),
       ...this.civicCars.map(c => ({ x: c.physics.position.x, z: c.physics.position.z, color: '#a3e635' })),
+      ...this.pedestrians.agents
+        .filter(p => !p.controller.isDead)
+        .map(p => ({ x: p.controller.position.x, z: p.controller.position.z, color: p.state === 'WITNESS' ? '#f43f5e' : '#cbd5e1', size: 2.0 })),
       ...Array.from(this.remotePeers.values()).map(p => ({
         x: p.lastState.inCar ? p.lastState.carX : p.lastState.x,
         z: p.lastState.inCar ? p.lastState.carZ : p.lastState.z,

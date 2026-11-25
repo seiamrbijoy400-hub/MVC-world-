@@ -32,14 +32,17 @@ export class CharacterController {
 
   private punchTimer = 0;
   private punchCooldown = 0;
+  private hitStunTimer = 0;
   private koTimer = 0;
   private sinceDamage = 0;
   private wasJump = false;
   private wasPunch = false;
+  private wasGrounded = true;
 
   public groundHeightSampler: (x: number, z: number) => number = () => 0;
   public worldCollider: (pos: THREE.Vector3, vel: THREE.Vector3, radius: number) => boolean = () => false;
   public onPunchStrike: (origin: THREE.Vector3, forward: THREE.Vector3) => void = () => {};
+  public onLand: (impactSpeed: number) => void = () => {};
   /** Fired once when HP hits zero. */
   public onDeath: (pos: THREE.Vector3) => void = () => {};
   /** Fired after the respawn timer expires and HP is restored. */
@@ -53,6 +56,10 @@ export class CharacterController {
     this.isDead = false;
     this.koTimer = 0;
     this.punchTimer = 0;
+    this.punchCooldown = 0;
+    this.hitStunTimer = 0;
+    this.isGrounded = true;
+    this.wasGrounded = true;
     this.animState = 'IDLE';
   }
 
@@ -61,17 +68,21 @@ export class CharacterController {
     if (this.isDead || this.koTimer > 0) return false;
     this.hp = Math.max(0, this.hp - damage);
     this.sinceDamage = 0;
-    this.velocity.x += dirX * 9.5;
-    this.velocity.z += dirZ * 9.5;
-    this.velocity.y = 4.2;
+    this.punchTimer = 0;
+    this.velocity.x += dirX * 7.5;
+    this.velocity.z += dirZ * 7.5;
+    this.velocity.y = Math.max(this.velocity.y, 2.8);
     this.isGrounded = false;
     if (this.hp <= 0) {
       this.isDead = true;
+      this.hitStunTimer = 0;
       this.koTimer = Math.max(1.0, this.respawnDelay);
       this.animState = 'KO';
       this.onDeath(this.position.clone());
       return true;
     }
+    this.hitStunTimer = 0.28;
+    this.animState = 'HIT';
     return false;
   }
 
@@ -80,6 +91,8 @@ export class CharacterController {
     if (this.isDead) return;
     this.hp = 0;
     this.isDead = true;
+    this.hitStunTimer = 0;
+    this.punchTimer = 0;
     this.koTimer = Math.max(1.0, this.respawnDelay);
     this.animState = 'KO';
     this.onDeath(this.position.clone());
@@ -93,9 +106,12 @@ export class CharacterController {
     this.hp = this.maxHp;
     this.isDead = false;
     this.koTimer = 0;
+    this.hitStunTimer = 0;
     this.sinceDamage = 0;
     this.punchTimer = 0;
     this.punchCooldown = 0;
+    this.isGrounded = true;
+    this.wasGrounded = true;
     this.animState = 'IDLE';
     this.onRespawn(this.position.clone());
   }
@@ -109,6 +125,7 @@ export class CharacterController {
 
     if (this.punchCooldown > 0) this.punchCooldown -= dt;
     if (this.punchTimer > 0) this.punchTimer -= dt;
+    if (this.hitStunTimer > 0) this.hitStunTimer -= dt;
 
     // Out-of-combat recovery: low HP is dangerous, not permanent.
     this.sinceDamage += dt;
@@ -135,10 +152,10 @@ export class CharacterController {
       return;
     }
 
-    // Trigger Punch (edge-triggered)
+    // Trigger Punch (edge-triggered, blocked during hit stun)
     const punchTrig = inputs.punch && !this.wasPunch;
     this.wasPunch = inputs.punch;
-    if (punchTrig && this.punchCooldown <= 0 && this.isGrounded) {
+    if (punchTrig && this.punchCooldown <= 0 && this.hitStunTimer <= 0 && this.isGrounded) {
       this.punchTimer = 0.34;
       this.punchCooldown = 0.42;
       const fwd = this.getForwardVector();
@@ -147,26 +164,27 @@ export class CharacterController {
       this.onPunchStrike(this.position.clone(), fwd);
     }
 
-    // Camera-Relative Direction
+    // Camera-Relative Direction (suppressed briefly during hit stagger)
+    const canSteer = this.hitStunTimer <= 0;
     const camFwdX = -Math.sin(cameraYaw);
     const camFwdZ = -Math.cos(cameraYaw);
     const camRgtX = Math.cos(cameraYaw);
     const camRgtZ = -Math.sin(cameraYaw);
 
-    let wishX = camFwdX * inputs.moveY + camRgtX * inputs.moveX;
-    let wishZ = camFwdZ * inputs.moveY + camRgtZ * inputs.moveX;
+    let wishX = canSteer ? (camFwdX * inputs.moveY + camRgtX * inputs.moveX) : 0;
+    let wishZ = canSteer ? (camFwdZ * inputs.moveY + camRgtZ * inputs.moveX) : 0;
     const wishLen = Math.hypot(wishX, wishZ);
     if (wishLen > 0.01) {
       wishX /= wishLen;
       wishZ /= wishLen;
     }
 
-    const moveMag = Math.min(1, Math.hypot(inputs.moveX, inputs.moveY));
+    const moveMag = canSteer ? Math.min(1, Math.hypot(inputs.moveX, inputs.moveY)) : 0;
     const maxSpeed = inputs.sprint ? 9.6 : 4.8;
     const targetVx = wishX * maxSpeed * moveMag;
     const targetVz = wishZ * maxSpeed * moveMag;
 
-    const accel = this.isGrounded ? 15 : 6;
+    const accel = this.hitStunTimer > 0 ? 4 : (this.isGrounded ? 15 : 6);
     this.velocity.x = THREE.MathUtils.damp(this.velocity.x, targetVx, accel, dt);
     this.velocity.z = THREE.MathUtils.damp(this.velocity.z, targetVz, accel, dt);
 
@@ -182,7 +200,7 @@ export class CharacterController {
     // Jump
     const jumpTrig = inputs.jump && !this.wasJump;
     this.wasJump = inputs.jump;
-    if (jumpTrig && this.isGrounded) {
+    if (jumpTrig && this.isGrounded && canSteer) {
       this.velocity.y = 8.8;
       this.isGrounded = false;
     }
@@ -197,16 +215,23 @@ export class CharacterController {
     // Ground & Ramp Height Snap
     const groundY = this.groundHeightSampler(this.position.x, this.position.z);
     if (this.position.y <= groundY + 0.08 && this.velocity.y <= 0.5) {
+      const impactVy = Math.abs(this.velocity.y);
       this.position.y = groundY;
       this.velocity.y = 0;
+      if (!this.wasGrounded && impactVy > 3.5) {
+        this.onLand(impactVy);
+      }
       this.isGrounded = true;
     } else if (this.position.y > groundY + 0.12) {
       this.isGrounded = false;
     }
+    this.wasGrounded = this.isGrounded;
 
     // Determine Animation State
     const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-    if (this.punchTimer > 0) {
+    if (this.hitStunTimer > 0) {
+      this.animState = 'HIT';
+    } else if (this.punchTimer > 0) {
       this.animState = 'PUNCH';
     } else if (!this.isGrounded) {
       this.animState = 'JUMP';

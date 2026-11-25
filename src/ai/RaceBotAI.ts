@@ -178,13 +178,15 @@ export class RaceBot {
 
   public dispose(scene: THREE.Scene): void {
     scene.remove(this.mesh.root);
+    this.mesh.dispose();
   }
 }
 
-/** Friendly Open-World City Traffic Bot: obeys lanes, yields to pedestrians, & waves/challenges on horn! */
+/** Friendly Open-World City Traffic Bot: obeys right-hand lanes, yields to pedestrians & intersections, & challenges on horn! */
 export class CityCruiserBot {
   public id: string;
   public name: string;
+  public color: string;
   public physics: CarPhysics;
   public mesh: CarMesh;
   private route: THREE.Vector3[];
@@ -193,6 +195,9 @@ export class CityCruiserBot {
   private emojiTimer = 0;
   private friendlyCooldown = 0;
   private challengeTimer = 0;
+  private stuckTimer = 0;
+  private reverseTimer = 0;
+  private laneOffset = 2.8;
 
   constructor(
     id: string,
@@ -206,6 +211,7 @@ export class CityCruiserBot {
   ) {
     this.id = id;
     this.name = name;
+    this.color = color;
     this.route = route;
     this.wpIndex = startWpIndex % route.length;
 
@@ -213,17 +219,22 @@ export class CityCruiserBot {
     this.physics.enforceTrackWalls = false;
     this.physics.groundHeightSampler = (x, z) => {
       const g = track.sampleGround(x, z);
-      return { ...g, isRoad: g.isRoad || openWorld.isInsideCityOrPlayground(x, z) };
+      const rH = openWorld.sampleRampHeight(x, z);
+      return { ...g, height: Math.max(g.height, rH), isRoad: g.isRoad || openWorld.isInsideCityOrPlayground(x, z) || rH > 0 };
     };
     this.physics.worldCollider = (pos, vel, rad) => openWorld.resolveCollision(pos, vel, rad);
 
     const start = this.route[this.wpIndex];
     const next = this.route[(this.wpIndex + 1) % this.route.length];
-    const heading = Math.atan2(-(next.x - start.x), -(next.z - start.z));
-    this.physics.resetToTrack(start, heading);
+    const dir = new THREE.Vector3(next.x - start.x, 0, next.z - start.z).normalize();
+    const right = new THREE.Vector3(-dir.z, 0, dir.x);
+    const spawnPos = start.clone().addScaledVector(right, this.laneOffset);
+    const heading = Math.atan2(-dir.x, -dir.z);
+    this.physics.resetToTrack(spawnPos, heading);
 
     this.mesh = new CarMesh();
     this.mesh.setColor(color);
+    this.mesh.setHeadlights(true);
     scene.add(this.mesh.root);
 
     this.emojiSprite = new THREE.Sprite(
@@ -233,6 +244,15 @@ export class CityCruiserBot {
     this.emojiSprite.scale.set(1.3, 1.3, 1);
     this.emojiSprite.visible = false;
     this.mesh.root.add(this.emojiSprite);
+  }
+
+  /** Strips traffic-bot sprite when the player hijacks this car. */
+  public detachForTheft(): { physics: CarPhysics; mesh: CarMesh; name: string } {
+    this.mesh.root.remove(this.emojiSprite);
+    const mat = this.emojiSprite.material as THREE.SpriteMaterial;
+    if (mat.map) mat.map.dispose();
+    mat.dispose();
+    return { physics: this.physics, mesh: this.mesh, name: this.name };
   }
 
   public showReaction(emoji: string): void {
@@ -268,7 +288,8 @@ export class CityCruiserBot {
     dt: number,
     playerCarPos: THREE.Vector3,
     playerFootPos: THREE.Vector3 | null,
-    otherTraffic: THREE.Vector3[]
+    otherTraffic: THREE.Vector3[],
+    pedestrians: THREE.Vector3[] = []
   ): void {
     if (this.friendlyCooldown > 0) this.friendlyCooldown -= dt;
     if (this.challengeTimer > 0) this.challengeTimer -= dt;
@@ -286,15 +307,26 @@ export class CityCruiserBot {
       this.friendlyCooldown = 9.0;
     }
 
+    const prevIdx = (this.wpIndex - 1 + this.route.length) % this.route.length;
+    const prevWp = this.route[prevIdx];
     const wp = this.route[this.wpIndex];
-    if (Math.hypot(wp.x - this.physics.position.x, wp.z - this.physics.position.z) < 9.5) {
+    const segDir = wp.clone().sub(prevWp).setY(0).normalize();
+    const segRight = new THREE.Vector3(-segDir.z, 0, segDir.x);
+    const laneTarget = wp.clone().addScaledVector(segRight, this.laneOffset);
+
+    if (Math.hypot(laneTarget.x - this.physics.position.x, laneTarget.z - this.physics.position.z) < 10.5) {
       this.wpIndex = (this.wpIndex + 1) % this.route.length;
     }
 
-    const target = this.route[this.wpIndex];
-    const toTarget = target.clone().sub(this.physics.position);
+    const nextPrev = this.route[(this.wpIndex - 1 + this.route.length) % this.route.length];
+    const nextWp = this.route[this.wpIndex];
+    const nextDir = nextWp.clone().sub(nextPrev).setY(0).normalize();
+    const nextRight = new THREE.Vector3(-nextDir.z, 0, nextDir.x);
+    const target = nextWp.clone().addScaledVector(nextRight, this.laneOffset);
+
+    const toTarget = target.sub(this.physics.position);
     toTarget.y = 0;
-    toTarget.normalize();
+    if (toTarget.lengthSq() > 0.001) toTarget.normalize();
 
     const fwd = this.physics.getForwardVector();
     const rgt = this.physics.getRightVector();
@@ -306,18 +338,19 @@ export class CityCruiserBot {
     const actors: { pos: THREE.Vector3; isFoot: boolean }[] = [
       { pos: playerCarPos, isFoot: false },
       ...(playerFootPos ? [{ pos: playerFootPos, isFoot: true }] : []),
-      ...otherTraffic.filter(p => p !== this.physics.position).map(pos => ({ pos, isFoot: false }))
+      ...otherTraffic.filter(p => p !== this.physics.position).map(pos => ({ pos, isFoot: false })),
+      ...pedestrians.map(pos => ({ pos, isFoot: true }))
     ];
 
     for (const a of actors) {
       const d = a.pos.distanceTo(this.physics.position);
-      const safeRange = a.isFoot ? 15.0 : 12.0;
+      const safeRange = a.isFoot ? 13.0 : 12.0;
       if (d < safeRange) {
         const toA = a.pos.clone().sub(this.physics.position);
         const fProj = toA.dot(fwd);
         const sProj = toA.dot(rgt);
-        if (fProj > 0 && Math.abs(sProj) < (a.isFoot ? 3.5 : 2.8)) {
-          if (fProj < (a.isFoot ? 11.5 : 8.0)) mustYield = true;
+        if (fProj > 0 && Math.abs(sProj) < (a.isFoot ? 3.2 : 2.8)) {
+          if (fProj < (a.isFoot ? 9.5 : 8.0)) mustYield = true;
           else slowDown = true;
           if (!a.isFoot) steer += sProj >= 0 ? -0.35 : 0.35;
         }
@@ -325,25 +358,47 @@ export class CityCruiserBot {
     }
 
     steer = THREE.MathUtils.clamp(steer, -1, 1);
-    const targetSpeedKmh = this.challengeTimer > 0 ? 118 : (slowDown ? 26 : 52);
+    const cornerSlow = Math.abs(steer) > 0.45 ? 0.72 : 1.0;
+    const targetSpeedKmh = (this.challengeTimer > 0 ? 118 : (slowDown ? 24 : 52)) * cornerSlow;
     const speed = this.physics.speedKmh;
 
     let throttle = 0;
     let brake = 0;
-    if (mustYield) {
+    let handbrake = false;
+
+    if (this.reverseTimer > 0) {
+      this.reverseTimer -= dt;
+      brake = 0.65; // triggers auto reverse cleanly
+      steer = -steer;
+    } else if (mustYield) {
       throttle = 0;
-      brake = speed > 2 ? 0.9 : 0.4;
-    } else if (speed < targetSpeedKmh) {
-      throttle = this.challengeTimer > 0 ? 0.92 : 0.48;
-    } else if (speed > targetSpeedKmh + 8) {
-      brake = 0.55;
+      // Only use brake while rolling; hold with handbrake when stopped so AUTO doesn't shift to Reverse!
+      if (speed > 2.5) brake = 0.85;
+      else handbrake = true;
+      this.stuckTimer = 0;
+    } else {
+      if (speed < targetSpeedKmh) {
+        throttle = this.challengeTimer > 0 ? 0.92 : 0.50;
+      } else if (speed > targetSpeedKmh + 8) {
+        brake = speed > 10 ? 0.5 : 0;
+      }
+
+      if (speed < 2.5 && throttle > 0.2) {
+        this.stuckTimer += dt;
+        if (this.stuckTimer > 2.2) {
+          this.stuckTimer = 0;
+          this.reverseTimer = 1.1;
+        }
+      } else {
+        this.stuckTimer = Math.max(0, this.stuckTimer - dt);
+      }
     }
 
     this.physics.update(dt, {
       throttle,
       brake,
       steer,
-      handbrake: false,
+      handbrake,
       clutch: false,
       shiftUp: false,
       shiftDown: false,

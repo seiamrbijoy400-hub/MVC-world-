@@ -3,17 +3,22 @@ import { CarPhysics } from '../physics/CarPhysics';
 import { CarMesh } from '../graphics/CarMesh';
 import { TrackEnvironment } from '../graphics/TrackEnvironment';
 import { OpenWorldMap } from '../graphics/OpenWorldMap';
+import { RoadGraph, hasLineOfSight } from './RoadGraph';
 
 export interface PoliceHooks {
   /** Fired whenever the wanted level changes. */
   onHeatChanged: (level: number, label: string) => void;
+  /** Fired each frame when arrest progress changes (0..1). */
+  onBustProgress: (progress: number) => void;
   /** Player was caught on foot — pay the fine and get hauled to the station. */
   onBusted: (fine: number, heat: number) => void;
+  /** Player evaded police cleanly after having heat. */
+  onEscaped: () => void;
   /** A police cruiser slammed into something. */
   onImpact: (impactKmh: number, pos: THREE.Vector3) => void;
 }
 
-interface PoliceUnit {
+export interface PoliceUnit {
   physics: CarPhysics;
   mesh: CarMesh;
   lightA: THREE.Mesh;
@@ -22,38 +27,46 @@ interface PoliceUnit {
   stuckTimer: number;
   reverseTimer: number;
   age: number;
+  mode: 'PURSUING' | 'SEARCHING';
 }
 
 const HEAT_LABELS = ['CLEAN', 'SUSPECT', 'WANTED', 'HIGH RISK', 'MOST WANTED', 'CITY LOCKDOWN'];
 
 /** Safe road-side spawn points around the city loops. */
 const SPAWN_POINTS: Array<[number, number]> = [
-  [46, -160], [110, -160], [180, -160], [224, -160],
-  [224, -90], [224, 30], [224, 150],
-  [160, 150], [90, 150], [46, 150],
-  [46, 80], [46, 10], [46, -40], [46, -95],
-  [84, -40], [122, -40], [122, 0], [122, 30], [84, 30]
+  [46, -160], [122, -160], [224, -160], [296, -160],
+  [296, -40], [296, 30], [296, 150], [224, 150],
+  [122, 150], [46, 150], [46, 30], [46, -40],
+  [122, -40], [224, -40], [224, 30], [122, 30],
+  [122, 224], [224, 224], [46, 224]
 ];
 
 export class PoliceSystem {
   public heat = 0;
   public units: PoliceUnit[] = [];
   public nearestDistance = 999;
+  public isSpotted = false;
+  public bustProgress = 0;
   public onHooks: PoliceHooks = {
     onHeatChanged: () => {},
+    onBustProgress: () => {},
     onBusted: () => {},
+    onEscaped: () => {},
     onImpact: () => {}
   };
 
   private scene: THREE.Scene;
   private track: TrackEnvironment;
   private openWorld: OpenWorldMap;
+  private roadGraph = new RoadGraph();
 
   private spawnCooldown = 0;
   private crimeCooldown = 0;
   private decayTimer = 0;
   private bustCooldown = 0;
+  private lastKnownPos = new THREE.Vector3();
   private scratch = new THREE.Vector3();
+  private navScratch = new THREE.Vector3();
   private bodyMat: THREE.MeshStandardMaterial;
 
   constructor(scene: THREE.Scene, track: TrackEnvironment, openWorld: OpenWorldMap) {
@@ -71,67 +84,127 @@ export class PoliceSystem {
     return this.heat > 0 || this.units.length > 0;
   }
 
-  public addHeat(amount: number, reason = ''): void {
+  public addHeat(amount: number, reason = '', crimePos?: THREE.Vector3): void {
     if (amount <= 0) return;
     const before = this.heat;
     this.heat = Math.min(5, this.heat + amount);
-    this.crimeCooldown = 18;
+    this.crimeCooldown = 14;
     this.decayTimer = 0;
     this.spawnCooldown = Math.min(this.spawnCooldown, 0.8);
+    if (crimePos) this.lastKnownPos.copy(crimePos);
     if (this.heat !== before) {
       this.onHooks.onHeatChanged(this.heat, reason || HEAT_LABELS[this.heat]);
     }
   }
 
-  public clearHeat(): void {
-    if (this.heat === 0 && this.units.length === 0) return;
+  public clearHeat(escaped = false): void {
+    const hadHeat = this.heat > 0;
+    if (!hadHeat && this.units.length === 0) return;
     this.heat = 0;
     this.crimeCooldown = 0;
     this.decayTimer = 0;
+    this.isSpotted = false;
+    this.setBustProgress(0);
     this.onHooks.onHeatChanged(0, HEAT_LABELS[0]);
+    if (escaped && hadHeat) {
+      this.onHooks.onEscaped();
+    }
     this.despawnAll();
   }
 
   public despawnAll(): void {
     for (const unit of this.units) {
       this.scene.remove(unit.mesh.root);
+      unit.mesh.dispose();
     }
     this.units = [];
     this.nearestDistance = 999;
+  }
+
+  /** Allows the player to steal a nearby stopped police cruiser cleanly without dual ownership. */
+  public takeNearestUnit(pos: THREE.Vector3, maxRadius = 4.4): { physics: CarPhysics; mesh: CarMesh } | null {
+    for (let i = 0; i < this.units.length; i++) {
+      const u = this.units[i];
+      if (u.physics.speedKmh > 22) continue;
+      const d = Math.hypot(u.physics.position.x - pos.x, u.physics.position.z - pos.z);
+      if (d <= maxRadius) {
+        this.units.splice(i, 1);
+        this.setBustProgress(0);
+        u.physics.onWallCollision = () => {};
+        return { physics: u.physics, mesh: u.mesh };
+      }
+    }
+    return null;
+  }
+
+  private setBustProgress(next: number): void {
+    const clamped = Math.max(0, Math.min(1, next));
+    if (Math.abs(clamped - this.bustProgress) > 0.005 || (clamped === 0 && this.bustProgress !== 0)) {
+      this.bustProgress = clamped;
+      this.onHooks.onBustProgress(clamped);
+    }
   }
 
   public update(
     dt: number,
     playerPos: THREE.Vector3,
     playerInCar: boolean,
-    playerCar: CarPhysics | null
+    playerCar: CarPhysics | null,
+    playerIsDead = false
   ): void {
     if (this.spawnCooldown > 0) this.spawnCooldown -= dt;
     if (this.bustCooldown > 0) this.bustCooldown -= dt;
 
-    // Heat decay: lay low, away from every cruiser, and the city forgets you.
+    let spottedNow = false;
+    for (const unit of this.units) {
+      const d = Math.hypot(playerPos.x - unit.physics.position.x, playerPos.z - unit.physics.position.z);
+      const los = hasLineOfSight(
+        unit.physics.position.x,
+        unit.physics.position.z,
+        playerPos.x,
+        playerPos.z,
+        this.openWorld.colliders
+      );
+      if (d < 95 && los) {
+        spottedNow = true;
+        unit.mode = 'PURSUING';
+      } else {
+        unit.mode = 'SEARCHING';
+      }
+    }
+    if (spottedNow) {
+      this.lastKnownPos.copy(playerPos);
+    }
+    this.isSpotted = spottedNow;
+
     if (this.crimeCooldown > 0) {
       this.crimeCooldown -= dt;
     } else if (this.heat > 0) {
-      if (this.nearestDistance > 55) this.decayTimer += dt;
-      else this.decayTimer = Math.max(0, this.decayTimer - dt * 2);
+      if (!spottedNow || this.nearestDistance > 65) {
+        this.decayTimer += dt * (this.nearestDistance > 90 ? 1.35 : 1.0);
+      } else {
+        this.decayTimer = Math.max(0, this.decayTimer - dt * 2.0);
+      }
 
-      if (this.decayTimer > 7) {
+      if (this.decayTimer > 6.5) {
         this.decayTimer = 0;
         this.heat = Math.max(0, this.heat - 1);
+        if (this.heat === 0) {
+          this.clearHeat(true);
+          return;
+        }
         this.onHooks.onHeatChanged(this.heat, HEAT_LABELS[this.heat]);
       }
     }
 
     const targetUnits = Math.min(4, this.heat);
-
     if (this.heat > 0 && this.units.length < targetUnits && this.spawnCooldown <= 0) {
       this.spawnUnit(playerPos);
       this.spawnCooldown = 2.6;
     }
 
     this.nearestDistance = 999;
-    let bustedThisFrame = false;
+    let closestSlowCop = false;
 
     for (let i = this.units.length - 1; i >= 0; i--) {
       const unit = this.units[i];
@@ -142,7 +215,6 @@ export class PoliceSystem {
       const dist = Math.hypot(dx, dz);
       if (dist < this.nearestDistance) this.nearestDistance = dist;
 
-      // Lost the player completely? The unit retires and heat will decay.
       if (dist > 340) {
         this.removeUnit(i);
         continue;
@@ -150,28 +222,36 @@ export class PoliceSystem {
 
       this.driveUnit(unit, dt, playerPos, dist, playerInCar, playerCar);
 
-      // On-foot arrest check: cruiser has to be close and slow.
       if (
         !playerInCar &&
-        !bustedThisFrame &&
+        !playerIsDead &&
         this.heat > 0 &&
         this.bustCooldown <= 0 &&
-        dist < 6.5 &&
-        unit.physics.speedKmh < 34
+        dist < 6.8 &&
+        unit.physics.speedKmh < 32 &&
+        Math.abs(playerPos.y - unit.physics.position.y) < 3.0
       ) {
-        bustedThisFrame = true;
+        closestSlowCop = true;
+      }
+    }
+
+    if (closestSlowCop) {
+      const next = this.bustProgress + dt * 0.52;
+      if (next >= 1.0) {
         this.bustCooldown = 4;
         const fine = Math.min(2500, 250 + this.heat * 250);
         const heatAtBust = this.heat;
-        this.clearHeat();
+        this.clearHeat(false);
         this.onHooks.onBusted(fine, heatAtBust);
         return;
       }
+      this.setBustProgress(next);
+    } else if (this.bustProgress > 0) {
+      this.setBustProgress(this.bustProgress - dt * 0.75);
     }
   }
 
   private spawnUnit(playerPos: THREE.Vector3): void {
-    // Pick the safest ring point far enough away to not teleport on top of the player.
     let best: [number, number] = SPAWN_POINTS[0];
     let bestScore = -Infinity;
     for (const p of SPAWN_POINTS) {
@@ -185,13 +265,19 @@ export class PoliceSystem {
 
     const heading = Math.atan2(-(playerPos.x - best[0]), -(playerPos.z - best[1]));
     const ground = this.track.sampleGround(best[0], best[1]);
-    const spawn = new THREE.Vector3(best[0], ground.height, best[1]);
+    const rampH = this.openWorld.sampleRampHeight(best[0], best[1]);
+    const spawn = new THREE.Vector3(best[0], Math.max(ground.height, rampH), best[1]);
 
     const physics = new CarPhysics();
     physics.enforceTrackWalls = false;
     physics.groundHeightSampler = (x, z) => {
       const g = this.track.sampleGround(x, z);
-      return { ...g, isRoad: g.isRoad || this.openWorld.isInsideCityOrPlayground(x, z) };
+      const rH = this.openWorld.sampleRampHeight(x, z);
+      return {
+        ...g,
+        height: Math.max(g.height, rH),
+        isRoad: g.isRoad || this.openWorld.isInsideCityOrPlayground(x, z) || rH > 0
+      };
     };
     physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
     physics.resetToTrack(spawn, heading);
@@ -204,7 +290,6 @@ export class PoliceSystem {
     mesh.setHeadlights(true);
     this.scene.add(mesh.root);
 
-    // Roof light bar
     const barBase = new THREE.Mesh(
       new THREE.BoxGeometry(1.05, 0.075, 0.26),
       new THREE.MeshStandardMaterial({ color: 0x0b1120, roughness: 0.5, metalness: 0.4 })
@@ -219,14 +304,11 @@ export class PoliceSystem {
     lightB.position.set(0.24, 1.075, 0.12);
     mesh.root.add(lightA, lightB);
 
-    // Black/white livery stripe
-    const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(1.9, 0.34, 1.1),
-      this.bodyMat
-    );
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.34, 1.1), this.bodyMat);
     stripe.position.set(0, 0.56, 0.0);
     mesh.root.add(stripe);
 
+    this.lastKnownPos.copy(playerPos);
     this.units.push({
       physics,
       mesh,
@@ -235,7 +317,8 @@ export class PoliceSystem {
       sirenPhase: Math.random() * Math.PI * 2,
       stuckTimer: 0,
       reverseTimer: 0,
-      age: 0
+      age: 0,
+      mode: 'PURSUING'
     });
   }
 
@@ -250,40 +333,51 @@ export class PoliceSystem {
     const fwd = unit.physics.getForwardVector();
     const rgt = unit.physics.getRightVector();
 
-    // Aim at the player, with a tiny pursuit offset so units don't stack perfectly.
-    const toPlayer = this.scratch.set(
-      playerPos.x - unit.physics.position.x,
-      0,
-      playerPos.z - unit.physics.position.z
+    const goalPos = unit.mode === 'PURSUING' ? playerPos : this.lastKnownPos;
+    const hasLOS = hasLineOfSight(
+      unit.physics.position.x,
+      unit.physics.position.z,
+      goalPos.x,
+      goalPos.z,
+      this.openWorld.colliders,
+      1.6
     );
-    if (dist > 0.001) toPlayer.divideScalar(dist);
 
-    const steerDot = toPlayer.x * rgt.x + toPlayer.z * rgt.z;
-    let steer = THREE.MathUtils.clamp(steerDot * 2.6, -1, 1);
+    const steerTarget = hasLOS || dist < 18
+      ? goalPos
+      : this.roadGraph.findNextWaypoint(unit.physics.position, goalPos, this.navScratch);
+
+    const toTarget = this.scratch.set(
+      steerTarget.x - unit.physics.position.x,
+      0,
+      steerTarget.z - unit.physics.position.z
+    );
+    const targetDist = toTarget.length();
+    if (targetDist > 0.001) toTarget.divideScalar(targetDist);
+
+    const steerDot = toTarget.x * rgt.x + toTarget.z * rgt.z;
+    let steer = THREE.MathUtils.clamp(steerDot * 2.4, -1, 1);
 
     let throttle = 0;
     let brake = 0;
 
     if (unit.reverseTimer > 0) {
       unit.reverseTimer -= dt;
-      throttle = 0.55;
-      brake = 0;
+      throttle = 0;
+      brake = 0.72;
       steer = -steer;
     } else {
-      const tooClose = playerInCar ? dist < 6.5 : dist < 7.5;
-      const targetSpeed = tooClose ? 0 : (dist > 40 ? 145 : 95);
+      const tooClose = playerInCar ? dist < 6.5 : dist < 6.0;
+      const targetSpeed = tooClose ? 0 : (hasLOS ? (dist > 40 ? 148 : 96) : 78);
 
       if (unit.physics.speedKmh < targetSpeed - 6) {
-        throttle = dist > 60 ? 1.0 : 0.82;
+        throttle = dist > 60 ? 1.0 : 0.84;
       } else if (unit.physics.speedKmh > targetSpeed + 10) {
-        // Only brake while actually moving: a held brake at a standstill would
-        // make the automatic gearbox drop into reverse.
         brake = unit.physics.speedKmh > 12 ? 0.7 : 0;
       }
 
-      if (!playerInCar && dist < 14) {
-        // Creep up to arrest range, then hold the car still instead of running the player over.
-        if (dist > 6) {
+      if (!playerInCar && dist < 14 && hasLOS) {
+        if (dist > 5.2) {
           throttle = unit.physics.speedKmh < 20 ? 0.34 : 0;
           brake = unit.physics.speedKmh > 30 ? 0.6 : 0;
         } else {
@@ -292,19 +386,17 @@ export class PoliceSystem {
         }
       }
 
-      // Stuck on a wall / traffic: reverse out with opposite lock.
-      if (unit.physics.speedKmh < 3 && throttle > 0.2) {
+      if (unit.physics.speedKmh < 3.5 && throttle > 0.2) {
         unit.stuckTimer += dt;
       } else {
         unit.stuckTimer = Math.max(0, unit.stuckTimer - dt * 2);
       }
-      if (unit.stuckTimer > 1.8) {
+      if (unit.stuckTimer > 1.6) {
         unit.stuckTimer = 0;
-        unit.reverseTimer = 1.15;
+        unit.reverseTimer = 1.1;
       }
     }
 
-    // Small push-away if the player car is directly in front, avoids endless gridlock.
     if (playerInCar && playerCar && dist < 8) {
       const closing = (playerCar.velocity.x - unit.physics.velocity.x) * fwd.x
         + (playerCar.velocity.z - unit.physics.velocity.z) * fwd.z;
@@ -324,7 +416,6 @@ export class PoliceSystem {
 
     unit.mesh.update(unit.physics, brake, dt);
 
-    // Flashing red / blue bar
     unit.sirenPhase += dt * 9.0;
     const red = Math.sin(unit.sirenPhase) > 0;
     (unit.lightA.material as THREE.MeshBasicMaterial).color.setHex(red ? 0xff2a3c : 0x3b0a0f);
@@ -335,6 +426,7 @@ export class PoliceSystem {
     const unit = this.units[index];
     if (!unit) return;
     this.scene.remove(unit.mesh.root);
+    unit.mesh.dispose();
     this.units.splice(index, 1);
   }
 }

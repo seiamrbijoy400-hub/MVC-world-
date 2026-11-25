@@ -331,7 +331,7 @@ export class HumanCharacterMesh {
     this.createContactShadow();
 
     this.hips = new THREE.Group();
-    this.hips.position.y = 0.88;
+    this.hips.position.y = 0.84;
     this.root.add(this.hips);
 
     this.hairMat = new THREE.MeshStandardMaterial({
@@ -1019,12 +1019,14 @@ export class HumanCharacterMesh {
     // Natural eye blink & expressive mouth
     this.updateFacialExpression(dt, state);
 
-    let tHipsY = 0.88;
+    let tHipsY = 0.84;
     let tHipsX = 0;
+    let tHipsRotX = 0;
     let tHipsYaw = 0;
     let tWaistYaw = 0;
     let tTorsoX = 0;
     let tTorsoY = 0;
+    let tTorsoZ = 0;
     let tHeadY = 0;
     let tHeadX = 0;
     let tLLegX = 0;
@@ -1039,12 +1041,13 @@ export class HumanCharacterMesh {
     let tRArmZ = -0.11;
     let tLForeX = -0.22;
     let tRForeX = -0.22;
+    let blendRate = 16;
 
     if (state === 'IDLE') {
       this.animPhase += dt * 2.3;
       const breath = Math.sin(this.animPhase);
-      tHipsY = 0.88 + breath * 0.012;
-      tHipsX = Math.sin(this.animPhase * 0.5) * 0.012;
+      tHipsY = 0.84 + breath * 0.010;
+      tHipsX = Math.sin(this.animPhase * 0.5) * 0.010;
       tTorsoX = breath * 0.018;
       tHeadX = -breath * 0.012;
       tLArmX = Math.sin(this.animPhase * 0.5) * 0.035;
@@ -1053,7 +1056,7 @@ export class HumanCharacterMesh {
       this.animPhase += dt * 8.4;
       const swing = Math.sin(this.animPhase);
       const legAmp = 0.52;
-      tHipsY = 0.87 + Math.abs(Math.sin(this.animPhase)) * 0.036;
+      tHipsY = 0.83 + Math.abs(Math.sin(this.animPhase)) * 0.032;
       tHipsX = swing * 0.022;
       tHipsYaw = swing * 0.10;
       tWaistYaw = -swing * 0.08;
@@ -1071,17 +1074,18 @@ export class HumanCharacterMesh {
       tRArmX = swing * 0.42;
       tLForeX = -0.36 - Math.max(0, -swing) * 0.25;
       tRForeX = -0.36 - Math.max(0, swing) * 0.25;
-    } else if (state === 'RUN') {
-      this.animPhase += dt * 14.2;
+    } else if (state === 'RUN' || state === 'FLEE') {
+      const isFlee = state === 'FLEE';
+      this.animPhase += dt * (isFlee ? 16.5 : 14.2);
       const swing = Math.sin(this.animPhase);
-      const legAmp = 0.96;
-      tHipsY = 0.84 + Math.abs(Math.sin(this.animPhase)) * 0.085;
+      const legAmp = isFlee ? 1.05 : 0.96;
+      tHipsY = 0.81 + Math.abs(Math.sin(this.animPhase)) * 0.075;
       tHipsX = swing * 0.028;
       tHipsYaw = swing * 0.15;
       tWaistYaw = -swing * 0.12;
-      tTorsoX = 0.28;
+      tTorsoX = isFlee ? 0.34 : 0.28;
       tTorsoY = -swing * 0.15;
-      tHeadY = swing * 0.10;
+      tHeadY = isFlee ? Math.sin(this.animPhase * 0.5) * 0.25 : swing * 0.10;
       tHeadX = -0.14;
       tLLegX = swing * legAmp;
       tRLegX = -swing * legAmp;
@@ -1089,14 +1093,14 @@ export class HumanCharacterMesh {
       tRShinX = Math.max(0, swing) * 1.12;
       tLFootX = -(tLLegX + tLShinX) * 0.50 + Math.max(0, -swing) * 0.28;
       tRFootX = -(tRLegX + tRShinX) * 0.50 + Math.max(0, swing) * 0.28;
-      tLArmX = -swing * 0.84;
-      tRArmX = swing * 0.84;
-      tLArmZ = 0.18;
-      tRArmZ = -0.18;
-      tLForeX = -1.05;
-      tRForeX = -1.05;
+      tLArmX = isFlee ? -1.45 + swing * 0.45 : -swing * 0.84;
+      tRArmX = isFlee ? -1.45 - swing * 0.45 : swing * 0.84;
+      tLArmZ = isFlee ? 0.32 : 0.18;
+      tRArmZ = isFlee ? -0.32 : -0.18;
+      tLForeX = isFlee ? -0.75 : -1.05;
+      tRForeX = isFlee ? -0.75 : -1.05;
     } else if (state === 'JUMP') {
-      tHipsY = 0.90;
+      tHipsY = 0.86;
       tTorsoX = 0.12;
       tLArmX = -1.15;
       tRArmX = -1.15;
@@ -1112,47 +1116,70 @@ export class HumanCharacterMesh {
       tRFootX = 0.25;
     } else if (state === 'PUNCH') {
       this.animPhase += dt * 18.0;
-      this.hips.position.y = 0.84;
-      this.hips.position.x = 0;
+      blendRate = 28;
+      tHipsY = 0.80;
       if (this.comboStep === 2) {
-        this.torso.rotation.set(0.05, 0.78, 0);
-        this.rightLeg.rotation.x = 1.42;
-        this.rightShin.rotation.x = 0.12;
-        this.rightFoot.rotation.x = -0.3;
-        this.leftArm.rotation.set(0, 0, 0.8);
-        this.rightArm.rotation.set(0, 0, -0.8);
+        tTorsoX = 0.05;
+        tTorsoY = 0.78;
+        tRLegX = 1.32;
+        tRShinX = 0.12;
+        tRFootX = -0.30;
+        tLArmZ = 0.72;
+        tRArmZ = -0.72;
       } else if (this.comboStep === 1) {
-        this.torso.rotation.set(0.16, 0.58, 0);
-        this.leftArm.rotation.x = -1.55;
-        this.leftForearm.rotation.x = -0.15;
-        this.rightArm.rotation.x = -0.85;
-        this.rightForearm.rotation.x = -1.15;
+        tTorsoX = 0.16;
+        tTorsoY = 0.58;
+        tLArmX = -1.55;
+        tLForeX = -0.15;
+        tRArmX = -0.85;
+        tRForeX = -1.15;
       } else {
-        this.torso.rotation.set(0.16, -0.58, 0);
-        this.rightArm.rotation.x = -1.55;
-        this.rightForearm.rotation.x = -0.15;
-        this.leftArm.rotation.x = -0.85;
-        this.leftForearm.rotation.x = -1.15;
+        tTorsoX = 0.16;
+        tTorsoY = -0.58;
+        tRArmX = -1.55;
+        tRForeX = -0.15;
+        tLArmX = -0.85;
+        tLForeX = -1.15;
       }
-      this.head.rotation.set(0, 0, 0);
-      this.applySecondarySprings(dt, state);
-      return;
+    } else if (state === 'HIT') {
+      blendRate = 24;
+      tHipsY = 0.81;
+      tTorsoX = -0.34;
+      tHeadX = -0.24;
+      tLArmX = -0.45;
+      tRArmX = -0.45;
+      tLArmZ = 0.45;
+      tRArmZ = -0.45;
+      tLForeX = -0.65;
+      tRForeX = -0.65;
     } else if (state === 'KO') {
-      const ks = 1 - Math.exp(-6.5 * dt);
-      this.hips.rotation.x += (Math.PI * 0.48 - this.hips.rotation.x) * ks;
-      this.hips.position.y += (0.24 - this.hips.position.y) * ks;
-      this.applySecondarySprings(dt, state);
-      return;
+      blendRate = 7.5;
+      // Flat prone collapse on the ground: straight legs & relaxed arms so nothing clips the floor
+      tHipsY = 0.13;
+      tHipsRotX = Math.PI * 0.48;
+      tTorsoX = 0.04;
+      tHeadX = -0.18;
+      tLArmX = -0.25;
+      tRArmX = -0.15;
+      tLArmZ = 0.52;
+      tRArmZ = -0.58;
+      tLForeX = -0.35;
+      tRForeX = -0.45;
+      tLLegX = 0.05;
+      tRLegX = -0.04;
+      tLShinX = 0.08;
+      tRShinX = 0.05;
     }
 
-    const s = 1 - Math.exp(-16 * dt);
+    const s = 1 - Math.exp(-blendRate * dt);
     this.hips.position.y += (tHipsY - this.hips.position.y) * s;
     this.hips.position.x += (tHipsX - this.hips.position.x) * s;
     this.hips.rotation.y += (tHipsYaw - this.hips.rotation.y) * s;
-    this.hips.rotation.x += (0 - this.hips.rotation.x) * s;
+    this.hips.rotation.x += (tHipsRotX - this.hips.rotation.x) * s;
     this.waist.rotation.y += (tWaistYaw - this.waist.rotation.y) * s;
     this.torso.rotation.x += (tTorsoX - this.torso.rotation.x) * s;
     this.torso.rotation.y += (tTorsoY - this.torso.rotation.y) * s;
+    this.torso.rotation.z += (tTorsoZ - this.torso.rotation.z) * s;
     this.head.rotation.y += (tHeadY - this.head.rotation.y) * s;
     this.head.rotation.x += (tHeadX - this.head.rotation.x) * s;
     this.leftLeg.rotation.x += (tLLegX - this.leftLeg.rotation.x) * s;
@@ -1169,6 +1196,21 @@ export class HumanCharacterMesh {
     this.rightForearm.rotation.x += (tRForeX - this.rightForearm.rotation.x) * s;
 
     this.applySecondarySprings(dt, state);
+  }
+
+  public dispose(): void {
+    this.root.traverse((obj) => {
+      const m = obj as THREE.Mesh | THREE.Sprite;
+      if ((m as THREE.Mesh).geometry) (m as THREE.Mesh).geometry.dispose();
+      if (m.material) {
+        const mats = Array.isArray(m.material) ? m.material : [m.material];
+        for (const mat of mats) {
+          const anyMat = mat as THREE.MeshStandardMaterial;
+          if (anyMat.map) anyMat.map.dispose();
+          mat.dispose();
+        }
+      }
+    });
   }
 
   private updateFacialExpression(dt: number, state: CharAnimState): void {
@@ -1193,8 +1235,8 @@ export class HumanCharacterMesh {
     }
 
     // Mouth reactiveness
-    if (this.emojiTimer > 0) {
-      this.mouthMesh.scale.set(1.8, 1.35, 1.2);
+    if (this.emojiTimer > 0 || state === 'HIT' || state === 'FLEE') {
+      this.mouthMesh.scale.set(1.8, 1.45, 1.2);
     } else if (state === 'PUNCH' || state === 'RUN') {
       this.mouthMesh.scale.set(1.4, 1.1, 1.1);
     } else {
@@ -1205,9 +1247,10 @@ export class HumanCharacterMesh {
   private applySecondarySprings(dt: number, state: CharAnimState): void {
     const springK = 22;
     const dampC = 0.68;
-    const isMoving = state === 'RUN' || state === 'WALK';
-    const baseTrail = state === 'RUN' ? 0.48 : (state === 'WALK' ? 0.22 : (state === 'JUMP' ? 0.35 : 0.06));
-    const bounce = Math.sin(this.animPhase * 2) * (state === 'RUN' ? 0.11 : (isMoving ? 0.04 : 0.015));
+    const isRunning = state === 'RUN' || state === 'FLEE';
+    const isMoving = isRunning || state === 'WALK';
+    const baseTrail = isRunning ? 0.48 : (state === 'WALK' ? 0.22 : (state === 'JUMP' ? 0.35 : 0.06));
+    const bounce = Math.sin(this.animPhase * 2) * (isRunning ? 0.11 : (isMoving ? 0.04 : 0.015));
 
     if (this.tailPivotL) {
       this.tailVelL += ((baseTrail + bounce) - this.tailPivotL.rotation.x) * springK * dt;

@@ -3,7 +3,7 @@ export type HairStyleId = 'spiky' | 'twintails' | 'ponytail' | 'bob' | 'cyber';
 export type AccessoryId = 'none' | 'visor' | 'headphones' | 'sunglasses' | 'wing';
 export type GameModeId = 'OPEN_WORLD' | 'CIRCUIT_RACE' | 'DRIFT_ARENA';
 export type BotDifficulty = 'CHILL' | 'PRO' | 'INSANE';
-export type CharAnimState = 'IDLE' | 'WALK' | 'RUN' | 'JUMP' | 'PUNCH' | 'KO' | 'DRIVE';
+export type CharAnimState = 'IDLE' | 'WALK' | 'RUN' | 'JUMP' | 'PUNCH' | 'HIT' | 'FLEE' | 'KO' | 'DRIVE';
 
 export interface CharacterAppearance {
   hairStyle: HairStyleId;

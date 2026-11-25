@@ -338,12 +338,23 @@ export class SoundManager {
     throttle: number,
     isLimiter: boolean,
     onCurb: boolean,
-    speedKmh: number
+    speedKmh: number,
+    engineActive = true
   ): void {
     if (!this.ctx || !this.isInitialized || this.isMuted) return;
     if (this.ctx.state === 'suspended') return;
 
     const now = this.ctx.currentTime;
+    if (!engineActive) {
+      if (this.samplesReady && this.lowAccGain && this.highAccGain && this.highDecelGain) {
+        this.lowAccGain.gain.setTargetAtTime(0, now, 0.08);
+        this.highAccGain.gain.setTargetAtTime(0, now, 0.08);
+        this.highDecelGain.gain.setTargetAtTime(0, now, 0.08);
+      }
+      if (this.engineGain) this.engineGain.gain.setTargetAtTime(0, now, 0.08);
+      if (this.curbGain) this.curbGain.gain.setTargetAtTime(0, now, 0.05);
+      return;
+    }
     const rpmRatio = Math.max(0, Math.min(1, (rpm - 1000) / (maxRpm - 1000)));
     const baseFreq = (rpm * 4) / 60;
 
@@ -605,5 +616,101 @@ export class SoundManager {
       osc.start(now);
       osc.stop(now + 1.2);
     } catch {}
+  }
+
+  public playFootstep(isSprinting: boolean): void {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(isSprinting ? 130 : 95, now);
+      osc.frequency.exponentialRampToValueAtTime(38, now + 0.045);
+      gain.gain.setValueAtTime(isSprinting ? 0.075 : 0.045, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.055);
+    } catch {}
+  }
+
+  public playJump(): void {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(170, now);
+      osc.frequency.exponentialRampToValueAtTime(320, now + 0.11);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.13);
+    } catch {}
+  }
+
+  public playLand(impactSpeed = 5): void {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(95, now);
+      osc.frequency.exponentialRampToValueAtTime(28, now + 0.09);
+      const vol = Math.min(0.16, 0.05 + impactSpeed * 0.01);
+      gain.gain.setValueAtTime(vol, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    } catch {}
+  }
+
+  public playPunchWhoosh(): void {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(280, now);
+      osc.frequency.exponentialRampToValueAtTime(85, now + 0.09);
+      gain.gain.setValueAtTime(0.09, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    } catch {}
+  }
+
+  public playCarDoor(): void {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    try {
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(140, now);
+      osc.frequency.exponentialRampToValueAtTime(42, now + 0.06);
+      gain.gain.setValueAtTime(0.1, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.07);
+    } catch {}
+  }
+
+  public playCrimeAlarm(): void {
+    this.playBeep(980, 0.07);
+    setTimeout(() => this.playBeep(740, 0.09), 90);
   }
 }
