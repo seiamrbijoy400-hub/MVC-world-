@@ -40,6 +40,9 @@ export interface SaveData {
   maxSpeedKmh: number;
   maxAirTime: number;
   goalsScored: number;
+  carsStolen: number;
+  knockouts: number;
+  timesBusted: number;
 
   speedTrapRecords: Record<string, number>;
   driftZoneRecords: Record<string, number>;
@@ -92,6 +95,9 @@ export function createDefaultSave(): SaveData {
     maxSpeedKmh: 0,
     maxAirTime: 0,
     goalsScored: 0,
+    carsStolen: 0,
+    knockouts: 0,
+    timesBusted: 0,
 
     speedTrapRecords: {},
     driftZoneRecords: {},
@@ -172,5 +178,13 @@ export class SaveManager {
     this.scheduleSave();
     const nextRank = this.getRank();
     return nextRank.level > prevRank.level ? nextRank : null;
+  }
+
+  /** Deducts credits up to the current balance and returns the amount actually paid. */
+  public spendCredits(amount: number): number {
+    const paid = Math.max(0, Math.min(this.data.credits, Math.round(amount)));
+    this.data.credits -= paid;
+    this.scheduleSave();
+    return paid;
   }
 }

@@ -3,7 +3,7 @@ import { CarPhysics, CarInputs } from '../physics/CarPhysics';
 import { CarMesh } from '../graphics/CarMesh';
 import { TrackEnvironment } from '../graphics/TrackEnvironment';
 import { OpenWorldMap } from '../graphics/OpenWorldMap';
-import { AnimeCharacterMesh } from '../graphics/AnimeCharacterMesh';
+import { HumanCharacterMesh } from '../graphics/HumanCharacterMesh';
 import { CharacterController } from '../physics/CharacterController';
 import type { BotDifficulty, CharacterId } from '../network/LobbyProtocol';
 
@@ -355,7 +355,9 @@ export class CityCruiserBot {
 
 export class SparringFighter {
   public controller: CharacterController;
-  public mesh: AnimeCharacterMesh;
+  public mesh: HumanCharacterMesh;
+  public readonly name: string;
+  public onKilled: (fighter: SparringFighter) => void = () => {};
   private homePos: THREE.Vector3;
   private wanderTarget: THREE.Vector3;
   private timer = 0;
@@ -366,17 +368,41 @@ export class SparringFighter {
     pos: THREE.Vector3,
     scene: THREE.Scene
   ) {
+    this.name = name;
     this.homePos = pos.clone();
     this.wanderTarget = pos.clone();
     this.controller = new CharacterController();
     this.controller.resetAt(pos, 0);
+    // Fighters stay down for a long time so a knockout actually reads as a kill,
+    // then walk back into the plaza as a fresh opponent.
+    this.controller.respawnDelay = 24;
+    this.controller.respawnPoint = pos.clone();
+    this.controller.onDeath = () => this.onKilled(this);
+    this.controller.onRespawn = (spawn) => {
+      this.mesh.root.rotation.x = 0;
+      this.mesh.root.position.copy(spawn);
+      this.mesh.setNameAndHp(this.name, this.controller.maxHp);
+    };
 
-    this.mesh = new AnimeCharacterMesh(charId, name);
+    this.mesh = new HumanCharacterMesh(charId, name);
     this.mesh.root.position.copy(pos);
     scene.add(this.mesh.root);
   }
 
+  public get isDead(): boolean {
+    return this.controller.isDead;
+  }
+
   public update(dt: number, playerPos: THREE.Vector3, playerOnFoot: boolean): void {
+    if (this.controller.isDead) {
+      this.controller.update(dt, { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false }, 0);
+      this.mesh.root.position.copy(this.controller.position);
+      this.mesh.root.rotation.y = this.controller.yaw;
+      this.mesh.updateAnimation(dt, 'KO');
+      this.mesh.setNameAndHp(this.name, 0);
+      return;
+    }
+
     this.timer -= dt;
     const distToPlayer = this.controller.position.distanceTo(playerPos);
 
@@ -419,6 +445,6 @@ export class SparringFighter {
     this.mesh.root.position.copy(this.controller.position);
     this.mesh.root.rotation.y = this.controller.yaw;
     this.mesh.updateAnimation(dt, this.controller.animState);
-    this.mesh.setNameAndHp(this.mesh['displayName'], this.controller.hp);
+    this.mesh.setNameAndHp(this.name, this.controller.hp);
   }
 }

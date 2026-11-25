@@ -7,6 +7,16 @@ import type {
   HairStyleId
 } from '../network/LobbyProtocol';
 
+/**
+ * Procedural human character model.
+ *
+ * Built from anatomical primitives with PBR materials: a tapered lathe skull
+ * with brow ridge, nose bridge and lips, natural eye textures, ears, hands with
+ * fingers, fabric seams and grounded streetwear. No cel outlines or toon ramps,
+ * so the character reads as a person under the scene's real-time lighting while
+ * staying fully offline and customizable.
+ */
+
 export interface CharacterPreset {
   id: CharacterId;
   name: string;
@@ -74,100 +84,106 @@ export const CHARACTER_PRESETS: Record<CharacterId, CharacterPreset> = {
 export const DEFAULT_APPEARANCE_BY_ID: Record<CharacterId, CharacterAppearance> = {
   kaito: {
     hairStyle: 'spiky',
-    hairColor: '#1e293b',
-    eyeColor: '#f97316',
+    hairColor: '#1c1917',
+    eyeColor: '#4a2f1b',
     jacketColor: '#ff5500',
     accentColor: '#f8fafc',
     pantsColor: '#18181b',
-    skinColor: '#ffe0c8',
+    skinColor: '#e0b48c',
     accessory: 'headphones'
   },
   mika: {
     hairStyle: 'twintails',
-    hairColor: '#f472b6',
-    eyeColor: '#ec4899',
+    hairColor: '#3b2a20',
+    eyeColor: '#6b4423',
     jacketColor: '#1e1b4b',
     accentColor: '#f43f5e',
     pantsColor: '#0f172a',
-    skinColor: '#ffeadb',
+    skinColor: '#f2d3b6',
     accessory: 'none'
   },
   ren: {
     hairStyle: 'cyber',
-    hairColor: '#38bdf8',
-    eyeColor: '#06b6d4',
+    hairColor: '#2f3e46',
+    eyeColor: '#1e3a8a',
     jacketColor: '#1d4ed8',
     accentColor: '#22d3ee',
     pantsColor: '#0f172a',
-    skinColor: '#ffe2ca',
+    skinColor: '#c68a5e',
     accessory: 'visor'
   },
   sora: {
     hairStyle: 'ponytail',
-    hairColor: '#facc15',
-    eyeColor: '#eab308',
+    hairColor: '#a16207',
+    eyeColor: '#3f6212',
     jacketColor: '#dc2626',
     accentColor: '#fef08a',
     pantsColor: '#1e293b',
-    skinColor: '#ffe3c8',
+    skinColor: '#e0b48c',
     accessory: 'sunglasses'
   }
 };
 
-function createToonGradientMap(): THREE.DataTexture {
-  const colors = new Uint8Array([102, 102, 118, 255, 198, 198, 208, 255, 255, 255, 255, 255]);
-  const tex = new THREE.DataTexture(colors, 3, 1, THREE.RGBAFormat);
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.needsUpdate = true;
-  return tex;
-}
-
-function createAnimeEyeTexture(eyeColor: string): THREE.CanvasTexture {
+function createHumanEyeTexture(eyeColor: string): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = 128;
-  c.height = 128;
+  c.height = 96;
   const ctx = c.getContext('2d')!;
-  ctx.clearRect(0, 0, 128, 128);
+  ctx.clearRect(0, 0, 128, 96);
 
-  // Soft almond anime sclera
-  ctx.fillStyle = '#ffffff';
+  // Sclera — slightly warm off-white, almond shaped
+  ctx.fillStyle = '#efece6';
   ctx.beginPath();
-  ctx.ellipse(64, 68, 43, 40, 0, 0, Math.PI * 2);
+  ctx.moveTo(9, 54);
+  ctx.bezierCurveTo(26, 22, 100, 20, 119, 49);
+  ctx.bezierCurveTo(103, 80, 27, 82, 9, 54);
+  ctx.closePath();
   ctx.fill();
 
-  // Deep multi-stop anime iris
-  const grad = ctx.createLinearGradient(0, 32, 0, 106);
-  grad.addColorStop(0, '#090d16');
-  grad.addColorStop(0.35, eyeColor);
-  grad.addColorStop(0.85, '#fef08a');
-  grad.addColorStop(1, '#ffffff');
-  ctx.fillStyle = grad;
+  // Iris — real radial falloff, no anime gradient stripe
+  const cx = 67;
+  const cy = 51;
+  const iris = ctx.createRadialGradient(cx, cy, 3, cx, cy, 21);
+  iris.addColorStop(0, '#1b1208');
+  iris.addColorStop(0.34, eyeColor);
+  iris.addColorStop(0.8, eyeColor);
+  iris.addColorStop(1, '#120c07');
+  ctx.fillStyle = iris;
   ctx.beginPath();
-  ctx.ellipse(64, 70, 27, 34, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, cy, 20, 20, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Pupil + subtle upper iris shadow
-  ctx.fillStyle = '#090d16';
+  // Pupil
+  ctx.fillStyle = '#080604';
   ctx.beginPath();
-  ctx.ellipse(64, 68, 12, 15, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, cy, 8.5, 9, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Glossy anime catchlights
-  ctx.fillStyle = '#ffffff';
+  // Catchlight (one small, one faint — photographic, not cartoon sparkle)
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.beginPath();
-  ctx.arc(48, 52, 10, 0, Math.PI * 2);
+  ctx.ellipse(cx - 7, cy - 8, 4.2, 3.2, -0.4, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.32)';
   ctx.beginPath();
-  ctx.arc(78, 86, 5.5, 0, Math.PI * 2);
+  ctx.ellipse(cx + 8, cy + 7, 2.2, 1.6, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Upper eyelash arc + brow accent
-  ctx.strokeStyle = '#090d16';
-  ctx.lineWidth = 11;
+  // Upper eyelid crease (thin, human scale)
+  ctx.strokeStyle = '#1b1512';
+  ctx.lineWidth = 3.2;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.arc(64, 76, 45, Math.PI * 1.12, Math.PI * 1.88);
+  ctx.moveTo(9, 54);
+  ctx.bezierCurveTo(28, 24, 98, 21, 119, 49);
+  ctx.stroke();
+
+  // Lower lid shadow
+  ctx.strokeStyle = 'rgba(70, 45, 35, 0.32)';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.moveTo(14, 60);
+  ctx.bezierCurveTo(38, 78, 96, 76, 114, 57);
   ctx.stroke();
 
   const tex = new THREE.CanvasTexture(c);
@@ -175,19 +191,21 @@ function createAnimeEyeTexture(eyeColor: string): THREE.CanvasTexture {
   return tex;
 }
 
-function createAnimeHeadGeometry(): THREE.LatheGeometry {
+function createHeadGeometry(): THREE.LatheGeometry {
+  // Human skull: narrow chin, defined jaw, cheekbones, tapered forehead.
   const pts = [
     new THREE.Vector2(0.0, 0.0),
-    new THREE.Vector2(0.044, 0.015),
-    new THREE.Vector2(0.102, 0.055),
-    new THREE.Vector2(0.142, 0.12),
-    new THREE.Vector2(0.152, 0.19),
-    new THREE.Vector2(0.144, 0.255),
-    new THREE.Vector2(0.105, 0.30),
-    new THREE.Vector2(0.0, 0.315)
+    new THREE.Vector2(0.032, 0.012),
+    new THREE.Vector2(0.064, 0.042),
+    new THREE.Vector2(0.088, 0.082),
+    new THREE.Vector2(0.104, 0.132),
+    new THREE.Vector2(0.110, 0.185),
+    new THREE.Vector2(0.101, 0.238),
+    new THREE.Vector2(0.072, 0.278),
+    new THREE.Vector2(0.0, 0.298)
   ];
-  const geo = new THREE.LatheGeometry(pts, 24);
-  geo.scale(0.95, 1.0, 0.91);
+  const geo = new THREE.LatheGeometry(pts, 32);
+  geo.scale(0.92, 1.0, 0.9);
   geo.computeVertexNormals();
   return geo;
 }
@@ -238,25 +256,7 @@ function createSneakerGeometry(): THREE.ExtrudeGeometry {
   return geo;
 }
 
-/** Normal-extruded cel outline geometry so limbs/hair/jacket share crisp anime linework */
-function createOutlineGeometry(base: THREE.BufferGeometry, thickness = 0.008): THREE.BufferGeometry {
-  const geo = base.clone();
-  const pos = geo.attributes.position;
-  const norm = geo.attributes.normal;
-  if (norm) {
-    for (let i = 0; i < pos.count; i++) {
-      pos.setXYZ(
-        i,
-        pos.getX(i) + norm.getX(i) * thickness,
-        pos.getY(i) + norm.getY(i) * thickness,
-        pos.getZ(i) + norm.getZ(i) * thickness
-      );
-    }
-  }
-  return geo;
-}
-
-export class AnimeCharacterMesh {
+export class HumanCharacterMesh {
   public root: THREE.Group;
   private hips: THREE.Group;
   private waist: THREE.Group;
@@ -289,12 +289,14 @@ export class AnimeCharacterMesh {
   private coatTailVel = 0;
   private backHairVel = 0;
 
-  private hairMat: THREE.MeshToonMaterial;
-  private jacketMat: THREE.MeshToonMaterial;
-  private accentMat: THREE.MeshToonMaterial;
-  private pantsMat: THREE.MeshToonMaterial;
-  private skinMat: THREE.MeshToonMaterial;
-  private outlineMat: THREE.MeshBasicMaterial;
+  private hairMat: THREE.MeshStandardMaterial;
+  private jacketMat: THREE.MeshStandardMaterial;
+  private accentMat: THREE.MeshStandardMaterial;
+  private pantsMat: THREE.MeshStandardMaterial;
+  private skinMat: THREE.MeshStandardMaterial;
+  private shoeMat: THREE.MeshStandardMaterial;
+  private browMat: THREE.MeshStandardMaterial;
+  private lipMat: THREE.MeshStandardMaterial;
   private eyeMats: THREE.MeshBasicMaterial[] = [];
 
   private appearance: CharacterAppearance;
@@ -311,8 +313,6 @@ export class AnimeCharacterMesh {
   private emojiSparkles: THREE.Mesh[] = [];
   private emojiTimer = 0;
 
-  private punchSlashMesh: THREE.Mesh;
-  private punchSlashTimer = 0;
   private comboStep = 0;
 
   private animPhase = 0;
@@ -334,17 +334,50 @@ export class AnimeCharacterMesh {
     this.hips.position.y = 0.88;
     this.root.add(this.hips);
 
-    const toonGrad = createToonGradientMap();
-    this.hairMat = new THREE.MeshToonMaterial({ color: this.appearance.hairColor, gradientMap: toonGrad });
-    this.jacketMat = new THREE.MeshToonMaterial({ color: this.appearance.jacketColor, gradientMap: toonGrad });
-    this.accentMat = new THREE.MeshToonMaterial({ color: this.appearance.accentColor, gradientMap: toonGrad });
-    this.pantsMat = new THREE.MeshToonMaterial({ color: this.appearance.pantsColor, gradientMap: toonGrad });
-    this.skinMat = new THREE.MeshToonMaterial({ color: this.appearance.skinColor, gradientMap: toonGrad });
-    this.outlineMat = new THREE.MeshBasicMaterial({ color: 0x090d16, side: THREE.BackSide });
+    this.hairMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.hairColor),
+      roughness: 0.66,
+      metalness: 0.06
+    });
+    this.jacketMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.jacketColor),
+      roughness: 0.78,
+      metalness: 0.04
+    });
+    this.accentMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.accentColor),
+      roughness: 0.52,
+      metalness: 0.12
+    });
+    this.pantsMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.pantsColor),
+      roughness: 0.88,
+      metalness: 0
+    });
+    this.skinMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.skinColor),
+      roughness: 0.6,
+      metalness: 0
+    });
+    this.shoeMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.accentColor).multiplyScalar(0.42),
+      roughness: 0.72,
+      metalness: 0.06
+    });
+    this.browMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(this.appearance.hairColor).multiplyScalar(0.45),
+      roughness: 0.92,
+      metalness: 0
+    });
+    this.lipMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color('#a86258'),
+      roughness: 0.5,
+      metalness: 0
+    });
 
     // --- Articulated Pelvis + Dynamic Jacket Coat Tail ---
     const pelvisGeo = new THREE.CapsuleGeometry(0.118, 0.08, 8, 14);
-    const pelvis = this.addCelMesh(this.hips, pelvisGeo, this.pantsMat, 0.008);
+    const pelvis = this.addPart(this.hips, pelvisGeo, this.pantsMat, 0.008);
     pelvis.scale.set(1.1, 1, 0.84);
     pelvis.position.y = 0.03;
 
@@ -360,7 +393,12 @@ export class AnimeCharacterMesh {
     const coatTailGeo = new THREE.CylinderGeometry(0.135, 0.185, 0.21, 16, 1, true, Math.PI * 0.14, Math.PI * 1.72);
     const coatTail = new THREE.Mesh(
       coatTailGeo,
-      new THREE.MeshToonMaterial({ color: this.appearance.jacketColor, gradientMap: toonGrad, side: THREE.DoubleSide })
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(this.appearance.jacketColor),
+        roughness: 0.8,
+        metalness: 0.03,
+        side: THREE.DoubleSide
+      })
     );
     coatTail.scale.set(1.12, 1, 0.82);
     coatTail.position.y = -0.09;
@@ -374,7 +412,7 @@ export class AnimeCharacterMesh {
     this.waist.add(this.torso);
 
     const chestGeo = new THREE.CylinderGeometry(0.158, 0.118, 0.34, 16);
-    const chest = this.addCelMesh(this.torso, chestGeo, this.jacketMat, 0.009);
+    const chest = this.addPart(this.torso, chestGeo, this.jacketMat, 0.009);
     chest.scale.set(1.14, 1, 0.78);
     chest.position.y = 0.21;
     chest.castShadow = true;
@@ -389,49 +427,79 @@ export class AnimeCharacterMesh {
     collar.position.y = 0.39;
     this.torso.add(collar);
 
-    // --- Sculpted Anime Head, Blinking Eyes & Expressive Mouth ---
+    // Canvas belt breaks up the silhouette and grounds the outfit
+    const belt = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.126, 0.128, 0.035, 18),
+      new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.55, metalness: 0.18 })
+    );
+    belt.scale.set(1.08, 1, 0.84);
+    belt.position.y = 0.075;
+    this.hips.add(belt);
+
+    const buckle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.032, 0.012),
+      new THREE.MeshStandardMaterial({ color: 0xd4d4d8, roughness: 0.28, metalness: 0.85 })
+    );
+    buckle.position.set(0, 0.075, -0.104);
+    this.hips.add(buckle);
+
+    // --- Human head: real skull proportions, ears, brows, lips ---
     this.head = new THREE.Group();
     this.head.position.y = 0.40;
+    this.head.scale.setScalar(0.82);
     this.torso.add(this.head);
 
-    const neck = this.addCelMesh(this.head, new THREE.CylinderGeometry(0.045, 0.054, 0.11, 12), this.skinMat, 0.006);
-    neck.position.y = 0.04;
+    const neck = this.addPart(this.head, new THREE.CylinderGeometry(0.042, 0.052, 0.11, 12), this.skinMat, 0);
+    neck.position.y = 0.045;
 
-    const headGeo = createAnimeHeadGeometry();
-    const face = this.addCelMesh(this.head, headGeo, this.skinMat, 0.0085);
-    face.position.y = 0.06;
+    const headGeo = createHeadGeometry();
+    const face = this.addPart(this.head, headGeo, this.skinMat, 0);
+    face.position.y = 0.056;
     face.castShadow = true;
 
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.011, 0.025, 5), this.skinMat);
-    nose.rotation.x = -Math.PI * 0.42;
-    nose.position.set(0, 0.165, -0.141);
-    this.head.add(nose);
-
-    const eyeTex = createAnimeEyeTexture(this.appearance.eyeColor);
+    // Ears
+    const earGeo = new THREE.SphereGeometry(0.022, 10, 10);
     for (const side of [-1, 1]) {
-      const eyeMat = new THREE.MeshBasicMaterial({ map: eyeTex, transparent: true });
+      const ear = new THREE.Mesh(earGeo, this.skinMat);
+      ear.scale.set(0.52, 1.15, 0.8);
+      ear.position.set(side * 0.100, 0.170, -0.004);
+      ear.rotation.y = side * -0.16;
+      this.head.add(ear);
+    }
+
+    // Nose: bridge + tip instead of a cone
+    const noseBridge = new THREE.Mesh(new THREE.CapsuleGeometry(0.0092, 0.042, 4, 8), this.skinMat);
+    noseBridge.rotation.x = -0.26;
+    noseBridge.position.set(0, 0.166, -0.100);
+    this.head.add(noseBridge);
+    const noseTip = new THREE.Mesh(new THREE.SphereGeometry(0.0128, 10, 8), this.skinMat);
+    noseTip.scale.set(1.05, 0.72, 0.9);
+    noseTip.position.set(0, 0.145, -0.112);
+    this.head.add(noseTip);
+
+    const eyeTex = createHumanEyeTexture(this.appearance.eyeColor);
+    for (const side of [-1, 1]) {
+      const eyeMat = new THREE.MeshBasicMaterial({ map: eyeTex, transparent: true, depthWrite: false });
       this.eyeMats.push(eyeMat);
-      const eye = new THREE.Mesh(new THREE.PlaneGeometry(0.066, 0.070), eyeMat);
-      eye.position.set(side * 0.054, 0.20, -0.130);
+      const eye = new THREE.Mesh(new THREE.PlaneGeometry(0.055, 0.040), eyeMat);
+      eye.position.set(side * 0.046, 0.197, -0.098);
       eye.rotation.y = Math.PI + side * 0.26;
       this.head.add(eye);
       this.eyeMeshes.push(eye);
 
-      const blush = new THREE.Mesh(
-        new THREE.CircleGeometry(0.018, 10),
-        new THREE.MeshBasicMaterial({ color: 0xfb7185, transparent: true, opacity: 0.38 })
-      );
-      blush.position.set(side * 0.076, 0.15, -0.123);
-      blush.rotation.y = Math.PI + side * 0.38;
-      this.head.add(blush);
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.0072, 0.009), this.browMat);
+      brow.position.set(side * 0.048, 0.222, -0.096);
+      brow.rotation.y = Math.PI + side * 0.26;
+      brow.rotation.z = side * -0.09;
+      this.head.add(brow);
     }
 
-    this.mouthMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.005, 0.024, 4, 8),
-      new THREE.MeshBasicMaterial({ color: 0x9f1239 })
-    );
-    this.mouthMesh.rotation.z = Math.PI * 0.5;
-    this.mouthMesh.position.set(0, 0.115, -0.127);
+    // Subdued two-part mouth
+    const upperLip = new THREE.Mesh(new THREE.BoxGeometry(0.040, 0.0062, 0.010), this.lipMat);
+    upperLip.position.set(0, 0.104, -0.092);
+    this.head.add(upperLip);
+    this.mouthMesh = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.0085, 0.011), this.lipMat);
+    this.mouthMesh.position.set(0, 0.096, -0.092);
     this.head.add(this.mouthMesh);
 
     // Hair & Accessory Groups
@@ -453,31 +521,32 @@ export class AnimeCharacterMesh {
     forearmGeo.translate(0, -0.105, 0);
     const shoulderCapGeo = new THREE.SphereGeometry(0.052, 10, 10);
     const elbowCapGeo = new THREE.SphereGeometry(0.041, 10, 10);
-    const handGeo = new THREE.SphereGeometry(0.043, 10, 10);
 
     this.leftArm = new THREE.Group();
     this.leftArm.position.set(-0.195, 0.355, 0);
-    this.addCelMesh(this.leftArm, shoulderCapGeo, this.jacketMat, 0.006);
-    this.addCelMesh(this.leftArm, upperArmGeo, this.jacketMat, 0.007);
+    this.addPart(this.leftArm, shoulderCapGeo, this.jacketMat, 0);
+    this.addPart(this.leftArm, upperArmGeo, this.jacketMat, 0);
     this.leftForearm = new THREE.Group();
     this.leftForearm.position.y = -0.22;
-    this.addCelMesh(this.leftForearm, elbowCapGeo, this.jacketMat, 0.006);
-    this.addCelMesh(this.leftForearm, forearmGeo, this.jacketMat, 0.007);
-    const lHand = this.addCelMesh(this.leftForearm, handGeo, this.skinMat, 0.005);
-    lHand.position.y = -0.23;
+    this.addPart(this.leftForearm, elbowCapGeo, this.jacketMat, 0);
+    this.addPart(this.leftForearm, forearmGeo, this.jacketMat, 0);
+    const lHand = this.buildHand(-1);
+    lHand.position.y = -0.235;
+    this.leftForearm.add(lHand);
     this.leftArm.add(this.leftForearm);
     this.torso.add(this.leftArm);
 
     this.rightArm = new THREE.Group();
     this.rightArm.position.set(0.195, 0.355, 0);
-    this.addCelMesh(this.rightArm, shoulderCapGeo, this.jacketMat, 0.006);
-    this.addCelMesh(this.rightArm, upperArmGeo, this.jacketMat, 0.007);
+    this.addPart(this.rightArm, shoulderCapGeo, this.jacketMat, 0);
+    this.addPart(this.rightArm, upperArmGeo, this.jacketMat, 0);
     this.rightForearm = new THREE.Group();
     this.rightForearm.position.y = -0.22;
-    this.addCelMesh(this.rightForearm, elbowCapGeo, this.jacketMat, 0.006);
-    this.addCelMesh(this.rightForearm, forearmGeo, this.jacketMat, 0.007);
-    const rHand = this.addCelMesh(this.rightForearm, handGeo, this.skinMat, 0.005);
-    rHand.position.y = -0.23;
+    this.addPart(this.rightForearm, elbowCapGeo, this.jacketMat, 0);
+    this.addPart(this.rightForearm, forearmGeo, this.jacketMat, 0);
+    const rHand = this.buildHand(1);
+    rHand.position.y = -0.235;
+    this.rightForearm.add(rHand);
     this.rightArm.add(this.rightForearm);
     this.torso.add(this.rightArm);
 
@@ -491,44 +560,45 @@ export class AnimeCharacterMesh {
 
     this.leftLeg = new THREE.Group();
     this.leftLeg.position.set(-0.086, 0, 0);
-    this.addCelMesh(this.leftLeg, thighGeo, this.pantsMat, 0.0075);
+    this.addPart(this.leftLeg, thighGeo, this.pantsMat, 0.0075);
     this.leftShin = new THREE.Group();
     this.leftShin.position.y = -0.40;
-    this.addCelMesh(this.leftShin, kneeCapGeo, this.pantsMat, 0.006);
-    this.addCelMesh(this.leftShin, shinGeo, this.pantsMat, 0.007);
+    this.addPart(this.leftShin, kneeCapGeo, this.pantsMat, 0.006);
+    this.addPart(this.leftShin, shinGeo, this.pantsMat, 0.007);
     this.leftFoot = new THREE.Group();
     this.leftFoot.position.set(0, -0.385, -0.01);
-    const lShoe = this.addCelMesh(this.leftFoot, shoeGeo, this.accentMat, 0.006);
+    const lShoe = this.addPart(this.leftFoot, shoeGeo, this.shoeMat, 0);
     lShoe.position.set(0, 0, -0.015);
+    const lSole = new THREE.Mesh(
+      new THREE.BoxGeometry(0.102, 0.018, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 0.85 })
+    );
+    lSole.position.set(0, -0.046, -0.01);
+    this.leftFoot.add(lSole);
     this.leftShin.add(this.leftFoot);
     this.leftLeg.add(this.leftShin);
     this.hips.add(this.leftLeg);
 
     this.rightLeg = new THREE.Group();
     this.rightLeg.position.set(0.086, 0, 0);
-    this.addCelMesh(this.rightLeg, thighGeo, this.pantsMat, 0.0075);
+    this.addPart(this.rightLeg, thighGeo, this.pantsMat, 0.0075);
     this.rightShin = new THREE.Group();
     this.rightShin.position.y = -0.40;
-    this.addCelMesh(this.rightShin, kneeCapGeo, this.pantsMat, 0.006);
-    this.addCelMesh(this.rightShin, shinGeo, this.pantsMat, 0.007);
+    this.addPart(this.rightShin, kneeCapGeo, this.pantsMat, 0.006);
+    this.addPart(this.rightShin, shinGeo, this.pantsMat, 0.007);
     this.rightFoot = new THREE.Group();
     this.rightFoot.position.set(0, -0.385, -0.01);
-    const rShoe = this.addCelMesh(this.rightFoot, shoeGeo, this.accentMat, 0.006);
+    const rShoe = this.addPart(this.rightFoot, shoeGeo, this.shoeMat, 0);
     rShoe.position.set(0, 0, -0.015);
+    const rSole = new THREE.Mesh(
+      new THREE.BoxGeometry(0.102, 0.018, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 0.85 })
+    );
+    rSole.position.set(0, -0.046, -0.01);
+    this.rightFoot.add(rSole);
     this.rightShin.add(this.rightFoot);
     this.rightLeg.add(this.rightShin);
     this.hips.add(this.rightLeg);
-
-    // --- Anime Combat Punch Slash Crescent Arc ---
-    const slashGeo = new THREE.RingGeometry(0.35, 0.72, 16, 1, -Math.PI * 0.35, Math.PI * 0.7);
-    slashGeo.rotateX(-Math.PI * 0.5);
-    this.punchSlashMesh = new THREE.Mesh(
-      slashGeo,
-      new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide, transparent: true, opacity: 0.9 })
-    );
-    this.punchSlashMesh.position.set(0, 1.15, -0.45);
-    this.punchSlashMesh.visible = false;
-    this.root.add(this.punchSlashMesh);
 
     // --- Overhead Nameplate + HP Bar ---
     this.nameCanvas = document.createElement('canvas');
@@ -557,20 +627,43 @@ export class AnimeCharacterMesh {
     }
   }
 
-  private addCelMesh(
+  private addPart(
     parent: THREE.Object3D,
     geo: THREE.BufferGeometry,
     mat: THREE.Material,
-    outlineThickness: number
+    _outlineThickness = 0
   ): THREE.Mesh {
+    // Realistic shading: no cel outline shells, just solid shadow-casting geometry.
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
+    mesh.receiveShadow = true;
     parent.add(mesh);
-    if (outlineThickness > 0) {
-      const outline = new THREE.Mesh(createOutlineGeometry(geo, outlineThickness), this.outlineMat);
-      mesh.add(outline);
-    }
     return mesh;
+  }
+
+  private buildHand(side: number): THREE.Group {
+    const hand = new THREE.Group();
+    const palm = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.072, 0.032), this.skinMat);
+    palm.position.y = -0.022;
+    palm.castShadow = true;
+    hand.add(palm);
+
+    const fingerGeo = new THREE.CapsuleGeometry(0.0072, 0.034, 3, 6);
+    for (let i = 0; i < 4; i++) {
+      const finger = new THREE.Mesh(fingerGeo, this.skinMat);
+      finger.position.set(-0.026 + i * 0.0173, -0.069, 0.001);
+      finger.rotation.z = (i - 1.5) * 0.055;
+      finger.castShadow = true;
+      hand.add(finger);
+    }
+
+    const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.0085, 0.026, 3, 6), this.skinMat);
+    thumb.position.set(side * 0.042, -0.026, 0.006);
+    thumb.rotation.z = side * -0.85;
+    thumb.rotation.x = 0.25;
+    hand.add(thumb);
+
+    return hand;
   }
 
   private createContactShadow(): void {
@@ -607,22 +700,22 @@ export class AnimeCharacterMesh {
     this.tailVelR = 0;
     this.backHairVel = 0;
 
-    // Smooth scalp hair dome with ink outline
-    const capGeo = new THREE.SphereGeometry(0.163, 20, 18, 0, Math.PI * 2, 0, Math.PI * 0.62);
-    const cap = this.addCelMesh(this.hairGroup, capGeo, this.hairMat, 0.008);
-    cap.position.set(0, 0.175, 0.01);
-    cap.rotation.x = 0.28;
-    cap.scale.set(0.98, 1.0, 0.96);
+    // Hair follows the skull closely instead of sitting on it like a helmet
+    const capGeo = new THREE.SphereGeometry(0.120, 20, 18, 0, Math.PI * 2, 0, Math.PI * 0.52);
+    const cap = this.addPart(this.hairGroup, capGeo, this.hairMat, 0);
+    cap.position.set(0, 0.178, 0.012);
+    cap.rotation.x = 0.18;
+    cap.scale.set(1.02, 0.98, 1.0);
 
     // Dynamic back hair pivot
     const backPivot = new THREE.Group();
     backPivot.position.set(0, 0.22, 0.105);
-    const backLen = style === 'bob' ? 0.28 : (style === 'ponytail' ? 0.19 : 0.24);
-    const backLockGeo = createHairLockGeometry(backLen, 0.155, 0.045);
+    const backLen = style === 'bob' ? 0.22 : (style === 'ponytail' ? 0.145 : 0.17);
+    const backLockGeo = createHairLockGeometry(backLen, 0.13, 0.035);
     for (let i = -1; i <= 1; i++) {
       const lock = new THREE.Mesh(backLockGeo, this.hairMat);
-      lock.position.set(i * 0.062, 0, 0);
-      lock.rotation.z = i * 0.12;
+      lock.position.set(i * 0.058, 0, 0);
+      lock.rotation.z = i * 0.1;
       backPivot.add(lock);
     }
     this.hairGroup.add(backPivot);
@@ -631,45 +724,46 @@ export class AnimeCharacterMesh {
     // Sweeping front bangs pivot
     const bangsPivot = new THREE.Group();
     bangsPivot.position.set(0, 0.285, -0.112);
-    const bangGeo = createHairLockGeometry(0.145, 0.062, -0.025);
+    const bangGeo = createHairLockGeometry(0.105, 0.055, -0.02);
     for (let b = -2; b <= 2; b++) {
       const bang = new THREE.Mesh(bangGeo, this.hairMat);
-      bang.position.set(b * 0.041, 0, Math.abs(b) * 0.015);
-      bang.rotation.z = b * 0.18;
-      bang.rotation.x = -0.14;
+      bang.position.set(b * 0.039, 0, Math.abs(b) * 0.013);
+      bang.rotation.z = b * 0.15;
+      bang.rotation.x = -0.12;
       bangsPivot.add(bang);
     }
     this.hairGroup.add(bangsPivot);
     this.bangsPivot = bangsPivot;
 
     // Side face-framing cheek locks
-    const sideLockGeo = createHairLockGeometry(style === 'bob' ? 0.25 : 0.20, 0.054, -0.015);
+    const sideLockGeo = createHairLockGeometry(style === 'bob' ? 0.19 : 0.145, 0.048, -0.012);
     for (const side of [-1, 1]) {
       const sl = new THREE.Mesh(sideLockGeo, this.hairMat);
-      sl.position.set(side * 0.132, 0.24, -0.04);
-      sl.rotation.z = side * 0.12;
-      sl.rotation.y = side * 0.4;
+      sl.position.set(side * 0.128, 0.24, -0.04);
+      sl.rotation.z = side * 0.1;
+      sl.rotation.y = side * 0.35;
       this.hairGroup.add(sl);
     }
 
     if (style === 'spiky') {
-      const sweepGeo = createHairLockGeometry(0.18, 0.072, 0.055);
-      for (let s = 0; s < 7; s++) {
-        const ang = (s / 7) * Math.PI * 2;
-        const lock = new THREE.Mesh(sweepGeo, this.hairMat);
-        lock.position.set(Math.sin(ang) * 0.08, 0.30, Math.cos(ang) * 0.08);
-        lock.rotation.y = ang;
-        lock.rotation.x = -1.05;
+      // Short textured crop instead of anime spikes
+      const cropGeo = createHairLockGeometry(0.085, 0.05, 0.014);
+      for (let s = -3; s <= 3; s++) {
+        const lock = new THREE.Mesh(cropGeo, this.hairMat);
+        lock.position.set(s * 0.037, 0.285 - Math.abs(s) * 0.006, 0.01 + Math.abs(s) * 0.004);
+        lock.rotation.y = s * 0.16;
+        lock.rotation.x = -1.32;
+        lock.rotation.z = s * 0.05;
         this.hairGroup.add(lock);
       }
     } else if (style === 'twintails') {
-      const tailGeo = createHairLockGeometry(0.42, 0.11, 0.08);
+      const tailGeo = createHairLockGeometry(0.34, 0.09, 0.06);
       for (const side of [-1, 1]) {
         const tailGrp = new THREE.Group();
-        tailGrp.position.set(side * 0.155, 0.24, 0.06);
-        const ribbon = new THREE.Mesh(new THREE.SphereGeometry(0.032, 8, 8), this.accentMat);
+        tailGrp.position.set(side * 0.148, 0.22, 0.07);
+        const ribbon = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 8), this.accentMat);
         const tailMesh = new THREE.Mesh(tailGeo, this.hairMat);
-        tailMesh.rotation.z = side * 0.38;
+        tailMesh.rotation.z = side * 0.3;
         tailMesh.rotation.x = 0.22;
         tailGrp.add(ribbon, tailMesh);
         this.hairGroup.add(tailGrp);
@@ -678,28 +772,28 @@ export class AnimeCharacterMesh {
       }
     } else if (style === 'ponytail') {
       const tailGrp = new THREE.Group();
-      tailGrp.position.set(0, 0.27, 0.14);
-      const band = new THREE.Mesh(new THREE.TorusGeometry(0.036, 0.012, 8, 12), this.accentMat);
-      const ponyMesh = new THREE.Mesh(createHairLockGeometry(0.38, 0.12, 0.10), this.hairMat);
-      ponyMesh.rotation.x = 0.32;
+      tailGrp.position.set(0, 0.25, 0.14);
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.032, 0.011, 8, 12), this.accentMat);
+      const ponyMesh = new THREE.Mesh(createHairLockGeometry(0.31, 0.1, 0.07), this.hairMat);
+      ponyMesh.rotation.x = 0.34;
       tailGrp.add(band, ponyMesh);
       this.hairGroup.add(tailGrp);
       this.tailPivotL = tailGrp;
     } else if (style === 'bob') {
-      const puffGeo = createHairLockGeometry(0.24, 0.12, -0.02);
+      const puffGeo = createHairLockGeometry(0.19, 0.1, -0.015);
       for (const side of [-1, 1]) {
         const cheekBob = new THREE.Mesh(puffGeo, this.hairMat);
-        cheekBob.position.set(side * 0.145, 0.25, 0.03);
-        cheekBob.rotation.z = side * 0.08;
+        cheekBob.position.set(side * 0.14, 0.24, 0.03);
+        cheekBob.rotation.z = side * 0.07;
         this.hairGroup.add(cheekBob);
       }
     } else if (style === 'cyber') {
-      const finGeo = createHairLockGeometry(0.21, 0.075, 0.07);
-      for (let s = -2; s <= 2; s++) {
+      const finGeo = createHairLockGeometry(0.13, 0.06, 0.045);
+      for (let s = -1; s <= 1; s++) {
         const fin = new THREE.Mesh(finGeo, this.hairMat);
-        fin.position.set(s * 0.055, 0.295, 0.02);
-        fin.rotation.x = -0.75;
-        fin.rotation.z = s * 0.22;
+        fin.position.set(s * 0.06, 0.285, 0.025);
+        fin.rotation.x = -0.95;
+        fin.rotation.z = s * 0.18;
         this.hairGroup.add(fin);
       }
     }
@@ -766,15 +860,17 @@ export class AnimeCharacterMesh {
     this.accentMat.color.set(this.appearance.accentColor);
     this.pantsMat.color.set(this.appearance.pantsColor);
     this.skinMat.color.set(this.appearance.skinColor);
+    this.shoeMat.color.set(new THREE.Color(this.appearance.accentColor).multiplyScalar(0.42));
+    this.browMat.color.set(new THREE.Color(this.appearance.hairColor).multiplyScalar(0.45));
 
     this.coatTailPivot.traverse((c) => {
       if ((c as THREE.Mesh).isMesh && c.userData.isCoatTail) {
-        ((c as THREE.Mesh).material as THREE.MeshToonMaterial).color.set(this.appearance.jacketColor);
+        ((c as THREE.Mesh).material as THREE.MeshStandardMaterial).color.set(this.appearance.jacketColor);
       }
     });
 
     if (app.eyeColor) {
-      const newEyeTex = createAnimeEyeTexture(this.appearance.eyeColor);
+      const newEyeTex = createHumanEyeTexture(this.appearance.eyeColor);
       for (const m of this.eyeMats) {
         m.map = newEyeTex;
         m.needsUpdate = true;
@@ -890,24 +986,13 @@ export class AnimeCharacterMesh {
 
   public triggerPunchVisual(): void {
     this.comboStep = (this.comboStep + 1) % 3;
-    this.punchSlashTimer = 0.22;
-    this.punchSlashMesh.visible = true;
-    this.punchSlashMesh.rotation.z = (this.comboStep - 1) * 0.4;
-    this.punchSlashMesh.scale.setScalar(0.75);
+    // Grounded fighter: no anime crescent slash overlay.
   }
 
   public updateAnimation(dt: number, state: CharAnimState): void {
     if (this.bubbleTimer > 0) {
       this.bubbleTimer -= dt;
       if (this.bubbleTimer <= 0 && this.bubbleSprite) this.bubbleSprite.visible = false;
-    }
-
-    if (this.punchSlashTimer > 0) {
-      this.punchSlashTimer -= dt;
-      const p = 1 - this.punchSlashTimer / 0.22;
-      this.punchSlashMesh.scale.setScalar(0.75 + p * 0.65);
-      (this.punchSlashMesh.material as THREE.MeshBasicMaterial).opacity = (1 - p) * 0.9;
-      if (this.punchSlashTimer <= 0) this.punchSlashMesh.visible = false;
     }
 
     if (this.emojiTimer > 0 && this.emojiSprite) {

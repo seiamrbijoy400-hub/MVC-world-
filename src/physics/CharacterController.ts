@@ -19,37 +19,85 @@ export class CharacterController {
   public isGrounded = true;
   public animState: CharAnimState = 'IDLE';
 
+  /** True while knocked out / dead. Character stays down until the respawn timer ends. */
+  public isDead = false;
+  /** Seconds spent on the ground before reviving. */
+  public respawnDelay = 4.0;
+  /** HP recovered per second once out of combat (0 disables regen). */
+  public regenRate = 3.0;
+  /** Seconds without taking damage before regen kicks in. */
+  public regenDelay = 12;
+  /** Optional respawn location (hospital / home / police station). Falls back to death spot. */
+  public respawnPoint: THREE.Vector3 | null = null;
+
   private punchTimer = 0;
   private punchCooldown = 0;
   private koTimer = 0;
+  private sinceDamage = 0;
   private wasJump = false;
   private wasPunch = false;
 
   public groundHeightSampler: (x: number, z: number) => number = () => 0;
   public worldCollider: (pos: THREE.Vector3, vel: THREE.Vector3, radius: number) => boolean = () => false;
   public onPunchStrike: (origin: THREE.Vector3, forward: THREE.Vector3) => void = () => {};
+  /** Fired once when HP hits zero. */
+  public onDeath: (pos: THREE.Vector3) => void = () => {};
+  /** Fired after the respawn timer expires and HP is restored. */
+  public onRespawn: (pos: THREE.Vector3) => void = () => {};
 
   public resetAt(pos: THREE.Vector3, yaw = 0): void {
     this.position.copy(pos);
     this.velocity.set(0, 0, 0);
     this.yaw = yaw;
     this.hp = this.maxHp;
+    this.isDead = false;
     this.koTimer = 0;
     this.punchTimer = 0;
     this.animState = 'IDLE';
   }
 
-  public takeDamage(damage: number, dirX: number, dirZ: number): void {
-    if (this.koTimer > 0) return;
+  /** Applies damage and returns true when this hit killed the character. */
+  public takeDamage(damage: number, dirX: number, dirZ: number): boolean {
+    if (this.isDead || this.koTimer > 0) return false;
     this.hp = Math.max(0, this.hp - damage);
+    this.sinceDamage = 0;
     this.velocity.x += dirX * 9.5;
     this.velocity.z += dirZ * 9.5;
     this.velocity.y = 4.2;
     this.isGrounded = false;
     if (this.hp <= 0) {
-      this.koTimer = 2.8;
+      this.isDead = true;
+      this.koTimer = Math.max(1.0, this.respawnDelay);
       this.animState = 'KO';
+      this.onDeath(this.position.clone());
+      return true;
     }
+    return false;
+  }
+
+  /** Forces an immediate knockdown (used by police / scripted events). */
+  public knockOut(): void {
+    if (this.isDead) return;
+    this.hp = 0;
+    this.isDead = true;
+    this.koTimer = Math.max(1.0, this.respawnDelay);
+    this.animState = 'KO';
+    this.onDeath(this.position.clone());
+  }
+
+  /** Restores the character at the respawn point (or at `at` when supplied). */
+  public revive(at?: THREE.Vector3): void {
+    const spawn = at ?? this.respawnPoint ?? this.position;
+    this.position.copy(spawn);
+    this.velocity.set(0, 0, 0);
+    this.hp = this.maxHp;
+    this.isDead = false;
+    this.koTimer = 0;
+    this.sinceDamage = 0;
+    this.punchTimer = 0;
+    this.punchCooldown = 0;
+    this.animState = 'IDLE';
+    this.onRespawn(this.position.clone());
   }
 
   public getForwardVector(): THREE.Vector3 {
@@ -62,7 +110,13 @@ export class CharacterController {
     if (this.punchCooldown > 0) this.punchCooldown -= dt;
     if (this.punchTimer > 0) this.punchTimer -= dt;
 
-    if (this.koTimer > 0) {
+    // Out-of-combat recovery: low HP is dangerous, not permanent.
+    this.sinceDamage += dt;
+    if (!this.isDead && this.regenRate > 0 && this.hp < this.maxHp && this.sinceDamage > this.regenDelay) {
+      this.hp = Math.min(this.maxHp, this.hp + this.regenRate * dt);
+    }
+
+    if (this.isDead) {
       this.koTimer -= dt;
       this.velocity.y -= 22 * dt;
       this.position.addScaledVector(this.velocity, dt);
@@ -76,7 +130,7 @@ export class CharacterController {
       this.worldCollider(this.position, this.velocity, 0.45);
       this.animState = 'KO';
       if (this.koTimer <= 0) {
-        this.hp = this.maxHp;
+        this.revive();
       }
       return;
     }
@@ -116,7 +170,7 @@ export class CharacterController {
     this.velocity.x = THREE.MathUtils.damp(this.velocity.x, targetVx, accel, dt);
     this.velocity.z = THREE.MathUtils.damp(this.velocity.z, targetVz, accel, dt);
 
-    // Smoothly turn anime character toward running direction
+    // Smoothly turn the character toward the running direction
     if (moveMag > 0.1) {
       const targetYaw = Math.atan2(-wishX, -wishZ);
       let diff = targetYaw - this.yaw;

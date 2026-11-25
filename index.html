@@ -645,6 +645,115 @@
       max-height: 92vh;
     }
 
+    /* Wanted / Police HUD */
+    .wanted-hud {
+      position: absolute;
+      top: 84px;
+      right: 16px;
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: rgba(9, 13, 22, 0.82);
+      border: 1.5px solid rgba(239, 68, 68, 0.55);
+      box-shadow: 0 6px 22px rgba(239, 68, 68, 0.18);
+      z-index: 24;
+      pointer-events: none;
+    }
+    .wanted-hud .wanted-label {
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 1.2px;
+      color: #fca5a5;
+      margin-right: 3px;
+    }
+    .wanted-star {
+      font-size: 15px;
+      line-height: 1;
+      color: rgba(148, 163, 184, 0.35);
+      transition: color 0.18s ease, transform 0.18s ease, text-shadow 0.18s ease;
+    }
+    .wanted-star.active {
+      color: #fbbf24;
+      text-shadow: 0 0 8px rgba(251, 191, 36, 0.85);
+      transform: scale(1.08);
+    }
+    .wanted-hud.hot { animation: wantedPulse 0.9s ease-in-out infinite; }
+    @keyframes wantedPulse {
+      0%, 100% { border-color: rgba(239, 68, 68, 0.55); }
+      50% { border-color: rgba(239, 68, 68, 1); box-shadow: 0 0 24px rgba(239, 68, 68, 0.4); }
+    }
+
+    /* Car theft prompt */
+    #steal-prompt {
+      position: absolute;
+      left: 50%;
+      bottom: 190px;
+      transform: translateX(-50%);
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      border-radius: 12px;
+      background: rgba(9, 13, 22, 0.9);
+      border: 1.5px solid #f59e0b;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      z-index: 26;
+      pointer-events: none;
+    }
+    #steal-prompt .steal-key {
+      background: #f59e0b;
+      color: #0f172a;
+      font-size: 11px;
+      font-weight: 900;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    #steal-prompt .steal-text {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      color: #fde68a;
+    }
+
+    /* Wasted / Busted overlay */
+    #ko-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: radial-gradient(circle at center, rgba(69, 10, 10, 0.42), rgba(2, 4, 10, 0.9));
+      backdrop-filter: grayscale(0.7) blur(2px);
+      z-index: 80;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.4s ease, visibility 0.4s ease;
+      pointer-events: none;
+      text-align: center;
+      padding: 24px;
+    }
+    #ko-overlay.open { opacity: 1; visibility: visible; }
+    #ko-title {
+      font-size: clamp(42px, 11vw, 96px);
+      font-weight: 900;
+      font-style: italic;
+      letter-spacing: 3px;
+      color: #ef4444;
+      text-shadow: 0 6px 30px rgba(239, 68, 68, 0.5);
+      margin: 0;
+    }
+    #ko-desc {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      color: #e2e8f0;
+      margin: 0;
+    }
+
     @media (min-width: 820px) {
       #tachometer-canvas { width: 205px; height: 205px; }
       .minimap-container { width: 136px; height: 136px; }
@@ -895,6 +1004,28 @@
         <button id="btn-chat-toggle" class="hud-btn" title="In-Game Chat (T)"><span>💬</span></button>
         <button id="btn-horn" class="hud-btn" title="Car Horn / City Challenge (H)"><span>📯</span></button>
         <button id="btn-more" class="hud-btn" title="More Options"><span>☰</span></button>
+      </div>
+
+      <!-- Police heat -->
+      <div id="wanted-hud" class="wanted-hud">
+        <span class="wanted-label">WANTED</span>
+        <span class="wanted-star">★</span>
+        <span class="wanted-star">★</span>
+        <span class="wanted-star">★</span>
+        <span class="wanted-star">★</span>
+        <span class="wanted-star">★</span>
+      </div>
+
+      <!-- Car theft prompt -->
+      <div id="steal-prompt">
+        <span class="steal-key">F</span>
+        <span class="steal-text">STEAL <span id="steal-prompt-name">CIVIC</span></span>
+      </div>
+
+      <!-- Wasted / Busted -->
+      <div id="ko-overlay">
+        <h1 id="ko-title">WASTED</h1>
+        <p id="ko-desc">Respawning at Metro General Hospital…</p>
       </div>
     </div>
 

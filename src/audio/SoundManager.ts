@@ -28,6 +28,11 @@ export class SoundManager {
   private rainGain: GainNode | null = null;
   private wasNitroActive = false;
 
+  // Police siren
+  private sirenOsc: OscillatorNode | null = null;
+  private sirenLfo: OscillatorNode | null = null;
+  private sirenGain: GainNode | null = null;
+
   // Music
   private musicAudio: HTMLAudioElement | null = null;
   public isMusicEnabled = false;
@@ -104,6 +109,28 @@ export class SoundManager {
       curbFilter.connect(this.curbGain);
       this.curbGain.connect(this.masterGain);
       this.curbOsc.start();
+
+      // Police siren (wail oscillator, gain raised only while police are close)
+      this.sirenOsc = this.ctx.createOscillator();
+      this.sirenOsc.type = 'sawtooth';
+      this.sirenOsc.frequency.value = 760;
+      this.sirenLfo = this.ctx.createOscillator();
+      this.sirenLfo.type = 'sine';
+      this.sirenLfo.frequency.value = 0.42;
+      const sirenLfoGain = this.ctx.createGain();
+      sirenLfoGain.gain.value = 235;
+      this.sirenLfo.connect(sirenLfoGain);
+      sirenLfoGain.connect(this.sirenOsc.frequency);
+      const sirenFilter = this.ctx.createBiquadFilter();
+      sirenFilter.type = 'lowpass';
+      sirenFilter.frequency.value = 1400;
+      this.sirenGain = this.ctx.createGain();
+      this.sirenGain.gain.value = 0;
+      this.sirenOsc.connect(sirenFilter);
+      sirenFilter.connect(this.sirenGain);
+      this.sirenGain.connect(this.masterGain);
+      this.sirenOsc.start();
+      this.sirenLfo.start();
 
       // Background Eurobeat Music
       this.musicAudio = new Audio('/assets/sounds/step-inside-your-mind-instrumental-eurobeat-royalty-free-music.mp3');
@@ -250,6 +277,12 @@ export class SoundManager {
       const targetVol = 0.22 + Math.min(0.26, eurobeatIntensity * 0.26);
       this.musicAudio.volume = targetVol;
     }
+  }
+
+  public updateSiren(active: boolean, proximity: number): void {
+    if (!this.ctx || !this.isInitialized || !this.sirenGain) return;
+    const level = active ? Math.max(0, Math.min(1, proximity)) : 0;
+    this.sirenGain.gain.setTargetAtTime(level * 0.075, this.ctx.currentTime, 0.16);
   }
 
   public toggleMute(): boolean {

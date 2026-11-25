@@ -51,13 +51,20 @@ Playable offline on mobile (Android) and desktop browsers with realistic superca
 - Barrier collision impact sounds and checkpoint notification beeps.
 - Optional Eurobeat soundtrack with one-tap audio mute.
 
+### 🥊 Street Life: Combat, Police & Car Theft
+- **Real knockdowns**: Sparring fighters have HP, stagger, and a 24-second KO before walking back in. The player has HP too — lose it and you get a **WASTED** overlay and revive at the South Junction.
+- **Heat & wanted stars**: Assault and grand theft auto raise a 0–5 wanted level. Police cruisers spawn from the city ring, chase, ram, and arrest you on foot. Lay low far from them to let heat decay.
+- **Busted flow**: Get caught on foot and you pay a fine scaled to your wanted level, then get released at the plaza with your heat cleared.
+- **Car theft**: Parked civilian cars around Neo Velo can be hotwired on foot. A stolen car becomes your active ride and can be parked and re-entered later — just lose the cops first.
+- **Human-scale characters**: Procedural realistic build with natural proportions, sculpted skull, ears, brows, nose, lips, fingers, cloth seams, and PBR fabric/skin shading (no cel outlines, no anime eyes).
+
 ### 🎮 Controls & HUD
 - **Analog Tachometer & Speedometer**: Smooth 60fps canvas gauge with glowing needle, redline alert, digital gear numeral, and km/h speed readout.
 - **Live Minimap Radar**: Overhead track layout showing checkpoints and real-time player orientation.
 - **Telemetry Bars**: Real-time visual feedback for throttle, brake, and clutch pressure.
 - **3 Camera Views**: Chase Cam (with speed-sensitive dynamic FOV), Cockpit / Hood Cam, and Orbit Cam.
 - **Full Input Support**:
-  - **Keyboard**: `W`/`S` (Throttle/Brake), `A`/`D` (Steer), `Space` (Handbrake), `E`/`Q` (Gear Shift), `C` (Clutch), `R` (Reset), `V` (Camera), `M` (Mute), `Y` (Rival Challenge), `Esc` (Settings).
+  - **Keyboard**: `W`/`S` (Throttle/Brake), `A`/`D` (Steer), `Space` (Handbrake), `E`/`Q` (Gear Shift), `C` (Clutch), `R` (Reset), `V` (Camera), `M` (Mute), `Y` (Rival Challenge), `F` (Enter/Exit or Steal Car), `J` (Punch), `Esc` (Settings).
   - **Mobile Touch**: Left/Right steering pads, Gas, Brake, Drift, Shift Up/Down buttons.
   - **Gamepad**: Analog triggers and steering sticks mapped via HTML5 Gamepad API.
 - **Legend Progression**: XP, credits, six Legend ranks, speed-trap and drift-zone records, Apex Logs, and a four-rival ladder — all saved locally.

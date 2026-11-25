@@ -48,6 +48,15 @@ export class HUD {
   private xpFillEl: HTMLElement;
   private creditsEl: HTMLElement;
 
+  private wantedEl: HTMLElement;
+  private wantedStars: HTMLElement[] = [];
+  private lastWanted = -1;
+  private stealPromptEl: HTMLElement;
+  private stealPromptName: HTMLElement;
+  private koOverlay: HTMLElement;
+  private koTitle: HTMLElement;
+  private koDesc: HTMLElement;
+
   private barGas: HTMLElement;
   private barBrake: HTMLElement;
   private barClutch: HTMLElement;
@@ -101,6 +110,7 @@ export class HUD {
   private lastCanEnter = false;
   private lastHpShown = -1;
   private lastGearboxShown: GearboxType = GearboxType.AUTO;
+  private lastFootAction = '';
   private lastRacePrompt = false;
 
   public onToggleEnterExit: () => void = () => {};
@@ -145,6 +155,14 @@ export class HUD {
     this.xpEl = document.getElementById('hud-xp')!;
     this.xpFillEl = document.getElementById('hud-xp-fill')!;
     this.creditsEl = document.getElementById('hud-credits')!;
+
+    this.wantedEl = document.getElementById('wanted-hud')!;
+    this.wantedStars = Array.from(document.querySelectorAll('#wanted-hud .wanted-star')) as HTMLElement[];
+    this.stealPromptEl = document.getElementById('steal-prompt')!;
+    this.stealPromptName = document.getElementById('steal-prompt-name')!;
+    this.koOverlay = document.getElementById('ko-overlay')!;
+    this.koTitle = document.getElementById('ko-title')!;
+    this.koDesc = document.getElementById('ko-desc')!;
 
     this.barGas = document.getElementById('bar-gas')!;
     this.barBrake = document.getElementById('bar-brake')!;
@@ -207,6 +225,48 @@ export class HUD {
     this.xpEl.textContent = xp.toLocaleString();
     this.xpFillEl.style.width = `${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%`;
     this.creditsEl.textContent = Math.round(credits).toLocaleString();
+  }
+
+  /** 0 = clean, 1..5 = wanted stars. */
+  public setWanted(level: number): void {
+    const n = Math.max(0, Math.min(5, Math.round(level)));
+    if (n === this.lastWanted) return;
+    this.lastWanted = n;
+    this.wantedEl.style.display = n > 0 ? 'flex' : 'none';
+    this.wantedEl.classList.toggle('hot', n >= 4);
+    for (let i = 0; i < this.wantedStars.length; i++) {
+      this.wantedStars[i].classList.toggle('active', i < n);
+    }
+  }
+
+  public setStealPrompt(carName: string | null): void {
+    if (carName) {
+      this.stealPromptName.textContent = carName;
+      this.stealPromptEl.style.display = 'flex';
+    } else {
+      this.stealPromptEl.style.display = 'none';
+    }
+  }
+
+  public showKoOverlay(title: string, desc: string, accent = '#ef4444'): void {
+    this.koTitle.textContent = title;
+    this.koTitle.style.color = accent;
+    this.koDesc.textContent = desc;
+    this.koOverlay.classList.add('open');
+  }
+
+  public hideKoOverlay(): void {
+    this.koOverlay.classList.remove('open');
+  }
+
+  public setFootAction(enabled: boolean, label: string): void {
+    const key = `${enabled}|${label}`;
+    if (key === this.lastFootAction) return;
+    this.lastFootAction = key;
+    this.enterExitLabel.textContent = label;
+    this.enterExitBtn.style.opacity = enabled ? '1' : '0.45';
+    this.enterExitBtn.style.background = enabled ? 'rgba(22, 163, 74, 0.92)' : 'rgba(30, 41, 59, 0.8)';
+    this.footDriveBtn.style.display = enabled ? 'flex' : 'none';
   }
 
   public setOnFootMode(onFoot: boolean, canEnterCar: boolean, hp: number, gearbox: GearboxType): void {
@@ -336,6 +396,8 @@ export class HUD {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
         e.preventDefault();
       }
+      // Key repeat must not re-trigger one-shot actions like enter/exit or theft.
+      if (e.repeat) return;
       if (e.code === 'KeyE') this.keyShiftUp = true;
       if (e.code === 'KeyQ') this.keyShiftDown = true;
       if (e.code === 'KeyR') this.keyReset = true;

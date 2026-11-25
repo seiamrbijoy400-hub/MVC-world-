@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CarPhysics, GearboxType, GroundSample } from './physics/CarPhysics';
 import { CharacterController } from './physics/CharacterController';
 import { CarMesh } from './graphics/CarMesh';
-import { AnimeCharacterMesh } from './graphics/AnimeCharacterMesh';
+import { HumanCharacterMesh } from './graphics/HumanCharacterMesh';
 import { TrackEnvironment, TimeOfDay } from './graphics/TrackEnvironment';
 import { OpenWorldMap } from './graphics/OpenWorldMap';
 import { ParticleSystem } from './graphics/ParticleSystem';
@@ -18,6 +18,7 @@ import type { WeatherMode } from './game/SaveManager';
 import { WeatherSystem } from './graphics/WeatherSystem';
 import { GhostSystem } from './game/GhostSystem';
 import { WorldActivities, type RivalSprintDef } from './game/WorldActivities';
+import { PoliceSystem } from './game/PoliceSystem';
 import type { NetworkPlayerSync } from './network/LobbyProtocol';
 
 enum CameraView {
@@ -36,7 +37,7 @@ enum GameState {
 interface RemotePeer {
   id: string;
   carMesh: CarMesh;
-  charMesh: AnimeCharacterMesh;
+  charMesh: HumanCharacterMesh;
   lastState: NetworkPlayerSync;
 }
 
@@ -55,7 +56,7 @@ class GameApp {
   private inCar = false; // Spawn on foot right beside car in Open World!
 
   private carMesh: CarMesh;
-  private avatarMesh: AnimeCharacterMesh;
+  private avatarMesh: HumanCharacterMesh;
   private track: TrackEnvironment;
   private openWorld: OpenWorldMap;
   private particles: ParticleSystem;
@@ -70,6 +71,7 @@ class GameApp {
   private weather: WeatherSystem;
   private ghost: GhostSystem;
   private activities: WorldActivities;
+  private police: PoliceSystem;
   private ghostReplayEnabled = true;
   private nearbyRival: RivalSprintDef | null = null;
   private baseAmbientIntensity = 0.72;
@@ -80,6 +82,17 @@ class GameApp {
   private cityCruisers: CityCruiserBot[] = [];
   private sparringFighters: SparringFighter[] = [];
   private remotePeers = new Map<string, RemotePeer>();
+
+  /** Player-owned cars left in the world (own Zenvo + anything stolen and abandoned). */
+  private parkedCars: { physics: CarPhysics; mesh: CarMesh; name: string }[] = [];
+  /** Stealable civilian cars parked around the city. */
+  private civicCars: { physics: CarPhysics; mesh: CarMesh; name: string }[] = [];
+  private nearbyCivic: { physics: CarPhysics; mesh: CarMesh; name: string } | null = null;
+  private activeCarName = 'Your Zenvo';
+  private assaultHeatCooldown = 0;
+  private policeHitCooldown = 0;
+  private koReason: 'WASTED' | 'BUSTED' | null = null;
+  private sampleUnifiedGround!: (x: number, z: number) => GroundSample;
 
   private gameState: GameState = GameState.OPEN_WORLD;
   private countdownTimer = 0;
@@ -142,7 +155,7 @@ class GameApp {
       this.award(80, 120);
     };
 
-    const sampleUnifiedGround = (x: number, z: number): GroundSample => {
+    this.sampleUnifiedGround = (x: number, z: number): GroundSample => {
       const base = this.track.sampleGround(x, z);
       const rampH = this.openWorld.sampleRampHeight(x, z);
       const inCity = this.openWorld.isInsideCityOrPlayground(x, z);
@@ -157,7 +170,7 @@ class GameApp {
     this.physics = new CarPhysics();
     this.physics.enforceTrackWalls = false;
     this.physics.trackMaxHalfWidth = this.track.wallOffset;
-    this.physics.groundHeightSampler = sampleUnifiedGround;
+    this.physics.groundHeightSampler = this.sampleUnifiedGround;
     this.physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
     this.physics.gearboxType = this.save.data.gearbox;
     this.physics.assistMode = this.save.data.assistMode;
@@ -172,9 +185,34 @@ class GameApp {
 
     // Character Controller
     this.charCtrl = new CharacterController();
-    this.charCtrl.groundHeightSampler = (x, z) => sampleUnifiedGround(x, z).height;
+    this.charCtrl.groundHeightSampler = (x, z) => this.sampleUnifiedGround(x, z).height;
     this.charCtrl.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
     this.charCtrl.onPunchStrike = (origin, fwd) => this.handlePlayerPunch(origin, fwd);
+    this.charCtrl.respawnPoint = new THREE.Vector3(13.8, 0, 24.5);
+    this.charCtrl.onDeath = () => {
+      this.koReason = 'WASTED';
+      this.sound.playCrash(90);
+      this.sound.playBeep(110, 0.55);
+      this.police?.clearHeat();
+      this.hud.setStealPrompt(null);
+      this.hud.showKoOverlay('WASTED', 'You were beaten down. Respawning at South Junction…');
+      this.hud.showNotification('KNOCKED OUT', 'You are down. Wait for the revive.', 2.4);
+    };
+    this.charCtrl.onRespawn = (spawn) => {
+      this.avatarMesh.root.position.copy(spawn);
+      this.avatarMesh.root.rotation.y = this.charCtrl.yaw;
+      this.avatarMesh.root.rotation.x = 0;
+      this.footCamYaw = this.charCtrl.yaw;
+      this.chaseCamPos.set(spawn.x + 4, 2.6, spawn.z + 6);
+      this.chaseCamLook.copy(spawn);
+      if (this.koReason === 'BUSTED') {
+        // handleBusted owns the overlay and message in this case.
+      } else {
+        this.koReason = null;
+        this.hud.hideKoOverlay();
+        this.hud.showNotification('BACK ON YOUR FEET', 'HP restored. Keep it clean.', 1.8);
+      }
+    };
 
     this.carMesh = new CarMesh(true);
     this.carMesh.setColor(this.save.data.carColor);
@@ -183,7 +221,7 @@ class GameApp {
 
     this.studio = new CharacterStudio();
     this.studio.applyPreset(this.save.data.characterId);
-    this.avatarMesh = new AnimeCharacterMesh(this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
+    this.avatarMesh = new HumanCharacterMesh(this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
     this.avatarMesh.setNameAndHp(this.save.data.playerName, 100);
     this.scene.add(this.avatarMesh.root);
 
@@ -207,6 +245,24 @@ class GameApp {
     this.hud.onSendChat = (txt) => this.sendInGameChat(txt);
     this.hud.onSendEmoji = (emoji) => this.sendEmojiReaction(emoji);
     this.refreshProfile();
+
+    this.police = new PoliceSystem(this.scene, this.track, this.openWorld);
+    this.police.onHooks = {
+      onHeatChanged: (level, label) => {
+        this.hud.setWanted(level);
+        if (level > 0) {
+          this.sound.playBeep(level >= 3 ? 520 : 700, 0.18);
+          this.hud.showNotification(`WANTED ${level}`, label, 2.0);
+        } else {
+          this.hud.showNotification('CLEAN', 'You lost the police.', 1.8);
+        }
+      },
+      onBusted: (fine, heat) => this.handleBusted(fine, heat),
+      onImpact: (impact, pos) => {
+        this.sound.playCrash(impact);
+        this.particles.emitSparks(pos, 8);
+      }
+    };
 
     this.lapManager = new LapManager(
       this.track,
@@ -279,11 +335,11 @@ class GameApp {
       }
     });
 
-    // Spawn 2 Roaming Anime Sparring Fighters in City Plaza & Playground!
+    // Spawn 2 roaming sparring fighters in City Plaza & Playground
     const f1 = new SparringFighter('Kenji', 'kaito', new THREE.Vector3(34, 0, 22), this.scene);
     const f2 = new SparringFighter('Yuki', 'mika', new THREE.Vector3(84, 0, 75), this.scene);
     for (const f of [f1, f2]) {
-      f.controller.groundHeightSampler = (x, z) => sampleUnifiedGround(x, z).height;
+      f.controller.groundHeightSampler = (x, z) => this.sampleUnifiedGround(x, z).height;
       f.controller.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
       f.controller.onPunchStrike = (origin, fwd) => {
         if (!this.inCar && origin.distanceTo(this.charCtrl.position) < 2.2) {
@@ -328,6 +384,7 @@ class GameApp {
     });
 
     this.spawnCityCruisers();
+    this.spawnCivicCars();
     const savedTod = this.save.data.atmospherePref === 'AUTO' ? 'SUNSET' : this.save.data.atmospherePref;
     this.setAtmosphere(savedTod);
     this.bindMultiplayerEvents();
@@ -350,6 +407,11 @@ class GameApp {
     // Park car at South Track-City Boulevard Junction facing the GP Track Gate
     this.physics.enforceTrackWalls = false;
     this.physics.resetToTrack(new THREE.Vector3(16, 0, 26), Math.PI * 0.42);
+    this.parkActiveCar();
+    this.hud.setStealPrompt(null);
+    this.hud.hideKoOverlay();
+    this.koReason = null;
+    this.hud.setWanted(this.police.heat);
     // Stand right beside the driver's door!
     this.charCtrl.resetAt(new THREE.Vector3(13.8, 0, 24.5), Math.PI * 0.42);
     this.footCamYaw = Math.PI * 0.42;
@@ -372,6 +434,10 @@ class GameApp {
     this.sound.init();
     this.hud.setRacePrompt(false);
     this.setRivalPrompt(null);
+    this.hud.setStealPrompt(null);
+    this.hud.hideKoOverlay();
+    this.police.clearHeat();
+    this.hud.setWanted(0);
     this.activities.cancelSprint();
     document.getElementById('results-modal')!.classList.remove('open');
 
@@ -433,7 +499,7 @@ class GameApp {
         if (!peer) {
           const carM = new CarMesh();
           carM.setColor(st.carColor || '#2563eb');
-          const charM = new AnimeCharacterMesh(st.characterId || 'mika', st.name || 'Friend', st.appearance);
+          const charM = new HumanCharacterMesh(st.characterId || 'mika', st.name || 'Friend', st.appearance);
           this.scene.add(carM.root);
           this.scene.add(charM.root);
           peer = { id, carMesh: carM, charMesh: charM, lastState: st };
@@ -539,16 +605,33 @@ class GameApp {
 
     // 2. Hit Roaming Sparring Fighters
     for (const f of this.sparringFighters) {
+      if (f.isDead) continue;
       const toF = f.controller.position.clone().sub(origin);
       const d = Math.hypot(toF.x, toF.z);
       if (d < 2.5 && d > 0.01) {
         toF.y = 0;
         toF.normalize();
         if (toF.dot(fwd) > 0.05) {
-          f.controller.takeDamage(25, fwd.x, fwd.z);
+          const killed = f.controller.takeDamage(25, fwd.x, fwd.z);
           this.sound.playCrash(28);
-          this.particles.emitSparks(f.controller.position, 10);
-          this.cameraShake = 0.14;
+          this.particles.emitSparks(f.controller.position, killed ? 22 : 10);
+          this.cameraShake = 0.16;
+
+          if (killed) {
+            this.save.data.knockouts++;
+            this.save.scheduleSave();
+            this.award(120, 160);
+            this.police.addHeat(2, 'ASSAULT');
+            this.hud.showNotification(
+              `${f.name.toUpperCase()} DOWN`,
+              'Knockout. The city noticed that. Expect police.',
+              2.6
+            );
+            this.sound.playRankUpFanfare();
+          } else if (this.assaultHeatCooldown <= 0) {
+            this.assaultHeatCooldown = 6;
+            this.police.addHeat(1, 'ASSAULT');
+          }
         }
       }
     }
@@ -574,6 +657,10 @@ class GameApp {
 
   private toggleEnterExitCar(): void {
     if (this.gameState === GameState.COUNTDOWN) return;
+    if (this.charCtrl.isDead) {
+      this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
+      return;
+    }
     if (this.activities.activeSprint) {
       this.hud.showNotification('SPRINT IN PROGRESS', 'Finish the 1v1 before leaving the car!', 1.6);
       return;
@@ -585,6 +672,7 @@ class GameApp {
         return;
       }
       this.inCar = false;
+      this.parkActiveCar();
       const rgt = this.physics.getRightVector();
       const exitPos = this.physics.position.clone().addScaledVector(rgt, -1.9);
       this.charCtrl.resetAt(exitPos, this.physics.rotation.y);
@@ -594,22 +682,149 @@ class GameApp {
       this.sound.updateTireSkid(0);
       this.hud.setOnFootMode(true, true, this.charCtrl.hp, this.physics.gearboxType);
       this.hud.showNotification('ON FOOT', 'Walk/Run • Fight [J] • Drive [F]', 1.8);
+      this.hud.setStealPrompt(null);
       this.setRivalPrompt(null);
     } else {
-      const dist = Math.hypot(
-        this.charCtrl.position.x - this.physics.position.x,
-        this.charCtrl.position.z - this.physics.position.z
+      const owned = this.findNearestParkedCar(5.0);
+      if (owned) {
+        this.enterOwnedCar(owned);
+        return;
+      }
+
+      const civic = this.findNearestCivicCar(4.2);
+      if (civic) {
+        this.stealCar(civic);
+        return;
+      }
+
+      this.hud.showNotification('NO CAR IN REACH', 'Walk up to your car or a parked civilian car.', 1.6);
+    }
+  }
+
+  /** Keeps a reference to the car you just left so you can re-enter it later. */
+  private parkActiveCar(): void {
+    if (this.parkedCars.some((p) => p.physics === this.physics)) return;
+    this.parkedCars.push({ physics: this.physics, mesh: this.carMesh, name: this.activeCarName });
+  }
+
+  private findNearestParkedCar(radius: number): { physics: CarPhysics; mesh: CarMesh; name: string } | null {
+    let best: { physics: CarPhysics; mesh: CarMesh; name: string } | null = null;
+    let bestDist = radius;
+    for (const entry of this.parkedCars) {
+      const d = Math.hypot(
+        this.charCtrl.position.x - entry.physics.position.x,
+        this.charCtrl.position.z - entry.physics.position.z
       );
-      if (dist < 5.0) {
-        this.inCar = true;
-        this.avatarMesh.root.visible = false;
-        this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
-        this.hud.showNotification('DRIVING', 'Drive to Green Gate on Track to Race!', 1.6);
-        this.setRivalPrompt(this.nearbyRival);
-      } else {
-        this.hud.showNotification('TOO FAR', 'Walk closer to your Zenvo car!', 1.2);
+      if (d < bestDist) {
+        bestDist = d;
+        best = entry;
       }
     }
+    return best;
+  }
+
+  private findNearestCivicCar(radius: number): { physics: CarPhysics; mesh: CarMesh; name: string } | null {
+    let best: { physics: CarPhysics; mesh: CarMesh; name: string } | null = null;
+    let bestDist = radius;
+    for (const entry of this.civicCars) {
+      const d = Math.hypot(
+        this.charCtrl.position.x - entry.physics.position.x,
+        this.charCtrl.position.z - entry.physics.position.z
+      );
+      if (d < bestDist) {
+        bestDist = d;
+        best = entry;
+      }
+    }
+    return best;
+  }
+
+  private enterOwnedCar(entry: { physics: CarPhysics; mesh: CarMesh; name: string }): void {
+    this.inCar = true;
+    this.parkedCars = this.parkedCars.filter((p) => p !== entry);
+    this.physics = entry.physics;
+    this.carMesh = entry.mesh;
+    this.activeCarName = entry.name;
+    this.configureActiveCar();
+    this.avatarMesh.root.visible = false;
+    this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
+    this.hud.setStealPrompt(null);
+    this.hud.showNotification('DRIVING', 'Drive to Green Gate on Track to Race!', 1.6);
+    this.setRivalPrompt(this.nearbyRival);
+  }
+
+  private stealCar(civic: { physics: CarPhysics; mesh: CarMesh; name: string }): void {
+    this.sound.init();
+    this.parkActiveCar();
+    this.civicCars = this.civicCars.filter((c) => c !== civic);
+
+    this.inCar = true;
+    this.physics = civic.physics;
+    this.carMesh = civic.mesh;
+    this.activeCarName = `${civic.name}'s Ride`;
+    this.configureActiveCar();
+    this.avatarMesh.root.visible = false;
+
+    this.save.data.carsStolen++;
+    this.save.scheduleSave();
+    this.sound.playGearShift();
+    this.sound.playBeep(460, 0.22);
+    this.police.addHeat(2, 'GRAND THEFT AUTO');
+    this.hud.setStealPrompt(null);
+    this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
+    this.hud.showNotification(
+      'VEHICLE STOLEN',
+      `${civic.name}'s car is yours. Lose the police to keep it.`,
+      3.0
+    );
+    this.setRivalPrompt(null);
+  }
+
+  /** Re-applies the player-car callbacks after swapping into a different chassis. */
+  private configureActiveCar(): void {
+    this.physics.enforceTrackWalls = false;
+    this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
+    this.physics.onWallCollision = (impactKmh) => {
+      this.sound.playCrash(impactKmh);
+      this.particles.emitSparks(this.physics.position, 14);
+      this.cameraShake = Math.min(0.42, impactKmh / 140);
+      this.lapManager.handleDriftCrash(impactKmh);
+    };
+    this.carMesh.setHeadlights(true);
+    this.hud.updateTouchVisibility(this.physics.gearboxType);
+  }
+
+  private handleBusted(fine: number, heat: number): void {
+    const paid = this.save.spendCredits(fine);
+    this.save.data.timesBusted++;
+    this.save.scheduleSave();
+    this.koReason = 'BUSTED';
+    this.inCar = false;
+    this.avatarMesh.root.visible = true;
+    this.avatarMesh.root.rotation.x = 0;
+
+    const release = new THREE.Vector3(48, 0, 34);
+    this.charCtrl.respawnPoint = release;
+    this.charCtrl.revive(release);
+    this.avatarMesh.root.position.copy(release);
+    this.footCamYaw = Math.PI;
+    this.hud.hideKoOverlay();
+    this.hud.showKoOverlay(
+      'BUSTED',
+      `Wanted level ${heat} • Fine ₡${paid.toLocaleString()} • Released at the plaza`,
+      '#38bdf8'
+    );
+    this.sound.playBeep(200, 0.4);
+    window.setTimeout(() => {
+      if (this.koReason === 'BUSTED') {
+        this.hud.hideKoOverlay();
+        this.koReason = null;
+      }
+    }, 2800);
+    this.hud.showNotification('BUSTED', `You paid ₡${paid.toLocaleString()} and lost the cops.`, 3.0);
+    this.hud.setWanted(0);
+    this.hud.setStealPrompt(null);
+    this.charCtrl.respawnPoint = new THREE.Vector3(13.8, 0, 24.5);
   }
 
   private setupLighting(): void {
@@ -728,6 +943,50 @@ class GameApp {
       new CityCruiserBot('city_2', 'Mei', '#ec4899', outerLoop, 2, this.openWorld, this.track, this.scene),
       new CityCruiserBot('city_3', 'Daichi', '#22c55e', plazaLoop, 1, this.openWorld, this.track, this.scene)
     );
+  }
+
+  /** Parked civilian cars: the actual car-theft targets you can hotwire on foot. */
+  private spawnCivicCars(): void {
+    const specs: Array<{ x: number; z: number; heading: number; color: string; name: string }> = [
+      { x: 24, z: 34, heading: -1.2, color: '#0ea5e9', name: 'Aiko' },
+      { x: 50.5, z: 62, heading: 0, color: '#f97316', name: 'Takeda' },
+      { x: 50.5, z: 108, heading: Math.PI, color: '#22c55e', name: 'Rin' },
+      { x: 118, z: 2, heading: Math.PI * 0.5, color: '#e11d48', name: 'Jiro' },
+      { x: 50.5, z: -72, heading: 0, color: '#a855f7', name: 'Nao' },
+      { x: 170, z: -157, heading: Math.PI * 0.5, color: '#facc15', name: 'Ken' }
+    ];
+
+    for (const spec of specs) {
+      const physics = new CarPhysics();
+      physics.enforceTrackWalls = false;
+      physics.groundHeightSampler = this.sampleUnifiedGround;
+      physics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
+
+      const ground = this.sampleUnifiedGround(spec.x, spec.z);
+      physics.resetToTrack(new THREE.Vector3(spec.x, ground.height, spec.z), spec.heading);
+      // Nudge out of any building collider so the car never spawns inside a wall.
+      this.openWorld.resolveCollision(physics.position, new THREE.Vector3(), 1.5);
+      physics.position.y = this.sampleUnifiedGround(physics.position.x, physics.position.z).height;
+
+      const mesh = new CarMesh();
+      mesh.setColor(spec.color);
+      mesh.root.position.copy(physics.position);
+      mesh.root.rotation.y = physics.rotation.y;
+      this.scene.add(mesh.root);
+
+      this.civicCars.push({ physics, mesh, name: spec.name });
+    }
+  }
+
+  private syncParkedMeshes(): void {
+    for (const c of this.civicCars) {
+      c.mesh.root.position.copy(c.physics.position);
+      c.mesh.root.rotation.y = c.physics.rotation.y;
+    }
+    for (const c of this.parkedCars) {
+      c.mesh.root.position.copy(c.physics.position);
+      c.mesh.root.rotation.y = c.physics.rotation.y;
+    }
   }
 
   private handleHornPressed(): void {
@@ -1110,12 +1369,16 @@ class GameApp {
   }
 
   private resolveCarVsCarCollisions(): void {
-    const vehicles: CarPhysics[] = [
+    const all: CarPhysics[] = [
       this.physics,
       ...this.raceBots.map(b => b.physics),
       ...this.cityCruisers.map(c => c.physics),
+      ...this.parkedCars.map(c => c.physics),
+      ...this.civicCars.map(c => c.physics),
+      ...this.police.units.map(u => u.physics),
       ...(this.activities.activeSprint ? [this.activities.activeSprint.rivalPhysics] : [])
     ];
+    const vehicles = Array.from(new Set(all));
     for (let i = 0; i < vehicles.length; i++) {
       for (let j = i + 1; j < vehicles.length; j++) {
         this.separateVehiclePair(vehicles[i], vehicles[j], i === 0);
@@ -1172,6 +1435,7 @@ class GameApp {
       );
 
       if (this.boostCooldown > 0) this.boostCooldown -= dt;
+      if (this.assaultHeatCooldown > 0) this.assaultHeatCooldown -= dt;
 
       if (this.gameState === GameState.COUNTDOWN) {
         this.countdownTimer -= dt;
@@ -1273,19 +1537,27 @@ class GameApp {
         this.avatarMesh.root.position.copy(this.physics.position);
         this.avatarMesh.updateAnimation(dt, 'IDLE');
       } else {
-        // ON-FOOT ANIME CHARACTER
+        // ON-FOOT CHARACTER
         const charInputs = this.hud.pollCharacterInputs();
         this.charCtrl.update(dt, charInputs, this.footCamYaw);
 
-        // Character vs Parked Car Hull Collision
-        const dx = this.charCtrl.position.x - this.physics.position.x;
-        const dz = this.charCtrl.position.z - this.physics.position.z;
-        const carRad = 1.75;
-        const dSq = dx * dx + dz * dz;
-        if (dSq < carRad * carRad && dSq > 0.0001) {
-          const d = Math.sqrt(dSq);
-          this.charCtrl.position.x = this.physics.position.x + (dx / d) * carRad;
-          this.charCtrl.position.z = this.physics.position.z + (dz / d) * carRad;
+        // Character vs every parked / civic car hull
+        const carHulls = [
+          this.physics,
+          ...this.parkedCars.map((p) => p.physics),
+          ...this.civicCars.map((c) => c.physics),
+          ...this.police.units.map((u) => u.physics)
+        ];
+        for (const hull of carHulls) {
+          const dx = this.charCtrl.position.x - hull.position.x;
+          const dz = this.charCtrl.position.z - hull.position.z;
+          const carRad = 1.75;
+          const dSq = dx * dx + dz * dz;
+          if (dSq < carRad * carRad && dSq > 0.0001) {
+            const d = Math.sqrt(dSq);
+            this.charCtrl.position.x = hull.position.x + (dx / d) * carRad;
+            this.charCtrl.position.z = hull.position.z + (dz / d) * carRad;
+          }
         }
 
         this.avatarMesh.root.position.copy(this.charCtrl.position);
@@ -1298,11 +1570,12 @@ class GameApp {
         this.sound.updateEngineSound(1000, 9500, 0, false, false, 0);
         this.sound.updateTireSkid(0);
 
-        const nearCar = Math.hypot(
-          this.charCtrl.position.x - this.physics.position.x,
-          this.charCtrl.position.z - this.physics.position.z
-        ) < 5.0;
-        this.hud.setOnFootMode(true, nearCar, this.charCtrl.hp, this.physics.gearboxType);
+        const nearCar = this.findNearestParkedCar(5.0) !== null;
+        this.nearbyCivic = this.findNearestCivicCar(4.2);
+        const canAct = nearCar || this.nearbyCivic !== null;
+        this.hud.setOnFootMode(true, canAct, this.charCtrl.hp, this.physics.gearboxType);
+        this.hud.setFootAction(canAct, nearCar ? 'Drive Car' : (this.nearbyCivic ? 'Steal Car' : 'Walk to Car'));
+        this.hud.setStealPrompt(!nearCar && this.nearbyCivic ? this.nearbyCivic.name : null);
       }
 
       // Lap timer ticks even when player is on foot during a timed race
@@ -1348,7 +1621,48 @@ class GameApp {
         cruiser.update(dt, this.physics.position, footRef, cityPositions);
       }
 
+      // Police heat, pursuit, sirens and on-foot arrests
+      if (this.gameState === GameState.OPEN_WORLD) {
+        this.police.update(
+          dt,
+          activePos,
+          this.inCar || this.charCtrl.isDead,
+          this.inCar ? this.physics : null
+        );
+        this.sound.updateSiren(
+          this.police.units.length > 0,
+          1 - Math.min(1, this.police.nearestDistance / 150)
+        );
+
+        // A cruiser clipping you on foot hurts.
+        if (this.policeHitCooldown > 0) this.policeHitCooldown -= dt;
+        if (!this.inCar && !this.charCtrl.isDead && this.policeHitCooldown <= 0) {
+          for (const unit of this.police.units) {
+            if (unit.physics.speedKmh < 24) continue;
+            const d = Math.hypot(
+              unit.physics.position.x - this.charCtrl.position.x,
+              unit.physics.position.z - this.charCtrl.position.z
+            );
+            if (d < 3.2) {
+              const away = this.charCtrl.position.clone().sub(unit.physics.position);
+              away.y = 0;
+              if (away.lengthSq() < 0.001) away.set(0, 0, 1);
+              away.normalize();
+              this.charCtrl.takeDamage(30, away.x, away.z);
+              this.policeHitCooldown = 1.2;
+              this.cameraShake = 0.3;
+              this.sound.playCrash(45);
+              break;
+            }
+          }
+        }
+      } else if (this.police.isActive) {
+        this.police.clearHeat();
+        this.sound.updateSiren(false, 0);
+      }
+
       this.resolveCarVsCarCollisions();
+      this.syncParkedMeshes();
 
       // Update City Sparring Fighters
       for (const f of this.sparringFighters) {

@@ -1,4 +1,4 @@
-import { DEFAULT_APPEARANCE_BY_ID } from '../graphics/AnimeCharacterMesh';
+import { DEFAULT_APPEARANCE_BY_ID } from '../graphics/HumanCharacterMesh';
 import type {
   AccessoryId,
   CharacterAppearance,
@@ -9,11 +9,11 @@ import type {
 const STORAGE_KEY = 'zenvo_avatar_v1';
 
 const HAIR_STYLES: { id: HairStyleId; label: string }[] = [
-  { id: 'spiky', label: 'Spiky' },
-  { id: 'twintails', label: 'Twin-Tails' },
-  { id: 'ponytail', label: 'Ponytail' },
+  { id: 'spiky', label: 'Textured Crop' },
+  { id: 'twintails', label: 'Twin Braids' },
+  { id: 'ponytail', label: 'Low Ponytail' },
   { id: 'bob', label: 'Street Bob' },
-  { id: 'cyber', label: 'Cyber Fin' }
+  { id: 'cyber', label: 'Slick Back' }
 ];
 
 const ACCESSORIES: { id: AccessoryId; label: string }[] = [
@@ -24,10 +24,10 @@ const ACCESSORIES: { id: AccessoryId; label: string }[] = [
   { id: 'wing', label: 'Nitro Pack' }
 ];
 
-const HAIR_COLORS = ['#1e293b', '#f472b6', '#38bdf8', '#facc15', '#dc2626', '#f8fafc', '#a855f7'];
-const EYE_COLORS = ['#f97316', '#ec4899', '#06b6d4', '#eab308', '#22c55e', '#ef4444'];
-const JACKET_COLORS = ['#ff5500', '#1e1b4b', '#1d4ed8', '#dc2626', '#18181b', '#16a34a', '#9333ea'];
-const SKIN_COLORS = ['#ffeadb', '#ffe0c8', '#f5cba7', '#d9a074', '#8d5524'];
+const HAIR_COLORS = ['#1c1917', '#3b2a20', '#6b4a2f', '#a16207', '#7f1d1d', '#9ca3af', '#2f3e46'];
+const EYE_COLORS = ['#4a2f1b', '#6b4423', '#3f6212', '#1e3a8a', '#0f172a', '#7c2d12'];
+const JACKET_COLORS = ['#c2410c', '#1e1b4b', '#1d4ed8', '#7f1d1d', '#18181b', '#166534', '#4c1d95'];
+const SKIN_COLORS = ['#f2d3b6', '#e0b48c', '#c68a5e', '#a1663f', '#6b4529'];
 
 export class CharacterStudio {
   private modal: HTMLElement;
