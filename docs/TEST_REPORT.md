@@ -14,10 +14,21 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (62/62)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`62` pass, `0` fail, `0` skipped, `16.59s`):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (65/65)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`65` pass, `0` fail, `0` skipped, `~21.6s`):
 
-### Sprint 15 — world gameplay coherence & AI navigation (2026-11-26, current)
+### Sprint 16 — UI/UX design repair (`4916b2b`)
+| Issue | Status | Evidence |
+| :--- | :---: | :--- |
+| `APEX LOG 4/12` looked like a generic login/title screen | **FIXED** | `main.ts` shard callback now calls `HUD.showCollectible()`; compact `#toast-layer` card with diamond icon, lore and progress bar; `.center-notice` reserved for countdown/GO (`{ hero: true }`). Source-level markup/CSS verified. |
+| Notices overwrote each other / hid behind modals | **FIXED** | Root toast portal at `z-index:120` with up-to-4 stacked independent timers; garage/settings/results use in-modal `role="status"` regions; hero notices expire by wall clock on tab return. |
+| HUD stacking trap / overlapping prompts | **FIXED** | `#hud-overlay` raised to `z-index:30`; world popups capped at 12 and clamped; rival/courier prompts mutually exclusive; drift pill hidden while prompts are visible; courier card offset below rival card. |
+| 320–390px control overflow, notch clipping, tiny targets | **FIXED (source)** | Class-based touch sizing with `clamp()`/wrapping, `dvh` + `env(safe-area-inset-*)`, 44px coarse-pointer minimums. |
+| A11y / untrusted LAN strings | **FIXED** | `aria-live`, dialog roles, close buttons, Tab trap, Escape closes topmost overlay, focus restore after re-render, `aria-pressed`, `textContent` DOM building for room/roster data, no native `alert()`. |
+
+**Limits:** no browser/Android attached — screenshots, real touch gestures, GPU/FPS/memory and final visual appearance are **NOT TESTED**.
+
+### Sprint 15 — world gameplay coherence & AI navigation
 | Issue | Status | Evidence |
 | :--- | :---: | :--- |
 | Pier jump snapped the car ~17m backwards onto the deck | **FIXED** | `isOverOpenWater()` + clearance-based pier clamp; real `CarPhysics` drive from (168,240): max `z=327.97`, `maxY=5.27`, **0** backward jumps, splashdown in ocean. `main.ts` now samples ocean height `-1.05` and recovers to `lastSafePosition` with SPLASHDOWN notification. |
