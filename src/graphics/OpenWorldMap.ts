@@ -19,6 +19,19 @@ export interface RampBox {
   dir: 'NORTH' | 'SOUTH' | 'EAST' | 'WEST'; // direction ascending
 }
 
+/** Walkable two-floor interior (ground + mezzanine) with a connected stair ramp. */
+export interface InteriorFloorZone {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  groundY: number;
+  upperY: number;
+  /** Above this actor height the upper floor is selected outside the stairs. */
+  switchY: number;
+  stairs: { minX: number; maxX: number; minZ: number; maxZ: number; dir: 'NORTH' | 'SOUTH' | 'EAST' | 'WEST' };
+}
+
 export interface BoostPad {
   x: number;
   z: number;
@@ -103,6 +116,9 @@ export class OpenWorldMap {
   public colliders: AABBCollider[] = [];
   public ramps: RampBox[] = [];
   public boostPads: BoostPad[] = [];
+  public interiorFloors: InteriorFloorZone[] = [];
+  /** Chair seats the player can sit on, with the facing yaw to use. */
+  public sitSpots: Array<{ pos: THREE.Vector3; yaw: number; label: string }> = [];
 
   // Giant Physics Soccer Ball in Playground
   public ballMesh: THREE.Mesh;
@@ -407,14 +423,216 @@ export class OpenWorldMap {
     return tex;
   }
 
+  /**
+   * Walk-in restaurant: hollow two-storey shell with a front door gap,
+   * mezzanine, stairs and seated furniture. Reuses shared facade materials so
+   * no extra texture downloads are needed on mobile.
+   */
+  private createRestaurantInterior(
+    b: { x: number; z: number; w: number; d: number; h: number },
+    facadeMat: THREE.Material,
+    sideMat: THREE.Material,
+    roofMat: THREE.Material,
+    neonMat: THREE.Material
+  ): void {
+    const minX = b.x - b.w * 0.5;
+    const maxX = b.x + b.w * 0.5;
+    const minZ = b.z - b.d * 0.5;
+    const maxZ = b.z + b.d * 0.5;
+    const wallT = 0.6;
+    const wallH = 8.8;
+    const upperY = 4.2;
+    const doorHalf = 1.1;
+    const innerMinX = minX + wallT;
+    const innerMaxX = maxX - wallT;
+    const innerMinZ = minZ + wallT;
+    const innerMaxZ = maxZ - wallT;
+
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x2a3446, roughness: 0.82 });
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x7c4a2d, roughness: 0.68 });
+    const metalMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.7, roughness: 0.35 });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+
+    const addBox = (
+      w: number, h: number, d: number, x: number, y: number, z: number,
+      mat: THREE.Material, collide = false, collideHeight = wallH
+    ): void => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.group.add(mesh);
+      if (collide) {
+        this.colliders.push({
+          minX: x - w * 0.5, maxX: x + w * 0.5,
+          minZ: z - d * 0.5, maxZ: z + d * 0.5,
+          height: collideHeight
+        });
+      }
+    };
+
+    // Perimeter walls. Full-height colliders also keep the follow-camera from
+    // clipping through the mezzanine walls (camera sits around y=6.4 upstairs).
+    addBox(b.w, wallH, wallT, b.x, wallH * 0.5, minZ + wallT * 0.5, facadeMat, true, wallH);
+    addBox(wallT, wallH, b.d, minX + wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    addBox(wallT, wallH, b.d, maxX - wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    const leftW = b.x - doorHalf - minX;
+    const rightW = maxX - (b.x + doorHalf);
+    addBox(leftW, wallH, wallT, minX + leftW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+    addBox(rightW, wallH, wallT, b.x + doorHalf + rightW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+
+    // Door frame + warm interior glow
+    addBox(0.22, 3.3, 0.3, b.x - doorHalf, 1.65, maxZ + 0.15, neonMat);
+    addBox(0.22, 3.3, 0.3, b.x + doorHalf, 1.65, maxZ + 0.15, neonMat);
+    addBox(doorHalf * 2 + 0.22, 0.22, 0.3, b.x, 3.3, maxZ + 0.15, neonMat);
+    addBox(doorHalf * 2, 0.12, 0.5, b.x, 0.06, maxZ + 0.3, glowMat);
+
+    // Ground floor
+    addBox(innerMaxX - innerMinX, 0.2, innerMaxZ - innerMinZ, b.x, 0.1, b.z, floorMat);
+
+    // Upper floor slab, split around the stairwell
+    const stMinX = minX + 2;
+    const stMaxX = minX + 6;
+    const stMinZ = minZ + 6;
+    const stMaxZ = maxZ - 8;
+    const slabT = 0.25;
+    const slabY = upperY - slabT * 0.5;
+    addBox(stMinX - innerMinX, slabT, innerMaxZ - innerMinZ, (innerMinX + stMinX) * 0.5, slabY, b.z, floorMat);
+    addBox(innerMaxX - stMaxX, slabT, innerMaxZ - innerMinZ, (stMaxX + innerMaxX) * 0.5, slabY, b.z, floorMat);
+    addBox(stMaxX - stMinX, slabT, innerMaxZ - stMaxZ, (stMinX + stMaxX) * 0.5, slabY, (stMaxZ + innerMaxZ) * 0.5, floorMat);
+    addBox(stMaxX - stMinX, slabT, stMinZ - innerMinZ, (stMinX + stMaxX) * 0.5, slabY, (innerMinZ + stMinZ) * 0.5, floorMat);
+
+    // Walkable staircase (visual steps; ground sampling handles the ramp)
+    const steps = 14;
+    const stepDepth = (stMaxZ - stMinZ) / steps;
+    const stepHeight = upperY / steps;
+    const stepGeo = new THREE.BoxGeometry(1, 1, 1);
+    const stepMesh = new THREE.InstancedMesh(stepGeo, woodMat, steps);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < steps; i++) {
+      const h = stepHeight * (i + 1);
+      dummy.position.set((stMinX + stMaxX) * 0.5, h * 0.5, stMinZ + stepDepth * (i + 0.5));
+      dummy.scale.set(stMaxX - stMinX, h, stepDepth);
+      dummy.updateMatrix();
+      stepMesh.setMatrixAt(i, dummy.matrix);
+    }
+    stepMesh.instanceMatrix.needsUpdate = true;
+    stepMesh.castShadow = true;
+    stepMesh.receiveShadow = true;
+    this.group.add(stepMesh);
+
+    // Interior ceiling + the tall city silhouette above (no collider up there)
+    addBox(innerMaxX - innerMinX, 0.2, innerMaxZ - innerMinZ, b.x, upperY + 4.6, b.z, roofMat);
+    const towerH = b.h - (upperY + 4.6);
+    addBox(b.w - 1.2, towerH, b.d - 1.2, b.x, upperY + 4.6 + towerH * 0.5, b.z, facadeMat);
+
+    // Counter + tables + chairs on both floors
+    addBox(12, 1.1, 1.6, b.x, 0.55, minZ + 3.2, woodMat);
+    addBox(12.2, 0.14, 0.22, b.x, 1.16, minZ + 4.05, glowMat);
+
+    const tables: Array<{ x: number; z: number; y: number }> = [
+      { x: b.x - 8, z: b.z + 9, y: 0 },
+      { x: b.x + 7, z: b.z + 9, y: 0 },
+      { x: b.x + 9, z: b.z - 9, y: 0 },
+      { x: b.x - 6, z: b.z + 6, y: upperY },
+      { x: b.x + 9, z: b.z - 7, y: upperY }
+    ];
+    const chairTransforms: Array<{ x: number; y: number; z: number; yaw: number }> = [];
+    const topGeo = new THREE.CylinderGeometry(1.35, 1.35, 0.14, 10);
+    const poleGeo = new THREE.CylinderGeometry(0.16, 0.22, 0.85, 6);
+    const tableTop = new THREE.InstancedMesh(topGeo, woodMat, tables.length);
+    const tablePole = new THREE.InstancedMesh(poleGeo, metalMat, tables.length);
+    for (let i = 0; i < tables.length; i++) {
+      const t = tables[i];
+      dummy.position.set(t.x, t.y + 0.92, t.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      tableTop.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(t.x, t.y + 0.45, t.z);
+      dummy.updateMatrix();
+      tablePole.setMatrixAt(i, dummy.matrix);
+
+      for (const side of [-1, 1]) {
+        const cx = t.x + side * 2.4;
+        const dx = t.x - cx;
+        const dz = t.z - (t.z + 1.3);
+        chairTransforms.push({
+          x: cx, y: t.y, z: t.z + 1.3,
+          yaw: Math.atan2(-dx, -dz)
+        });
+      }
+    }
+    tableTop.instanceMatrix.needsUpdate = true;
+    tablePole.instanceMatrix.needsUpdate = true;
+    this.group.add(tableTop, tablePole);
+
+    const seatMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.72, 0.12, 0.72), woodMat, chairTransforms.length);
+    const backMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.72, 0.78, 0.12), woodMat, chairTransforms.length);
+    for (let i = 0; i < chairTransforms.length; i++) {
+      const c = chairTransforms[i];
+      dummy.rotation.set(0, c.yaw, 0);
+      dummy.position.set(c.x, c.y + 0.52, c.z);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      seatMesh.setMatrixAt(i, dummy.matrix);
+      // Back rest sits behind the seat (local +Z), facing the table at -Z.
+      const backOffset = new THREE.Vector3(0, 0, 0.34).applyAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw);
+      dummy.position.set(c.x + backOffset.x, c.y + 0.92, c.z + backOffset.z);
+      dummy.updateMatrix();
+      backMesh.setMatrixAt(i, dummy.matrix);
+
+      this.sitSpots.push({
+        pos: new THREE.Vector3(c.x + backOffset.x * -0.35, c.y + 0.56, c.z + backOffset.z * -0.35),
+        yaw: c.yaw,
+        label: c.y > 1 ? 'MEZZANINE SEAT' : 'RESTAURANT SEAT'
+      });
+    }
+    seatMesh.instanceMatrix.needsUpdate = true;
+    backMesh.instanceMatrix.needsUpdate = true;
+    this.group.add(seatMesh, backMesh);
+
+    this.interiorFloors.push({
+      minX: innerMinX, maxX: innerMaxX, minZ: innerMinZ, maxZ: innerMaxZ,
+      groundY: 0, upperY, switchY: 2.1,
+      stairs: { minX: stMinX, maxX: stMaxX, minZ: stMinZ, maxZ: stMaxZ, dir: 'SOUTH' }
+    });
+  }
+
+  /** True when an actor is on the restaurant staircase (for native stair clips). */
+  public isInInteriorStairs(x: number, z: number): boolean {
+    return this.interiorFloors.some((zone) => {
+      const s = zone.stairs;
+      return x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ;
+    });
+  }
+
+  /** Floor height for walk-in interiors; null when the actor is outside one. */
+  public sampleInteriorHeight(x: number, z: number, currentY = 0): number | null {
+    for (const zone of this.interiorFloors) {
+      if (x < zone.minX || x > zone.maxX || z < zone.minZ || z > zone.maxZ) continue;
+      const s = zone.stairs;
+      if (x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ) {
+        let t = 0;
+        if (s.dir === 'EAST') t = (x - s.minX) / Math.max(0.01, s.maxX - s.minX);
+        else if (s.dir === 'WEST') t = (s.maxX - x) / Math.max(0.01, s.maxX - s.minX);
+        else if (s.dir === 'SOUTH') t = (z - s.minZ) / Math.max(0.01, s.maxZ - s.minZ);
+        else t = (s.maxZ - z) / Math.max(0.01, s.maxZ - s.minZ);
+        return THREE.MathUtils.lerp(zone.groundY, zone.upperY, THREE.MathUtils.clamp(t, 0, 1));
+      }
+      return currentY >= zone.switchY ? zone.upperY : zone.groundY;
+    }
+    return null;
+  }
+
   private createCityBuildings(): void {
     const neonColors = ['#38bdf8', '#ff5500', '#ec4899', '#facc15', '#22c55e'];
 
-    const buildingSpecs: { x: number; z: number; w: number; d: number; h: number; label?: string }[] = [
+    const buildingSpecs: { x: number; z: number; w: number; d: number; h: number; label?: string; interior?: 'restaurant' }[] = [
       { x: 84, z: -200, w: 38, d: 34, h: 48, label: 'APEX ZERO' },
       { x: 172, z: -200, w: 48, d: 36, h: 66, label: 'AKIBA CYBER' },
       { x: 260, z: -200, w: 36, d: 34, h: 52, label: 'TOUGE CLUB' },
-      { x: 84, z: -100, w: 40, d: 52, h: 38, label: 'ANIME CAFE' },
+      { x: 84, z: -100, w: 40, d: 52, h: 38, label: 'ANIME CAFE', interior: 'restaurant' },
       { x: 158, z: -100, w: 34, d: 50, h: 58 },
       { x: 196, z: -100, w: 26, d: 44, h: 44 },
       { x: 260, z: -100, w: 34, d: 52, h: 60, label: 'NEO RAMEN' },
@@ -480,14 +698,19 @@ export class OpenWorldMap {
       const sideMat = getFacadeMat(accent, b.d, b.h);
       const neonMat = getNeonMat(accent);
 
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(b.w, b.h, b.d),
-        [sideMat, sideMat, roofMat, roofMat, fbMat, fbMat]
-      );
-      mesh.position.set(b.x, b.h * 0.5, b.z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.group.add(mesh);
+      if (b.interior === 'restaurant') {
+        // Hollow, walk-in building: no solid box, door gap in the wall colliders.
+        this.createRestaurantInterior(b, fbMat, sideMat, roofMat, neonMat);
+      } else {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(b.w, b.h, b.d),
+          [sideMat, sideMat, roofMat, roofMat, fbMat, fbMat]
+        );
+        mesh.position.set(b.x, b.h * 0.5, b.z);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        this.group.add(mesh);
+      }
 
       // Ground-floor architectural plinth / sidewalk & storefront awning so buildings feel grounded
       const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.w + 2.4, 0.32, b.d + 2.4), plinthMat);
@@ -538,13 +761,15 @@ export class OpenWorldMap {
       trimLine.position.set(b.x, b.h - 0.65, b.z);
       this.group.add(parapet, trimLine);
 
-      this.colliders.push({
-        minX: b.x - b.w * 0.5 - 0.4,
-        maxX: b.x + b.w * 0.5 + 0.4,
-        minZ: b.z - b.d * 0.5 - 0.4,
-        maxZ: b.z + b.d * 0.5 + 0.4,
-        height: b.h
-      });
+      if (b.interior !== 'restaurant') {
+        this.colliders.push({
+          minX: b.x - b.w * 0.5 - 0.4,
+          maxX: b.x + b.w * 0.5 + 0.4,
+          minZ: b.z - b.d * 0.5 - 0.4,
+          maxZ: b.z + b.d * 0.5 + 0.4,
+          height: b.h
+        });
+      }
 
       if (b.label) {
         const sCanvas = document.createElement('canvas');

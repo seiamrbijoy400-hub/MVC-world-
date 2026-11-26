@@ -236,6 +236,30 @@ test('OpenWorldMap & RoadGraph: seamless Touge ramps, 5 districts, building LOS 
   assert.ok(wp.distanceTo(new THREE.Vector3(46, 0, 150)) > 1 || wp.x > 46, 'Next waypoint must progress along network');
 });
 
+test('OpenWorldMap: walk-in restaurant has a door gap, two floors, stairs and seats', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const zone = map.interiorFloors[0];
+  assert.ok(zone, 'ANIME CAFE must register a walkable interior zone');
+
+  const blocked = (x: number, z: number): boolean => map.colliders.some(
+    (c) => x > c.minX && x < c.maxX && z > c.minZ && z < c.maxZ
+  );
+  assert.equal(blocked(84, -74.3), false, 'front door gap must stay walkable');
+  assert.equal(blocked(70, -74.3), true, 'wall beside the door must still block');
+  assert.equal(blocked(84, -125.7), true, 'rear wall must block');
+
+  assert.equal(map.sampleInteriorHeight(90, -100, 0), 0, 'ground floor at low height');
+  assert.equal(map.sampleInteriorHeight(90, -100, 4.2), 4.2, 'mezzanine at upper height');
+  const sx = (zone.stairs.minX + zone.stairs.maxX) * 0.5;
+  assert.equal(map.sampleInteriorHeight(sx, zone.stairs.minZ, 0), 0, 'stair foot starts on ground floor');
+  assert.equal(map.sampleInteriorHeight(sx, zone.stairs.maxZ, 0), 4.2, 'stair top reaches the mezzanine');
+  assert.ok(map.sampleInteriorHeight(sx, (zone.stairs.minZ + zone.stairs.maxZ) * 0.5, 0) > 1.5);
+  assert.ok(map.isInInteriorStairs(sx, (zone.stairs.minZ + zone.stairs.maxZ) * 0.5));
+  assert.equal(map.isInInteriorStairs(90, -100), false);
+  assert.ok(map.sitSpots.length >= 10, 'restaurant must provide multiple sit-able chairs');
+});
+
 test('Connected Crime -> Witness -> Police Dispatch -> Search/Escape -> Arrest pipeline', () => {
   const scene = new THREE.Scene();
   const track = new TrackEnvironment(scene);
@@ -757,6 +781,26 @@ test('GLTFCharacterMesh: loads both rigs, drives animation states and recolors p
   });
   assert.ok(skinnedCount > 0, 'GLB characters must contain skinned meshes');
   assert.equal(locallyBound, skinnedCount, 'Every clone must own its skeleton bones, not share the template skeleton');
+
+  // Regression: source rigs face +Z but CharacterController forward is -Z.
+  // Without the 180° visual turn, characters moonwalk backwards.
+  const facingZ = (mesh: GLTFCharacterMesh): number => {
+    const inst = (mesh as unknown as { instance: { group: THREE.Group } }).instance;
+    inst.group.updateMatrixWorld(true);
+    let head: THREE.Bone | null = null;
+    let eye: THREE.Bone | null = null;
+    inst.group.traverse((o) => {
+      const b = o as THREE.Bone;
+      if (!b.isBone) return;
+      if (/^head/i.test(b.name) && !head) head = b;
+      if (/eye_l/i.test(b.name) && !eye) eye = b;
+    });
+    assert.ok(head && eye, 'head and left-eye bones must exist');
+    return eye!.getWorldPosition(new THREE.Vector3()).sub(head!.getWorldPosition(new THREE.Vector3())).z;
+  };
+  assert.ok(facingZ(actor) < 0, 'Male rig must face controller forward (-Z)');
+  assert.ok(facingZ(heroine) < 0, 'Female rig must face controller forward (-Z)');
+
   const before = internal.instance.materials[0].color.clone();
   actor.setAppearance({
     hairStyle: 'spiky', hairColor: '#1c1917', eyeColor: '#4a2f1b', jacketColor: '#ff5500',
@@ -803,4 +847,69 @@ test('GLTFCharacterMesh: punch drives the hand forward (-Z), matching hit detect
   );
   idle.dispose();
   punching.dispose();
+});
+
+test('GLTFCharacterMesh: native sit and stair clips drive chairs and mezzanine stairs', async () => {
+  const specs = [
+    {
+      url: '/assets/models/male.glb', id: 'kaito',
+      sit: ['Rig|sitting_start', 'Rig|sitting_idle', 'Rig|sitting_end'],
+      up: 'Rig|walk', down: 'Rig|walk'
+    },
+    {
+      url: '/assets/models/female.glb', id: 'mika',
+      sit: ['idle_to_sit', 'sit_idle', 'sit_to idle'],
+      up: 'walk_stairway_root', down: 'walk_stairway_down_root'
+    }
+  ] as const;
+
+  for (const spec of specs) {
+    const actor = new GLTFCharacterMesh(spec.url, spec.id, '', null, 0, false);
+    const deadline = Date.now() + 4000;
+    while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    const internal = actor as unknown as {
+      actions: Map<string, THREE.AnimationAction>;
+      sitPhase: 'enter' | 'idle' | 'exit' | null;
+      currentClipName: string;
+    };
+    const clipNames = [...internal.actions.keys()];
+    for (const clip of spec.sit) {
+      assert.ok(clipNames.includes(clip), `${spec.id} must ship native clip ${clip}`);
+    }
+    assert.ok(clipNames.includes(spec.up) && clipNames.includes(spec.down), `${spec.id} must ship stair clips`);
+
+    actor.setSitting(true);
+    assert.equal(internal.sitPhase, 'enter', `${spec.id} must start the sit-in animation`);
+    actor.setSitting(false);
+    assert.equal(internal.sitPhase, 'exit', `${spec.id} must stand back up`);
+    actor.updateAnimation(7, 'IDLE'); // finish the stand-up clip before testing locomotion
+    assert.equal(internal.sitPhase, null, `${spec.id} must return to normal locomotion`);
+
+    actor.setStairs(true, 'up');
+    actor.updateAnimation(0.02, 'WALK');
+    assert.equal(internal.currentClipName, spec.up, `${spec.id} must use the native upstairs clip`);
+    actor.setStairs(true, 'down');
+    actor.updateAnimation(0.02, 'WALK');
+    assert.equal(internal.currentClipName, spec.down, `${spec.id} must use the native downstairs clip`);
+    actor.dispose();
+  }
+});
+
+test('GLTFCharacterMesh: KO topples the body forward, not backward', async () => {
+  for (const [url, id] of [['/assets/models/male.glb', 'kaito'], ['/assets/models/female.glb', 'mika']] as const) {
+    const actor = new GLTFCharacterMesh(url, id, '', null, 0, false);
+    const deadline = Date.now() + 4000;
+    while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    actor.updateAnimation(0.6, 'KO');
+    const inst = (actor as unknown as {
+      instance: { group: THREE.Group; bones: Map<string, THREE.Bone> };
+    }).instance;
+    inst.group.updateMatrixWorld(true);
+    const hips = inst.bones.get('hips');
+    const head = inst.bones.get('head');
+    assert.ok(hips && head);
+    const delta = head.getWorldPosition(new THREE.Vector3()).sub(hips.getWorldPosition(new THREE.Vector3()));
+    assert.ok(delta.z < -0.3, `${id} KO must lay the head toward -Z, got z=${delta.z.toFixed(2)}`);
+    actor.dispose();
+  }
 });

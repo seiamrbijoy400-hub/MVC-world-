@@ -144,6 +144,10 @@ export function instantiateCharacter(template: CharacterTemplate): CharacterInst
   const scale = 1.78 / template.height;
   scene.scale.setScalar(scale);
   scene.position.y = -template.groundOffset * scale;
+  // Both source rigs face +Z in world space, while CharacterController treats
+  // yaw=0 / controller forward as -Z. Turn the visual rig around so walking,
+  // running and punches follow the movement direction instead of moonwalking.
+  scene.rotation.y = Math.PI;
 
   const group = new THREE.Group();
   group.add(scene);

@@ -92,7 +92,8 @@ export class HUD {
     moveY: 0,
     sprint: false,
     jump: false,
-    punch: false
+    punch: false,
+    interact: false
   };
 
   private keysDown: Set<string> = new Set();
@@ -109,6 +110,7 @@ export class HUD {
   // On-foot touch state (analog joystick + jump/punch)
   private footJump = false;
   private footPunch = false;
+  private footInteract = false;
 
   private keyShiftUp = false;
   private keyShiftDown = false;
@@ -221,6 +223,7 @@ export class HUD {
     this.touchShiftDown = false;
     this.footJump = false;
     this.footPunch = false;
+    this.footInteract = false;
     this.keyShiftUp = false;
     this.keyShiftDown = false;
     this.keyReset = false;
@@ -524,12 +527,13 @@ export class HUD {
 
     bindBtn('foot-jump', () => { this.footJump = true; }, () => { this.footJump = false; });
     bindBtn('foot-punch', () => { this.footPunch = true; }, () => { this.footPunch = false; });
+    bindBtn('foot-interact', () => { this.footInteract = true; }, () => { this.footInteract = false; });
     this.footDriveBtn.addEventListener('click', () => this.onToggleEnterExit());
   }
 
   public pollCharacterInputs(): CharacterInputs {
     if (this.isTypingChat()) {
-      return { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false };
+      return { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false, interact: false };
     }
     let mx = this.joystick.value.x;
     let my = this.joystick.value.y;
@@ -543,6 +547,7 @@ export class HUD {
     this.charInputs.sprint = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.joystick.value.sprint;
     this.charInputs.jump = this.keysDown.has('Space') || this.footJump;
     this.charInputs.punch = this.keysDown.has('KeyJ') || this.keysDown.has('KeyK') || this.footPunch;
+    this.charInputs.interact = this.keysDown.has('KeyE') || this.footInteract;
     return this.charInputs;
   }
 

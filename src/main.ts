@@ -127,12 +127,14 @@ class GameApp {
   private activeCarName = 'Your Zenvo';
   private activePoliceLights: { a: THREE.Mesh; b: THREE.Mesh; active: boolean } | undefined;
   private lastGaragePrompt = false;
+  private sittingSpot: { pos: THREE.Vector3; yaw: number; label: string } | null = null;
+  private wasInteract = false;
   private fighterHitCooldown = 0;
   private assaultHeatCooldown = 0;
   private policeHitCooldown = 0;
   private footstepTimer = 0;
   private koReason: 'WASTED' | 'BUSTED' | null = null;
-  private sampleUnifiedGround!: (x: number, z: number) => GroundSample;
+  private sampleUnifiedGround!: (x: number, z: number, currentY?: number) => GroundSample;
 
   private gameState: GameState = GameState.OPEN_WORLD;
   private countdownTimer = 0;
@@ -200,14 +202,15 @@ class GameApp {
       this.lapManager.addStyleBonus(25, 0.1);
     };
 
-    this.sampleUnifiedGround = (x: number, z: number): GroundSample => {
+    this.sampleUnifiedGround = (x: number, z: number, currentY = 0): GroundSample => {
       const base = this.track.sampleGround(x, z);
       const rampH = this.openWorld.sampleRampHeight(x, z);
+      const interiorH = this.openWorld.sampleInteriorHeight(x, z, currentY);
       const inCity = this.openWorld.isInsideCityOrPlayground(x, z);
       return {
         ...base,
-        height: Math.max(base.height, rampH),
-        isRoad: base.isRoad || inCity || rampH > 0
+        height: Math.max(base.height, rampH, interiorH ?? 0),
+        isRoad: base.isRoad || inCity || rampH > 0 || interiorH !== null
       };
     };
 
@@ -242,7 +245,7 @@ class GameApp {
 
     // Character Controller
     this.charCtrl = new CharacterController();
-    this.charCtrl.groundHeightSampler = (x, z) => this.sampleUnifiedGround(x, z).height;
+    this.charCtrl.groundHeightSampler = (x, z, y) => this.sampleUnifiedGround(x, z, y).height;
     this.charCtrl.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
     this.charCtrl.onPunchStrike = (origin, fwd) => this.handlePlayerPunch(origin, fwd);
     this.charCtrl.onLand = (impact) => this.sound.playLand(impact);
@@ -459,7 +462,7 @@ class GameApp {
     const f1 = new SparringFighter('Kenji', 'kaito', new THREE.Vector3(34, 0, 22), this.scene);
     const f2 = new SparringFighter('Yuki', 'mika', new THREE.Vector3(84, 0, 75), this.scene);
     for (const f of [f1, f2]) {
-      f.controller.groundHeightSampler = (x, z) => this.sampleUnifiedGround(x, z).height;
+      f.controller.groundHeightSampler = (x, z, y) => this.sampleUnifiedGround(x, z, y).height;
       f.controller.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
       f.controller.onPunchStrike = (origin, fwd) => {
         if (!this.inCar && origin.distanceTo(this.charCtrl.position) < 2.2) {
@@ -892,6 +895,12 @@ class GameApp {
       return;
     }
 
+    // On foot, F/E acts on the nearby chair first; press again to drive.
+    if (!this.inCar && this.sittingSpot) {
+      this.exitSeat(true);
+      return;
+    }
+
     if (this.inCar) {
       if (this.physics.speedKmh > 35) {
         this.hud.showNotification('BRAKE FIRST', 'Slow below 35 km/h to jump out!', 1.2);
@@ -1011,6 +1020,8 @@ class GameApp {
     this.activePoliceLights = entry.policeLights;
     this.configureActiveCar();
     this.avatarMesh.root.visible = false;
+    const interactPrompt = document.getElementById('interact-prompt');
+    if (interactPrompt) interactPrompt.style.display = 'none';
     this.sound.playCarDoor();
     this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
     this.hud.setStealPrompt(null);
@@ -1510,6 +1521,32 @@ class GameApp {
       ? 'Clear skies — full grip'
       : (mode === 'RAIN' ? 'Wet roads — grip reduced, 1.3× drift score' : 'Storm — low grip, 1.5× drift score');
     this.hud.showNotification(`WEATHER: ${mode}`, label, 2.2);
+  }
+
+  private exitSeat(standUp = true): void {
+    if (!this.sittingSpot) return;
+    if (standUp) {
+      const fwd = new THREE.Vector3(-Math.sin(this.charCtrl.yaw), 0, -Math.cos(this.charCtrl.yaw));
+      this.charCtrl.position.addScaledVector(fwd, 1.1);
+      this.charCtrl.velocity.set(0, 0, 0);
+    }
+    this.sittingSpot = null;
+    if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(false);
+    const prompt = document.getElementById('interact-prompt');
+    if (prompt) prompt.style.display = 'none';
+  }
+
+  private nearbySitSpot(): { pos: THREE.Vector3; yaw: number; label: string } | null {
+    let best: { pos: THREE.Vector3; yaw: number; label: string } | null = null;
+    let bestDist = 1.9;
+    for (const spot of this.openWorld.sitSpots) {
+      const d = this.charCtrl.position.distanceTo(spot.pos);
+      if (d < bestDist) {
+        best = spot;
+        bestDist = d;
+      }
+    }
+    return best;
   }
 
   private setRivalPrompt(rival: RivalSprintDef | null): void {
@@ -2039,8 +2076,48 @@ class GameApp {
       } else {
         // ON-FOOT CHARACTER
         const charInputs = this.hud.pollCharacterInputs();
+        const interactPressed = Boolean(charInputs.interact);
+        const interactEdge = interactPressed && !this.wasInteract;
+        this.wasInteract = interactPressed;
+        if (this.charCtrl.isDead && this.sittingSpot) this.exitSeat(false);
+
+        if (interactEdge && !this.charCtrl.isDead) {
+          if (this.sittingSpot) {
+            this.exitSeat(true);
+          } else {
+            const spot = this.nearbySitSpot();
+            if (spot) {
+              this.sittingSpot = spot;
+              this.charCtrl.position.copy(spot.pos);
+              this.charCtrl.yaw = spot.yaw;
+              this.charCtrl.velocity.set(0, 0, 0);
+              if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(true);
+              this.hud.showNotification('SEATED', `${spot.label} • E/USE to stand`, 1.4);
+            }
+          }
+        }
+
+        // While seated, keep the avatar glued to the chair and ignore locomotion.
+        const seated = this.sittingSpot !== null;
+        if (seated && this.sittingSpot) {
+          charInputs.moveX = 0;
+          charInputs.moveY = 0;
+          charInputs.sprint = false;
+          charInputs.jump = false;
+          charInputs.punch = false;
+          charInputs.interact = false;
+          this.charCtrl.position.copy(this.sittingSpot.pos);
+          this.charCtrl.yaw = this.sittingSpot.yaw;
+          this.charCtrl.velocity.set(0, 0, 0);
+        }
+
         const wasGroundedBeforeStep = this.charCtrl.isGrounded;
         this.charCtrl.update(dt, charInputs, this.footCamYaw);
+        if (seated && this.sittingSpot) {
+          this.charCtrl.position.copy(this.sittingSpot.pos);
+          this.charCtrl.yaw = this.sittingSpot.yaw;
+          this.charCtrl.velocity.set(0, 0, 0);
+        }
 
         // Character vs every car hull (parked, civic, police, moving traffic, race bots, sprint rival)
         pushCharacterOutOfVehicles(
@@ -2059,8 +2136,25 @@ class GameApp {
 
         this.avatarMesh.root.position.copy(this.charCtrl.position);
         this.avatarMesh.root.rotation.y = this.charCtrl.yaw;
+        if (this.avatarMesh instanceof GLTFCharacterMesh) {
+          const stairFwdZ = -Math.cos(this.footCamYaw) * charInputs.moveY - Math.sin(this.footCamYaw) * charInputs.moveX;
+          const onStairs = !seated && this.openWorld.isInInteriorStairs(this.charCtrl.position.x, this.charCtrl.position.z)
+            && (this.charCtrl.animState === 'WALK' || this.charCtrl.animState === 'RUN');
+          this.avatarMesh.setStairs(onStairs, stairFwdZ >= 0 ? 'up' : 'down');
+        }
         this.avatarMesh.updateAnimation(dt, this.charCtrl.animState);
         this.avatarMesh.setNameAndHp(this.lobbyUI.config.playerName, this.charCtrl.hp);
+
+        const promptEl = document.getElementById('interact-prompt');
+        const promptSpot = this.sittingSpot ?? this.nearbySitSpot();
+        if (promptEl) {
+          if (promptSpot && !this.charCtrl.isDead) {
+            promptEl.textContent = this.sittingSpot ? 'E / USE — Stand up' : `E / USE — Sit (${promptSpot.label})`;
+            promptEl.style.display = 'block';
+          } else {
+            promptEl.style.display = 'none';
+          }
+        }
 
         this.physics.update(dt, { throttle: 0, brake: 0, steer: 0, handbrake: true, clutch: false, shiftUp: false, shiftDown: false, reset: false }, false);
         this.carMesh.update(this.physics, 0, dt);

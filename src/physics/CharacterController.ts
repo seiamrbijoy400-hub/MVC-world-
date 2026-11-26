@@ -7,6 +7,8 @@ export interface CharacterInputs {
   sprint: boolean;
   jump: boolean;
   punch: boolean;
+  /** Edge-triggered context action (sit/stand, enter building). */
+  interact?: boolean;
 }
 
 export class CharacterController {
@@ -39,7 +41,7 @@ export class CharacterController {
   private wasPunch = false;
   private wasGrounded = true;
 
-  public groundHeightSampler: (x: number, z: number) => number = () => 0;
+  public groundHeightSampler: (x: number, z: number, currentY?: number) => number = () => 0;
   public worldCollider: (pos: THREE.Vector3, vel: THREE.Vector3, radius: number) => boolean = () => false;
   public onPunchStrike: (origin: THREE.Vector3, forward: THREE.Vector3) => void = () => {};
   public onLand: (impactSpeed: number) => void = () => {};
@@ -137,7 +139,7 @@ export class CharacterController {
       this.koTimer -= dt;
       this.velocity.y -= 22 * dt;
       this.position.addScaledVector(this.velocity, dt);
-      const gy = this.groundHeightSampler(this.position.x, this.position.z);
+      const gy = this.groundHeightSampler(this.position.x, this.position.z, this.position.y);
       if (this.position.y <= gy) {
         this.position.y = gy;
         this.velocity.y = 0;
@@ -213,7 +215,7 @@ export class CharacterController {
     this.worldCollider(this.position, this.velocity, 0.45);
 
     // Ground & Ramp Height Snap
-    const groundY = this.groundHeightSampler(this.position.x, this.position.z);
+    const groundY = this.groundHeightSampler(this.position.x, this.position.z, this.position.y);
     if (this.position.y <= groundY + 0.08 && this.velocity.y <= 0.5) {
       const impactVy = Math.abs(this.velocity.y);
       this.position.y = groundY;

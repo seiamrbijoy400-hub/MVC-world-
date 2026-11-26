@@ -57,7 +57,24 @@ export class GLTFCharacterMesh {
   private bubbleTimer: number | null = null;
   private disposed = false;
   private loadGeneration = 0;
+  private sitPhase: 'enter' | 'idle' | 'exit' | null = null;
+  private sitTimer = 0;
+  private sitAction: THREE.AnimationAction | null = null;
+  private stairsActive = false;
+  private stairDir: 'up' | 'down' = 'up';
   private static statusListeners = new Set<(ready: boolean) => void>();
+
+  /** Native sitting clips shipped inside the two rigs (no retargeting). */
+  private static readonly SIT_CLIPS: Record<CharacterModelId, { enter: string; idle: string; exit: string }> = {
+    male: { enter: 'Rig|sitting_start', idle: 'Rig|sitting_idle', exit: 'Rig|sitting_end' },
+    female: { enter: 'idle_to_sit', idle: 'sit_idle', exit: 'sit_to idle' }
+  };
+
+  /** Native stair clips; the male rig has no stair clip, so it keeps its walk. */
+  private static readonly STAIR_CLIPS: Record<CharacterModelId, { up: string; down: string }> = {
+    male: { up: 'Rig|walk', down: 'Rig|walk' },
+    female: { up: 'walk_stairway_root', down: 'walk_stairway_down_root' }
+  };
 
   constructor(
     modelUrlOrId: string = MODEL_URLS.male,
@@ -142,7 +159,8 @@ export class GLTFCharacterMesh {
     this.loaded = true;
     if (this.appearance) applyCharacterAppearance(instance, template, this.appearance);
     if (this.showNameTag) this.setNameAndHp(this.pendingName, this.pendingHp);
-    this.playState(this.desiredState);
+    if (this.sitPhase) this.startSitPhase();
+    else this.playState(this.desiredState);
     instance.mixer!.update(0);
     this.notifyStatus();
   }
@@ -161,6 +179,9 @@ export class GLTFCharacterMesh {
     this.actions.clear();
     this.currentAction = null;
     this.currentClipName = '';
+    this.sitPhase = null;
+    this.sitAction = null;
+    this.stairsActive = false;
     this.touchedBones.clear();
     this.fallback?.dispose();
     this.fallback = null;
@@ -169,9 +190,25 @@ export class GLTFCharacterMesh {
     void this.load();
   }
 
+  /** Switch to the rig's native stair clip while climbing the restaurant stairs. */
+  public setStairs(active: boolean, direction: 'up' | 'down' = 'up'): void {
+    if (this.stairsActive === active && this.stairDir === direction) return;
+    this.stairsActive = active;
+    this.stairDir = direction;
+    // Force playState to cross-fade onto the new clip even for the same state.
+    this.currentAction?.stop();
+    this.currentAction = null;
+    this.currentClipName = '';
+  }
+
   private playState(state: CharAnimState): void {
     if (!this.instance?.mixer) return;
-    const clipName = mapAnimStateToClip(state, [...this.actions.keys()], this.model);
+    let clipName: string | null = null;
+    if (this.stairsActive && (state === 'WALK' || state === 'RUN' || state === 'FLEE')) {
+      const preferred = GLTFCharacterMesh.STAIR_CLIPS[this.model][this.stairDir];
+      if (this.actions.has(preferred)) clipName = preferred;
+    }
+    clipName ??= mapAnimStateToClip(state, [...this.actions.keys()], this.model);
     if (!clipName || clipName === this.currentClipName) return;
     const action = this.actions.get(clipName);
     if (!action) return;
@@ -208,27 +245,67 @@ export class GLTFCharacterMesh {
 
     if (state === 'PUNCH') {
       const swing = Math.sin(Math.min(1, this.poseTime / 0.36) * Math.PI);
-      // Both rigs face -Z (eye bones sit at -Z). A negative local-Z swing drives
-      // the right hand forward, toward the direction the controller hits in.
-      rotate('upperArmR', new THREE.Vector3(0, 0, 1), -swing * 1.18);
-      rotate('lowerArmR', new THREE.Vector3(0, 0, 1), -swing * 0.22);
-      rotate('chest', new THREE.Vector3(0, 1, 0), swing * 0.16);
-      rotate('head', new THREE.Vector3(0, 1, 0), -swing * 0.1);
+      // The visual rig is turned 180° (see GLTFCharacterCache), so local +Z is
+      // world -Z. A positive local-Z swing drives the hand into the hit direction.
+      rotate('upperArmR', new THREE.Vector3(0, 0, 1), swing * 1.18);
+      rotate('lowerArmR', new THREE.Vector3(0, 0, 1), swing * 0.22);
+      rotate('chest', new THREE.Vector3(0, 1, 0), -swing * 0.16);
+      rotate('head', new THREE.Vector3(0, 1, 0), swing * 0.1);
     } else if (state === 'HIT') {
       const recoil = Math.exp(-this.poseTime * 5.5);
-      rotate('upperArmL', new THREE.Vector3(0, 0, 1), recoil * 0.5);
-      rotate('upperArmR', new THREE.Vector3(0, 0, 1), recoil * 0.5);
+      rotate('upperArmL', new THREE.Vector3(0, 0, 1), -recoil * 0.5);
+      rotate('upperArmR', new THREE.Vector3(0, 0, 1), -recoil * 0.5);
       rotate('head', new THREE.Vector3(1, 0, 0), recoil * 0.3);
       rotate('chest', new THREE.Vector3(1, 0, 0), recoil * 0.16);
     } else if (state === 'KO') {
       const t = Math.min(1, this.poseTime / 0.6);
       const settle = 1 - (1 - t) * (1 - t);
-      rotate('hips', new THREE.Vector3(1, 0, 0), (this.model === 'male' ? -1.35 : 1.45) * settle);
+      rotate('hips', new THREE.Vector3(1, 0, 0), (this.model === 'male' ? 1.35 : 1.45) * settle);
       rotate('head', new THREE.Vector3(1, 0, 0), 0.22 * settle);
       instance.group.position.y = (this.model === 'male' ? -0.02 : -0.42) * settle;
       return;
     }
     instance.group.position.y = 0;
+  }
+
+  /** Play the rig's own sit/stand clips. Safe to call repeatedly. */
+  public setSitting(sitting: boolean): void {
+    if (this.fallback) return;
+    if (sitting) {
+      if (this.sitPhase === 'enter' || this.sitPhase === 'idle') return;
+      this.sitPhase = 'enter';
+    } else {
+      if (this.sitPhase !== 'enter' && this.sitPhase !== 'idle') return;
+      this.sitPhase = 'exit';
+    }
+    this.startSitPhase();
+  }
+
+  public get isSitting(): boolean {
+    return this.sitPhase === 'enter' || this.sitPhase === 'idle';
+  }
+
+  private startSitPhase(): void {
+    // Keep the request queued until the GLB (and its mixer/actions) is ready.
+    if (!this.instance?.mixer || !this.sitPhase) return;
+    const clipName = GLTFCharacterMesh.SIT_CLIPS[this.model][this.sitPhase];
+    const action = this.actions.get(clipName);
+    if (!action) {
+      // Rig without sitting clips (or failed action) must not get stuck.
+      this.sitPhase = null;
+      return;
+    }
+    if (this.currentAction) {
+      this.currentAction.stop();
+      this.currentAction = null;
+    }
+    this.currentClipName = '';
+    const clip = this.template?.animations.find((a) => a.name === clipName);
+    this.sitTimer = clip?.duration ?? (this.sitPhase === 'idle' ? 4 : 1.2);
+    action.reset().setLoop(this.sitPhase === 'idle' ? THREE.LoopRepeat : THREE.LoopOnce, 1);
+    if (this.sitPhase !== 'idle') action.clampWhenFinished = true;
+    action.fadeIn(0.12).play();
+    this.sitAction = action;
   }
 
   public updateAnimation(dt: number, state: CharAnimState): void {
@@ -239,6 +316,20 @@ export class GLTFCharacterMesh {
       return;
     }
     if (!this.loaded || !this.instance?.mixer) return;
+    if (this.sitPhase) {
+      this.sitTimer -= dt;
+      this.instance.mixer.update(dt);
+      if (this.sitTimer <= 0) {
+        if (this.sitPhase === 'enter') this.sitPhase = 'idle';
+        else if (this.sitPhase === 'exit') this.sitPhase = null;
+        else return; // looping sit idle
+        this.sitAction?.stop();
+        this.sitAction = null;
+        this.startSitPhase();
+        if (!this.sitPhase) this.playState(this.desiredState);
+      }
+      return;
+    }
     this.playState(state);
     this.instance.mixer.update(dt);
     this.applyCombatPose(dt, state);
@@ -381,6 +472,9 @@ export class GLTFCharacterMesh {
   public dispose(): void {
     this.disposed = true;
     this.loadGeneration++;
+    this.sitPhase = null;
+    this.sitAction = null;
+    this.stairsActive = false;
     if (this.bubbleTimer !== null) clearTimeout(this.bubbleTimer);
     if (this.fallback) this.fallback.dispose();
     else if (this.instance) disposeCharacterInstance(this.instance);

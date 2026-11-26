@@ -113,7 +113,7 @@ export class CarPhysics {
   // Ground sampler & Barrier collision
   public enforceTrackWalls = true;
   public trackMaxHalfWidth = 10.2;
-  public groundHeightSampler: (x: number, z: number) => GroundSample = () => ({
+  public groundHeightSampler: (x: number, z: number, currentY?: number) => GroundSample = () => ({
     height: 0,
     normal: new THREE.Vector3(0, 1, 0),
     isRoad: true,
