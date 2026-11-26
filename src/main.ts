@@ -586,6 +586,17 @@ class GameApp {
 
   private registerServiceWorker(): void {
     if (!('serviceWorker' in navigator)) return;
+    // A new SW taking over must refresh an already-open tab, otherwise the
+    // player keeps running the previous bundle until they manually reload.
+    let hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController && !reloaded) {
+        reloaded = true;
+        location.reload();
+      }
+      hadController = !!navigator.serviceWorker.controller;
+    });
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     });

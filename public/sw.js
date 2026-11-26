@@ -1,7 +1,9 @@
 // APEX ZERO: Neon Velo — offline cache service worker.
 // Strategy: cache-first for static assets, network-first for navigations,
 // with a graceful fallback to the cached shell when offline.
-const CACHE_NAME = 'apex-zero-v2';
+// Bump this whenever a build ships: it forces an SW update and purges the
+// previous cache, so returning players never keep serving an old shell/asset.
+const CACHE_NAME = 'apex-zero-v3';
 const SHELL = ['/', '/index.html', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
@@ -18,6 +20,10 @@ self.addEventListener('activate', (event) => {
     )
   );
   self.clients.claim();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', (event) => {

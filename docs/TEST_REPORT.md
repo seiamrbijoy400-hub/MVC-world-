@@ -25,6 +25,7 @@ Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests"
 | HUD stacking trap / overlapping prompts | **FIXED** | `#hud-overlay` raised to `z-index:30`; world popups capped at 12 and clamped; rival/courier prompts mutually exclusive; drift pill hidden while prompts are visible; courier card offset below rival card. |
 | 320–390px control overflow, notch clipping, tiny targets | **FIXED (source)** | Class-based touch sizing with `clamp()`/wrapping, `dvh` + `env(safe-area-inset-*)`, 44px coarse-pointer minimums. |
 | A11y / untrusted LAN strings | **FIXED** | `aria-live`, dialog roles, close buttons, Tab trap, Escape closes topmost overlay, focus restore after re-render, `aria-pressed`, `textContent` DOM building for room/roster data, no native `alert()`. |
+| Deployed site appeared stale after push | **FIXED** | Live `/` HTML was byte-identical to the committed build (`sha256 6234201e…`) and live JS contained `showCollectible()`, proving Render was current. Added SW cache bump (`apex-zero-v3`) + `controllerchange` reload so an open tab auto-refreshes when a new worker takes over. |
 
 **Limits:** no browser/Android attached — screenshots, real touch gestures, GPU/FPS/memory and final visual appearance are **NOT TESTED**.
 
