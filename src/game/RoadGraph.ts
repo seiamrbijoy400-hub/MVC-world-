@@ -57,16 +57,28 @@ export class RoadGraph {
     connect(gpM, grid[0][1]); // (2,-40)  <-> (46,-40)
     connect(gpS, grid[0][2]); // (2,30)   <-> (46,30)
 
-    // Mountain Touge Loop: (32,-160) -> (32,-296) -> (155,6,-296) -> (278,-296) -> (278,-160)
+    // Mountain Touge Loop: (32,-160) -> west ramp mouth (38,-296) -> deck top
+    // (60,6,-296) -> summit -> east ramp (250/272,-296) -> (278,-160)
     const tWBase = add(32, 0, -160);
     const tWTop = add(32, 0, -296);
+    // The west/east ramp mouths and their tops must be explicit nodes:
+    // aiming straight from (32,-296) at the summit cuts the corner and rams
+    // the ramp's side wall instead of climbing it.
+    const tWRampBase = add(38, 0, -296);
+    const tWRampTop = add(60, 6, -296);
     const tSummit = add(155, 6, -296);
+    const tERampTop = add(250, 6, -296);
+    const tERampBase = add(272, 0, -296);
     const tETop = add(278, 0, -296);
     const tEBase = add(278, 0, -160);
     connect(tWBase, grid[0][0]);
     connect(tWBase, tWTop);
-    connect(tWTop, tSummit);
-    connect(tSummit, tETop);
+    connect(tWTop, tWRampBase);
+    connect(tWRampBase, tWRampTop);
+    connect(tWRampTop, tSummit);
+    connect(tSummit, tERampTop);
+    connect(tERampTop, tERampBase);
+    connect(tERampBase, tETop);
     connect(tETop, tEBase);
     connect(tEBase, grid[2][0]);
     connect(tEBase, grid[3][0]);
@@ -85,26 +97,94 @@ export class RoadGraph {
     connect(hE, grid[3][4]);
   }
 
-  public nearestNodeId(x: number, z: number): number {
+  /**
+   * Full 3D-aware route as a sequence of road nodes, ending at the raw goal.
+   * Callers can follow it by index instead of re-running nearest-node lookup
+   * every frame, which is what made cruisers flip targets around corners.
+   */
+  public findPath(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    ay = from.y,
+    by = to.y
+  ): THREE.Vector3[] {
+    const startId = this.nearestNodeId(from.x, from.z, ay);
+    const goalId = this.nearestNodeId(to.x, to.z, by);
+    if (startId === goalId) return [new THREE.Vector3(to.x, to.y, to.z)];
+    const nCount = this.nodes.length;
+    const dist = new Float64Array(nCount).fill(Infinity);
+    const prev = new Int32Array(nCount).fill(-1);
+    const visited = new Uint8Array(nCount);
+    dist[startId] = 0;
+    for (;;) {
+      let u = -1;
+      let best = Infinity;
+      for (let i = 0; i < nCount; i++) {
+        if (!visited[i] && dist[i] < best) { best = dist[i]; u = i; }
+      }
+      if (u === -1 || u === goalId) break;
+      visited[u] = 1;
+      const nu = this.nodes[u];
+      for (const v of nu.neighbors) {
+        if (visited[v]) continue;
+        const nv = this.nodes[v];
+        const cost = Math.hypot(nv.x - nu.x, nv.y - nu.y, nv.z - nu.z);
+        if (dist[u] + cost < dist[v]) {
+          dist[v] = dist[u] + cost;
+          prev[v] = u;
+        }
+      }
+    }
+    const path: THREE.Vector3[] = [];
+    let step = goalId;
+    while (step !== -1) {
+      const n = this.nodes[step];
+      path.unshift(new THREE.Vector3(n.x, n.y, n.z));
+      if (step === startId) break;
+      step = prev[step];
+    }
+    path.push(new THREE.Vector3(to.x, to.y, to.z));
+    return path;
+  }
+
+  public nearestNodeId(x: number, z: number, y = 0): number {
     let best = 0;
     let bestDistSq = Infinity;
+    let fallback = 0;
+    let fallbackDistSq = Infinity;
     for (const n of this.nodes) {
-      const dSq = (n.x - x) * (n.x - x) + (n.z - z) * (n.z - z);
+      const planarSq = (n.x - x) * (n.x - x) + (n.z - z) * (n.z - z);
+      const dy = n.y - y;
+      const dSq = planarSq + dy * dy * 0.8;
+      if (dSq < fallbackDistSq) {
+        fallbackDistSq = dSq;
+        fallback = n.id;
+      }
+      // A cruiser driving under the 6m Touge deck must not latch onto the
+      // summit node directly above it — that waypoint is unreachable from
+      // ground level and made pursuit stall against the deck wall.
+      if (Math.abs(dy) > 2.5) continue;
       if (dSq < bestDistSq) {
         bestDistSq = dSq;
         best = n.id;
       }
     }
-    return best;
+    return bestDistSq < Infinity ? best : fallback;
   }
 
   /**
    * Returns the next road intersection coordinate to steer toward when navigating
    * from `from` to `to` across the city street network.
    */
-  public findNextWaypoint(from: THREE.Vector3, to: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 {
-    const startId = this.nearestNodeId(from.x, from.z);
-    const goalId = this.nearestNodeId(to.x, to.z);
+  public findNextWaypoint(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    out = new THREE.Vector3(),
+    ay = from.y,
+    by = to.y
+  ): THREE.Vector3 {
+    const startId = this.nearestNodeId(from.x, from.z, ay);
+    const goalId = this.nearestNodeId(to.x, to.z, by);
     if (startId === goalId) {
       return out.copy(to);
     }
@@ -131,7 +211,7 @@ export class RoadGraph {
       for (const v of nu.neighbors) {
         if (visited[v]) continue;
         const nv = this.nodes[v];
-        const edgeCost = Math.hypot(nv.x - nu.x, nv.z - nu.z);
+        const edgeCost = Math.hypot(nv.x - nu.x, nv.y - nu.y, nv.z - nu.z);
         if (dist[u] + edgeCost < dist[v]) {
           dist[v] = dist[u] + edgeCost;
           prev[v] = u;
@@ -149,7 +229,15 @@ export class RoadGraph {
     const startNode = this.nodes[startId];
     const nextNode = this.nodes[step];
     const dToStart = Math.hypot(startNode.x - from.x, startNode.z - from.z);
-    if (dToStart < 14 && prev[step] === startId) {
+    const dToNext = Math.hypot(nextNode.x - from.x, nextNode.z - from.z);
+    const forwardX = nextNode.x - startNode.x;
+    const forwardZ = nextNode.z - startNode.z;
+    const progress = (from.x - startNode.x) * forwardX + (from.z - startNode.z) * forwardZ;
+    const edgeSq = forwardX * forwardX + forwardZ * forwardZ;
+    // Once the car has passed the nearest node, aiming back at it makes the
+    // target flip every time `nearestNodeId` changes. Choose the next node.
+    if (prev[step] === startId
+      && (dToStart < 14 || progress > edgeSq * 0.1 || dToNext < dToStart)) {
       return out.set(nextNode.x, nextNode.y, nextNode.z);
     }
     return out.set(startNode.x, startNode.y, startNode.z);
@@ -165,19 +253,26 @@ export class RoadGraph {
     from: THREE.Vector3,
     to: THREE.Vector3,
     colliders: readonly AABBCollider[],
-    out = new THREE.Vector3()
+    out = new THREE.Vector3(),
+    ay = from.y,
+    by = to.y,
+    extraOccluders: readonly AABBCollider[] = NO_OCCLUDERS
   ): THREE.Vector3 {
-    const startId = this.nearestNodeId(from.x, from.z);
-    if (startId !== this.nearestNodeId(to.x, to.z)) return this.findNextWaypoint(from, to, out);
+    const startId = this.nearestNodeId(from.x, from.z, ay);
+    if (startId !== this.nearestNodeId(to.x, to.z, by)) {
+      return this.findNextWaypoint(from, to, out, ay, by);
+    }
 
     const node = this.nodes[startId];
     let bestId = -1;
     let bestCost = Infinity;
     for (const v of node.neighbors) {
       const n = this.nodes[v];
-      if (!hasLineOfSight(from.x, from.z, n.x, n.z, colliders, 1.6)) continue;
-      if (!hasLineOfSight(n.x, n.z, to.x, to.z, colliders, 1.6)) continue;
-      const cost = Math.hypot(from.x - n.x, from.z - n.z) + Math.hypot(n.x - to.x, n.z - to.z);
+      if (!hasLineOfSight(from.x, from.z, n.x, n.z, colliders, 1.6, ay, n.y, extraOccluders)) continue;
+      if (!hasLineOfSight(n.x, n.z, to.x, to.z, colliders, 1.6, n.y, by, extraOccluders)) continue;
+      const cost = Math.hypot(from.x - n.x, from.z - n.z)
+        + Math.hypot(n.x - to.x, n.z - to.z)
+        + 0.8 * Math.abs(n.y - by);
       if (cost < bestCost) { bestCost = cost; bestId = v; }
     }
     if (bestId < 0) {
@@ -186,9 +281,10 @@ export class RoadGraph {
       // one closest to the target; this is still far safer than the raw goal.
       for (const padding of [1.6, 0.3]) {
         for (const n of this.nodes) {
-          if (!hasLineOfSight(from.x, from.z, n.x, n.z, colliders, padding)) continue;
+          if (!hasLineOfSight(from.x, from.z, n.x, n.z, colliders, padding, ay, n.y, extraOccluders)) continue;
           const cost = Math.hypot(n.x - to.x, n.z - to.z)
-            + 0.15 * Math.hypot(from.x - n.x, from.z - n.z);
+            + 0.15 * Math.hypot(from.x - n.x, from.z - n.z)
+            + 0.8 * Math.abs(n.y - by);
           if (cost < bestCost) { bestCost = cost; bestId = n.id; }
         }
         if (bestId >= 0) break;

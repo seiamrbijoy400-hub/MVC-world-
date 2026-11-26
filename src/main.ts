@@ -29,6 +29,7 @@ import {
   resolveMovingVehicleImpactOnCharacter
 } from './physics/CollisionResolver';
 import { PoliceSystem } from './game/PoliceSystem';
+import { hasLineOfSight } from './game/RoadGraph';
 import type { NetworkPlayerSync, CharacterAppearance } from './network/LobbyProtocol';
 
 enum CameraView {
@@ -77,6 +78,9 @@ class GameApp {
   private hemiLight!: THREE.HemisphereLight;
   private envRT: THREE.WebGLRenderTarget | null = null;
   private timeOfDay: TimeOfDay = 'DAY';
+  // Kept in sync with sky/water shader sun directions so shadows and PBR
+  // highlights agree with the disc the player actually sees in the sky.
+  private sunDirection = new THREE.Vector3(0.42, 0.48, -0.77).normalize();
 
   private physics: CarPhysics;
   private charCtrl: CharacterController;
@@ -221,6 +225,11 @@ class GameApp {
       const rampH = this.openWorld.sampleRampHeight(x, z);
       const interiorH = this.openWorld.sampleInteriorHeight(x, z, currentY);
       const inCity = this.openWorld.isInsideCityOrPlayground(x, z);
+      if (this.openWorld.isOverOpenWater(x, z)) {
+        // The ocean surface is below the quay. Without this, the invisible
+        // y=0 track plane lets cars "land" on water after a pier jump.
+        return { ...base, height: -1.05, isRoad: false };
+      }
       return {
         ...base,
         height: Math.max(base.height, rampH, interiorH ?? 0),
@@ -269,6 +278,11 @@ class GameApp {
       this.sound.playCrash(90);
       this.sound.playBeep(110, 0.55);
       this.police?.clearHeat();
+      this.activities.cancelSprint();
+      this.activities.cancelCourier();
+      this.activities.resetTransientState();
+      this.setRivalPrompt(null);
+      this.setCourierPrompt(null);
       this.hud.setStealPrompt(null);
       this.hud.showKoOverlay('WASTED', 'You were beaten down. Respawning at South Junction…');
       this.hud.showNotification('KNOCKED OUT', 'You are down. Wait for the revive.', 2.4);
@@ -480,13 +494,18 @@ class GameApp {
     });
 
     // Spawn 2 roaming sparring fighters in City Plaza & Playground
-    const f1 = new SparringFighter('Kenji', 'kaito', new THREE.Vector3(34, 0, 22), this.scene);
-    const f2 = new SparringFighter('Yuki', 'mika', new THREE.Vector3(84, 0, 75), this.scene);
+    const f1 = new SparringFighter('Kenji', 'kaito', new THREE.Vector3(34, 0, 22), this.scene, this.openWorld);
+    const f2 = new SparringFighter('Yuki', 'mika', new THREE.Vector3(84, 0, 75), this.scene, this.openWorld);
     for (const f of [f1, f2]) {
       f.controller.groundHeightSampler = (x, z, y) => this.sampleUnifiedGround(x, z, y).height;
       f.controller.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
       f.controller.onPunchStrike = (origin, fwd) => {
-        if (!this.inCar && origin.distanceTo(this.charCtrl.position) < 2.2) {
+        if (!this.inCar && origin.distanceTo(this.charCtrl.position) < 2.2 && hasLineOfSight(
+          origin.x, origin.z, this.charCtrl.position.x, this.charCtrl.position.z,
+          this.openWorld.colliders, 0.2,
+          origin.y, this.charCtrl.position.y,
+          this.openWorld.getElevatedOccluders()
+        )) {
           this.charCtrl.takeDamage(12, fwd.x, fwd.z);
           this.sound.playCrash(25);
           this.particles.emitSparks(this.charCtrl.position, 8);
@@ -613,6 +632,7 @@ class GameApp {
     this.exitSeat(false);
     this.activities.cancelSprint();
     this.activities.cancelCourier();
+    this.activities.resetTransientState();
     this.setRivalPrompt(null);
     this.setCourierPrompt(null);
     this.ghost.updatePlayback(false, 0);
@@ -672,6 +692,8 @@ class GameApp {
     this.police.clearHeat();
     this.hud.setWanted(0);
     this.activities.cancelSprint();
+    this.activities.cancelCourier();
+    this.activities.resetTransientState();
     document.getElementById('results-modal')!.classList.remove('open');
 
     // Always put player inside their tuned Zenvo on the Starting Grid (keep any stolen ride parked cleanly)
@@ -1200,11 +1222,16 @@ class GameApp {
       this.cameraShake = Math.min(0.42, impactKmh / 140);
       this.lapManager.handleDriftCrash(impactKmh);
     };
-    this.carMesh.setHeadlights(true);
+    this.carMesh.setHeadlights(this.timeOfDay !== 'DAY');
     this.hud.updateTouchVisibility(this.physics.gearboxType);
   }
 
   private handleBusted(fine: number, heat: number): void {
+    this.activities.cancelSprint();
+    this.activities.cancelCourier();
+    this.activities.resetTransientState();
+    this.setRivalPrompt(null);
+    this.setCourierPrompt(null);
     const paid = this.save.spendCredits(fine);
     this.save.data.timesBusted++;
     this.save.scheduleSave();
@@ -1264,10 +1291,21 @@ class GameApp {
     this.scene.add(this.hemiLight);
   }
 
+  private syncVehicleHeadlights(): void {
+    const on = this.timeOfDay !== 'DAY';
+    this.carMesh.setHeadlights(on);
+    this.police.setHeadlights(on);
+    this.activities.headlightsOn = on;
+    for (const bot of this.raceBots) bot.mesh.setHeadlights(on);
+    for (const c of this.cityCruisers) c.mesh.setHeadlights(on);
+    if (this.activities.activeSprint) this.activities.activeSprint.rivalMesh.setHeadlights(on);
+  }
+
   private setAtmosphere(tod: TimeOfDay): void {
     this.timeOfDay = tod;
     this.track.setTimeOfDay(tod);
-    this.carMesh.setHeadlights(tod !== 'DAY');
+    this.openWorld.setTimeOfDay(tod);
+    this.syncVehicleHeadlights();
 
     if (tod === 'SUNSET') {
       this.scene.fog = new THREE.FogExp2(0xfb923c, 0.0014);
@@ -1298,6 +1336,10 @@ class GameApp {
       this.renderer.toneMappingExposure = 1.06;
     }
 
+    if (tod === 'NIGHT') this.sunDirection.set(-0.4, 0.42, -0.82).normalize();
+    else if (tod === 'SUNSET') this.sunDirection.set(0.55, 0.14, -0.82).normalize();
+    else this.sunDirection.set(0.42, 0.48, -0.77).normalize();
+
     this.baseAmbientIntensity = this.ambientLight.intensity;
     this.baseHemiIntensity = this.hemiLight.intensity;
     this.baseSunIntensity = this.sunLight.intensity;
@@ -1319,7 +1361,8 @@ class GameApp {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 4, 64);
     const tex = new THREE.CanvasTexture(canvas);
-    envScene.add(new THREE.Mesh(domeGeo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide })));
+    const envMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide });
+    envScene.add(new THREE.Mesh(domeGeo, envMat));
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     pmrem.compileEquirectangularShader();
@@ -1327,6 +1370,7 @@ class GameApp {
     this.envRT = pmrem.fromScene(envScene, 0.04);
     this.scene.environment = this.envRT.texture;
     pmrem.dispose();
+    envMat.dispose();
     tex.dispose();
     domeGeo.dispose();
 
@@ -1354,6 +1398,7 @@ class GameApp {
       new CityCruiserBot('city_2', 'Mei', '#ec4899', outerLoop, 2, this.openWorld, this.track, this.scene),
       new CityCruiserBot('city_3', 'Daichi', '#22c55e', plazaLoop, 1, this.openWorld, this.track, this.scene)
     );
+    for (const c of this.cityCruisers) c.mesh.setHeadlights(this.timeOfDay !== 'DAY');
   }
 
   /** Parked civilian cars: varied specs & archetypes you can hotwire on foot. */
@@ -1460,6 +1505,7 @@ class GameApp {
         new RaceBot('bot_3', 'BOT Ren', '#2563eb', 'CHILL', this.track, this.openWorld, 3, this.scene)
       );
     }
+    for (const bot of this.raceBots) bot.mesh.setHeadlights(this.timeOfDay !== 'DAY');
   }
 
   private handleLapRecorded(lapTime: number, isNewBest: boolean): void {
@@ -2011,7 +2057,7 @@ class GameApp {
     this.elapsedSec += dt;
 
     const focusPos = this.inCar ? this.physics.position : this.charCtrl.position;
-    this.sunLight.position.set(focusPos.x + 70, focusPos.y + 120, focusPos.z + 50);
+    this.sunLight.position.copy(focusPos).addScaledVector(this.sunDirection, 150);
     this.sunLight.target.position.copy(focusPos);
 
     if (!this.isPaused) {
@@ -2054,6 +2100,20 @@ class GameApp {
         const inputs = this.hud.pollInputs(this.physics.gearboxType);
         const prevGear = this.physics.gear;
         this.physics.update(dt, inputs, canDrive);
+
+        // A pier jump that clears the deck lands in the ocean, not on an
+        // invisible y=0 plane. Recover from the last road position instead of
+        // teleporting the car backwards through the seawall mid-flight.
+        if (
+          this.openWorld.isOverOpenWater(this.physics.position.x, this.physics.position.z)
+          && this.physics.position.y < -0.35
+        ) {
+          this.particles.emitSparks(this.physics.position, 12);
+          this.sound.playCrash(55);
+          this.physics.resetToTrack();
+          this.hud.showNotification('SPLASHDOWN!', 'Recovered to the last safe road.', 2.2);
+          this.cameraShake = Math.min(0.3, this.cameraShake + 0.18);
+        }
 
         if (isTimedRace) {
           this.ghost.recordStep(

@@ -121,6 +121,7 @@ export class WorldActivities {
   public activeDriftZone: DriftZoneDef | null = null;
   public activeDriftZoneScore = 0;
 
+  public headlightsOn = true;
   public activeSprint: ActiveSprintState | null = null;
   public nearbyRival: RivalSprintDef | null = null;
   public activeCourier: ActiveCourierState | null = null;
@@ -310,8 +311,8 @@ export class WorldActivities {
         waypoints: [
           new THREE.Vector3(32, 0, -296),
           new THREE.Vector3(155, 6, -296),
-          new THREE.Vector3(278, 0, -296),
-          new THREE.Vector3(278, 0, -160),
+          new THREE.Vector3(284, 0, -296),
+          new THREE.Vector3(284, 0, -160),
           new THREE.Vector3(224, 0, -160)
         ],
         rewardXp: 650,
@@ -332,6 +333,7 @@ export class WorldActivities {
           new THREE.Vector3(296, 0, 30),
           new THREE.Vector3(296, 0, 224),
           new THREE.Vector3(122, 0, 224),
+          new THREE.Vector3(46, 0, 224),
           new THREE.Vector3(46, 0, 150),
           new THREE.Vector3(46, 0, -160)
         ],
@@ -376,6 +378,7 @@ export class WorldActivities {
     rivalPhys.groundHeightSampler = (x, z) => {
       const g = this.track.sampleGround(x, z);
       const rH = this.openWorld.sampleRampHeight(x, z);
+      if (this.openWorld.isOverOpenWater(x, z)) return { ...g, height: -1.05, isRoad: false };
       return {
         ...g,
         height: Math.max(g.height, rH),
@@ -388,7 +391,7 @@ export class WorldActivities {
     const rivalMesh = new CarMesh(true);
     rivalMesh.setColor(rival.carColor);
     rivalMesh.setUnderglowColor(rival.id === 'rival_apex_zero' ? '#facc15' : '#ec4899');
-    rivalMesh.setHeadlights(true);
+    rivalMesh.setHeadlights(this.headlightsOn);
     this.scene.add(rivalMesh.root);
 
     const finalWp = rival.waypoints[rival.waypoints.length - 1];
@@ -529,6 +532,13 @@ export class WorldActivities {
     this.activeCourier = null;
   }
 
+  /** Clear transient scoring so a teleport/restart cannot bank a half-finished drift or stale trap. */
+  public resetTransientState(): void {
+    this.activeDriftZone = null;
+    this.activeDriftZoneScore = 0;
+    for (const trap of this.speedTraps) trap.cooldown = 0;
+  }
+
   public update(
     dt: number,
     timeSec: number,
@@ -539,6 +549,11 @@ export class WorldActivities {
     driftRatePtsPerSec: number,
     isTimedCircuitRace: boolean
   ): void {
+    // A circuit race is a closed competition. Speed-trap records, drift
+    // medals and shard discoveries must not leak XP/credits from the racing
+    // line, and stale prompts must not survive the teleport to the grid.
+    if (isTimedCircuitRace) return;
+
     // 1. Speed Traps
     for (const trap of this.speedTraps) {
       if (trap.cooldown > 0) trap.cooldown -= dt;
@@ -774,6 +789,7 @@ export class WorldActivities {
         reset: false,
         nitro: sp.def.id === 'rival_apex_zero' && Math.abs(steer) < 0.18
       };
+      if (this.openWorld.shouldRecoverFromWater(rPhys.position)) rPhys.resetToTrack();
       rPhys.update(dt, aiInputs, true);
       sp.rivalMesh.update(rPhys, aiInputs.brake, dt);
       sp.finishMarker.rotation.y = timeSec * 1.4;

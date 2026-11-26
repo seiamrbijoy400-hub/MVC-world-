@@ -1,9 +1,10 @@
 # APEX ZERO: NEON VELO — Implementation Roadmap
-**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 72 modules, `1.03s`) | **Automated Tests:** 51/51 Pass (`tests/gameplay.test.ts`)
+**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 72 modules, `937ms`) | **Automated Tests:** 62/62 Pass (`tests/gameplay.test.ts`)
 
 ---
 
 ## Completed Sprints
+- **Sprint 15 (2026-11-26):** open-world/world-AI coherence pass — pier jump ocean fall + splash recovery for player/police/traffic/rivals, TOD sun/sky/water/headlight sync, timed-race reward isolation and transient-state reset, building-clear rival routes, LOS guards for busts/fighter punches/pedestrian reactions, 3D road-graph routing with ramp-mouth nodes and cached police paths, lamp/waterfront/wet-material fixes, adaptive-resolution anti-pumping, patrol stuck recovery. Verification: clean build, **62/62** tests; deck chase reaches target within 1.4m; pier jump reaches z=328 with zero backward snaps. Live WebGL/touch/FPS still NOT TESTED.
 - **Sprint 3 & 4:** Ghost pitch fix, shard 3D pickup radius, drift zone ground sampling, Harbor seawall & Touge ramp gap alignment, unmirrored building signs + per-face UV scaling, Nitro touch/tachometer HUD, input blur safety, District discovery.
 - **Sprint 8 (GLB Characters):** Replaced procedural-only humans with shared male/female rigged GLBs (CC BY 4.0, credited in Settings + `docs/ASSET_LICENSES.md`). Native clips drive idle/walk/run/jump; combat poses are layered in code; NPCs vary by rig, tint and scale; procedural fallback retained. 14/14 tests pass (including skeleton ownership and forward-punch regressions).
 - **Sprint 4.5 (Checkpoint `bb7c08b`):** `RoadGraph.ts` Dijkstra routing & building `hasLineOfSight()`, `PedestrianSystem.ts` (14 patrolling NPCs, crime witness & fleeing), stopped traffic/police hijacking, `CarMesh.dispose()` & `HumanCharacterMesh.dispose()`, hit stun & prone KO poses, footstep/jump/land/punch/door SFX.
@@ -47,4 +48,4 @@
 - **Sprint 14 (2026-11-26):** police same-cell detours, height-aware pier/seawall and 3D line-of-sight over the Touge deck.
 - **Sprint 13 (2026-11-26):** map repair — GP district classification, stunt boost-pad direction, nearest-face collider ejection and pier lateral drift.
 - **Sprint 12 (2026-11-26):** chair exit is now a smooth ease-out scoot synced to the native stand-up clip instead of a 1.1m single-frame teleport; `standUpProgress` getter added.\n- **Sprint 11 (2026-11-26):** male stand-up no longer plays the 4.2s dead lead-in of the native `Rig|sitting_end` clip; locomotion returns after ~1.05s. Runtime regression on both rigs verifies prompt stand-up and repeated cycles.\n- **Sprint 10 (2026-11-26):** allocation-free combat/camera hot paths (guard overhead 202 µs -> 14-48 µs/frame measured headlessly), no shader recompiles on LAN outfit sync, whole-percent name-tag redraws, shared police beacon resources, car-exit no longer heals the player.
-- **Verification:** `pnpm run build` clean; `tests/gameplay.test.ts` **51/51** pass; static subpath server at `/game/` returned JS + GLB successfully. Live WebGL/touch/device FPS still NOT TESTED (no browser or Android device attached).
+- **Verification:** `pnpm run build` clean; `tests/gameplay.test.ts` **62/62** pass (Sprint 15); static subpath server at `/game/` previously returned JS + GLB successfully. Live WebGL/touch/device FPS still NOT TESTED (no browser or Android device attached).

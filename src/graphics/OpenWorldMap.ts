@@ -976,6 +976,9 @@ export class OpenWorldMap {
     const lampCoords: [number, number][] = [];
     for (const ax of [37, 131, 233]) {
       for (let z = -190; z <= 210; z += 44) {
+        // The z=30 lamp row landed exactly on the east-west expressway;
+        // keep poles and their additive light pools off the carriageway.
+        if ([-160, -40, 30, 150, 224].some((sz) => Math.abs(z - sz) < 9.5)) continue;
         lampCoords.push([ax, z]);
       }
     }
@@ -1015,8 +1018,10 @@ export class OpenWorldMap {
     // Harbor Concrete Quay spanning full waterfront (houses cargo containers, shards #08/#10, lighthouse)
     const quayMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.82 });
     this.roadMats.push(quayMat);
-    const quay = new THREE.Mesh(new THREE.BoxGeometry(282, 0.4, 38), quayMat);
-    quay.position.set(176, -0.15, 250);
+    // Extend the concrete below the animated water trough (y ≈ -1.0) so the
+    // quay/pier no longer float above the ocean when viewed from the water.
+    const quay = new THREE.Mesh(new THREE.BoxGeometry(282, 1.2, 38), quayMat);
+    quay.position.set(176, -0.55, 250);
     quay.receiveShadow = true;
     this.group.add(quay);
 
@@ -1028,10 +1033,11 @@ export class OpenWorldMap {
     eastRail.position.set(256.5, 0.35, 268);
     this.group.add(westRail, eastRail);
 
-    const pierGeo = new THREE.BoxGeometry(56, 0.4, 34);
+    const pierGeo = new THREE.BoxGeometry(56, 1.2, 34);
     const pierMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
+    this.roadMats.push(pierMat);
     const pier = new THREE.Mesh(pierGeo, pierMat);
-    pier.position.set(168, -0.15, 282);
+    pier.position.set(168, -0.55, 282);
     pier.receiveShadow = true;
     this.group.add(pier);
 
@@ -1233,6 +1239,7 @@ export class OpenWorldMap {
     const pitchGeo = new THREE.PlaneGeometry(80, 84);
     pitchGeo.rotateX(-Math.PI * 0.5);
     const pitchMat = new THREE.MeshStandardMaterial({ color: 0x166534, roughness: 0.85 });
+    this.roadMats.push(pitchMat);
     const pitch = new THREE.Mesh(pitchGeo, pitchMat);
     pitch.position.set(174, 0.03, 90);
     pitch.receiveShadow = true;
@@ -1489,6 +1496,21 @@ export class OpenWorldMap {
     return out;
   }
 
+  /**
+   * Open harbor water beyond the quay/pier decks. The stunt pier is a launch
+   * ramp, not a road: once a car clears its far lip it should fall into the
+   * ocean and be recovered, not be yanked back onto the concrete mid-flight.
+   */
+  public isOverOpenWater(x: number, z: number): boolean {
+    const inOcean = x >= -5 && x <= 355 && z >= 268 && z <= 378;
+    const onPierDeck = x >= 140 && x <= 196 && z <= 299;
+    return inOcean && !onPierDeck;
+  }
+
+  public shouldRecoverFromWater(pos: THREE.Vector3): boolean {
+    return this.isOverOpenWater(pos.x, pos.z) && pos.y < -0.35;
+  }
+
   public resolveCollision(pos: THREE.Vector3, vel: THREE.Vector3, radius: number): boolean {
     let hit = false;
 
@@ -1516,7 +1538,9 @@ export class OpenWorldMap {
           if (vel.x > 0) vel.x *= -0.35;
           hit = true;
         }
-        if (pos.z > pierEnd) {
+        // Only catch cars still on (or just off) the deck. A jump that has
+        // fully cleared the lip must keep flying so ocean recovery can run.
+        if (pos.z > pierEnd && pos.z <= pierEnd + radius * 2) {
           pos.z = pierEnd;
           if (vel.z > 0) vel.z *= -0.35;
           hit = true;

@@ -31,6 +31,7 @@ export class TrackEnvironment {
 
   public trackMesh: THREE.Mesh | null = null;
   public curbsMesh: THREE.Mesh | null = null;
+  public startGridMesh: THREE.Mesh | null = null;
   public barriersGroup: THREE.Group;
   public sceneryGroup: THREE.Group;
   public waterMesh: THREE.Mesh | null = null;
@@ -73,6 +74,11 @@ export class TrackEnvironment {
     if (this.curbsMesh) {
       const mat = this.curbsMesh.material as THREE.MeshStandardMaterial;
       mat.roughness = wet ? 0.28 : 0.68;
+    }
+    if (this.startGridMesh) {
+      const mat = this.startGridMesh.material as THREE.MeshStandardMaterial;
+      mat.roughness = wet ? 0.22 : 0.75;
+      mat.metalness = wet ? 0.3 : 0;
     }
   }
 
@@ -259,7 +265,9 @@ export class TrackEnvironment {
       roadVertices.push(pLeft.x, pLeft.y + 0.03, pLeft.z);
       roadVertices.push(pRight.x, pRight.y + 0.03, pRight.z);
       roadNormals.push(0, 1, 0, 0, 1, 0);
-      roadUVs.push(0, i * 0.3, 1, i * 0.3);
+      // Sample the painted white edge stripes (u≈0.035 / 0.965) instead of
+      // the plain asphalt texels at the clamped 0/1 edges.
+      roadUVs.push(0.035, i * 0.3, 0.965, i * 0.3);
 
       if (i < segments) {
         roadIndices.push(vIndex, vIndex + 1, vIndex + 2);
@@ -586,6 +594,7 @@ export class TrackEnvironment {
     const gridMesh = new THREE.Mesh(gridGeo, new THREE.MeshStandardMaterial({ map: gridTex, roughness: 0.75 }));
     gridMesh.position.set(0, 0.045, -4);
     gridMesh.receiveShadow = true;
+    this.startGridMesh = gridMesh;
     this.scene.add(gridMesh);
 
     // Main Straight Spectator Grandstand (West side so East opens to Metro City!)

@@ -8,16 +8,30 @@ Command executed after final edits:
 `pnpm run build` (`tsc && vite build`)
 - **Result:** Exit code `0`
 - **Modules:** `72 modules transformed`
-- **Bundle Output:** `dist/index.html` (`52.91 kB` / `12.24 kB` gzip), `dist/assets/index-BQyMm_vX.js` (`1,049.39 kB` / `282.99 kB` gzip) in `1.03s`
+- **Bundle Output:** `dist/index.html` (`52.92 kB` / `12.20 kB` gzip), `dist/assets/index-DqIJ4VqU.js` (`1,059.11 kB` / `282.62 kB` gzip) in `937ms` (2026-11-26 final Sprint 15 gate)
 - **Subpath hosting:** built `index.html` references `./assets/...`; a static server at `/game/` returned HTTP 200 for the built JS and `male.glb` (6,264,280 bytes) — verified 2026-11-26.
 - **TypeScript Errors:** `0`
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (51/51)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`51` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (62/62)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`62` pass, `0` fail, `0` skipped, `16.59s`):
 
-### Sprint 14 — map navigation & height-aware occlusion (2026-11-26, current)
+### Sprint 15 — world gameplay coherence & AI navigation (2026-11-26, current)
+| Issue | Status | Evidence |
+| :--- | :---: | :--- |
+| Pier jump snapped the car ~17m backwards onto the deck | **FIXED** | `isOverOpenWater()` + clearance-based pier clamp; real `CarPhysics` drive from (168,240): max `z=327.97`, `maxY=5.27`, **0** backward jumps, splashdown in ocean. `main.ts` now samples ocean height `-1.05` and recovers to `lastSafePosition` with SPLASHDOWN notification. |
+| Time-of-day never reached the open world; sky/water highlights ignored camera position | **FIXED** | `setAtmosphere()` calls `openWorld.setTimeOfDay(tod)` and drives sun/shadows from `sunDirection`; sky/water view vectors are camera-relative; headlights are centralized via `syncVehicleHeadlights()` for player, bots and cruisers. Runtime check: NIGHT water/building uniforms differ from DAY. |
+| Timed circuit races still paid open-world trap/drift rewards | **FIXED** | `WorldActivities.update()` returns early for `isTimedCircuitRace`; probe: 0 callbacks during race, 1 afterwards. `resetTransientState()` clears active drift score and trap cooldowns on race start/death/bust/teleport. |
+| Rival sprint routes cut through buildings | **FIXED** | Takumi waypoints moved to `x=284` and APEX ZERO inserted `(46,224)`; segment-vs-AABB probe over all 4 rivals: **0/0 blocked legs**. |
+| Police could bust / fighters could punch / pedestrians could witness through solid walls | **FIXED** | Height-aware LOS added to all four reaction paths. Runtime: LOS through Harbor Inn wall `false`, 180 fighter frames **0 punches**, pedestrian `WITNESS`/`FLEE` suppressed. |
+| Police detour targets flipped and Touge deck chase was height-blind | **FIXED** | `RoadGraph` now has 3D nearest-node gate, ramp-mouth nodes, `findPath()`; `PoliceSystem` follows a cached path with a segment projection gate and re-plans below elevated waypoints. Runtime: deck target reached at **1.4m** 3D distance, target flips **6/60s** (was per-frame); ground chase flips **4/60s**. No reverse-stall on the ramp. |
+| AI traffic/rivals drove on the invisible plane over open water | **FIXED** | Police, city traffic and rival physics use the ocean sampler (`-1.05`) and splash recovery; real `CityCruiserBot` probe returns to last safe road. |
+| Lamps stood in the expressway; quay/pier floated above water; edge stripes sampled asphalt | **FIXED** | z=30 lamp row skipped near `z=30` expressway; quay/pier extended to `y=-1.15`, pier registered as wet material; track grid registered for rain; edge UVs sample the painted stripes. |
+| Adaptive resolution pumped forever between two ratios on a borderline GPU | **FIXED** | Failed-ratio memory requires `max(upFps, failedFps*1.35+6)` before retry. Probe: 60fps display cap settles at 1.0; genuine 75fps headroom returns to 1.1. |
+| Patrol route crossed Harbor Inn and had no stuck recovery | **FIXED** | Route shifted to `x=224` avenue, 14 agents preserved; bounded 2.5s stuck flip added. |
+
+### Sprint 14 — map navigation & height-aware occlusion
 | Issue | Status | Evidence |
 | :--- | :---: | :--- |
 | Police steered into a building when start and goal shared a road-graph cell | **FIXED** | `findNextWaypoint()` returned the raw goal when `startId === goalId`, even though patrol steering only calls it when LOS is blocked. Repro (180,-120) → (215,-120): old waypoint was the blocked target itself; new `findBlockedWaypoint()` returns a reachable road node. Added a same-cell regression test. |

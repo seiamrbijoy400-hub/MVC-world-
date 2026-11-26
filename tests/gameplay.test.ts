@@ -99,7 +99,7 @@ const OrigRequest = globalThis.Request;
   return new Response(new ArrayBuffer(0), { status: 404 });
 };
 
-import { CarPhysics, GearboxType } from '../src/physics/CarPhysics';
+import { CarPhysics, GearboxType, type CarInputs, type GroundSample } from '../src/physics/CarPhysics';
 import { CharacterController } from '../src/physics/CharacterController';
 import { RoadGraph, hasLineOfSight } from '../src/game/RoadGraph';
 import { SaveManager } from '../src/game/SaveManager';
@@ -108,6 +108,7 @@ import { OpenWorldMap } from '../src/graphics/OpenWorldMap';
 import { TrackEnvironment } from '../src/graphics/TrackEnvironment';
 import { PoliceSystem } from '../src/game/PoliceSystem';
 import { PedestrianSystem } from '../src/ai/PedestrianSystem';
+import { SparringFighter, CityCruiserBot } from '../src/ai/RaceBotAI';
 import { WorldActivities, type CourierContractDef } from '../src/game/WorldActivities';
 import { CarMesh } from '../src/graphics/CarMesh';
 import { mapAnimStateToClip, modelForCharacter, modelUrlFor } from '../src/graphics/CharacterAnimationMap';
@@ -1475,4 +1476,310 @@ test('RoadGraph: Touge deck and ramps block low sight lines but not an overfligh
     'a drone above the deck has a clear line'
   );
   assert.equal(hasLineOfSight(172, -230, 172, -170, map.colliders), false, 'legacy 2D calls unchanged');
+});
+
+test('OpenWorldMap: pier jump clears the deck and lands in recoverable ocean water', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  assert.equal(map.isOverOpenWater(168, 310), true, 'beyond the pier lip is open water');
+  assert.equal(map.isOverOpenWater(168, 290), false, 'the pier deck itself is not water');
+  assert.equal(map.isOverOpenWater(90, 300), true, 'water outside the pier lane is still water');
+
+  const scene = new THREE.Scene();
+  const track = new TrackEnvironment(scene);
+  const sample = (x: number, z: number, currentY = 0): GroundSample => {
+    const base = track.sampleGround(x, z);
+    const rampH = map.sampleRampHeight(x, z);
+    const interiorH = map.sampleInteriorHeight(x, z, currentY);
+    if (map.isOverOpenWater(x, z)) return { ...base, height: -1.05, isRoad: false };
+    return {
+      ...base,
+      height: Math.max(base.height, rampH, interiorH ?? 0),
+      isRoad: base.isRoad || map.isInsideCityOrPlayground(x, z) || rampH > 0 || interiorH !== null
+    };
+  };
+  const car = new CarPhysics();
+  car.enforceTrackWalls = false;
+  car.groundHeightSampler = sample;
+  car.worldCollider = (p, v, r) => map.resolveCollision(p, v, r);
+  car.resetToTrack(new THREE.Vector3(168, sample(168, 240).height, 240), Math.PI);
+  car.lastSafePosition.copy(car.position);
+  const inputs: CarInputs = {
+    throttle: 1, brake: 0, steer: 0, handbrake: false, clutch: false,
+    shiftUp: false, shiftDown: false, reset: false
+  };
+  let maxZ = car.position.z;
+  let bigBackwardJumps = 0;
+  let splash = false;
+  let prevZ = car.position.z;
+  for (let i = 0; i < 420 && !splash; i++) {
+    car.update(1 / 60, inputs, true);
+    if (car.position.z > maxZ) maxZ = car.position.z;
+    if (car.position.z < prevZ - 2) bigBackwardJumps++;
+    prevZ = car.position.z;
+    splash = map.isOverOpenWater(car.position.x, car.position.z) && car.position.y < -0.35;
+  }
+  assert.equal(splash, true, 'a pier launch must actually fall into the ocean');
+  assert.ok(maxZ > 310, `jump should clear the pier lip, reached z=${maxZ.toFixed(1)}`);
+  assert.equal(bigBackwardJumps, 0, 'no mid-air snap back onto the deck');
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  assert.match(main, /isOverOpenWater\(this\.physics\.position\.x, this\.physics\.position\.z\)/);
+  assert.match(main, /SPLASHDOWN!/);
+});
+
+test('WorldActivities: circuit races do not farm open-world rewards; transient scoring resets', () => {
+  localStorage.clear();
+  const scene = new THREE.Scene();
+  let trapHits = 0;
+  const activities = new WorldActivities(scene, new SaveManager(), new TrackEnvironment(scene), new OpenWorldMap(scene), {
+    onSpeedTrapTriggered: () => { trapHits++; },
+    onDriftZoneCompleted: () => {},
+    onShardCollected: () => {},
+    onNearRivalPrompt: () => {},
+    onSprintEnded: () => {}
+  });
+  const trap = activities.speedTraps[0];
+  activities.update(0.1, 0.1, new THREE.Vector3(trap.x, 0, trap.z), 200, true, false, 0, true);
+  assert.equal(trapHits, 0, 'speed traps must be inert during a timed circuit race');
+  activities.update(0.1, 0.2, new THREE.Vector3(trap.x, 0, trap.z), 200, true, false, 0, false);
+  assert.equal(trapHits, 1, 'the same trap must work again in open world');
+
+  activities.activeDriftZone = activities.driftZones[0];
+  activities.activeDriftZoneScore = 300;
+  activities.speedTraps[0].cooldown = 5;
+  activities.resetTransientState();
+  assert.equal(activities.activeDriftZone, null);
+  assert.equal(activities.activeDriftZoneScore, 0);
+  assert.equal(activities.speedTraps[0].cooldown, 0);
+});
+
+test('WorldActivities: every rival sprint leg stays clear of building colliders', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const activities = new WorldActivities(scene, new SaveManager(), new TrackEnvironment(scene), map, {
+    onSpeedTrapTriggered: () => {}, onDriftZoneCompleted: () => {}, onShardCollected: () => {},
+    onNearRivalPrompt: () => {}, onSprintEnded: () => {}
+  });
+  const legBlocked = (ax: number, az: number, bx: number, bz: number): boolean => {
+    const dx = bx - ax, dz = bz - az;
+    for (const c of map.colliders) {
+      let tMin = 0, tMax = 1;
+      const pad = 1.55;
+      const bounds: Array<[number, number]> = [
+        [-dx, ax - (c.minX - pad)], [dx, c.maxX + pad - ax],
+        [-dz, az - (c.minZ - pad)], [dz, c.maxZ + pad - az]
+      ];
+      let overlaps = true;
+      for (const [p, q] of bounds) {
+        if (Math.abs(p) < 1e-9) { if (q < 0) { overlaps = false; break; } continue; }
+        const t = q / p;
+        if (p < 0) { if (t > tMax) { overlaps = false; break; } if (t > tMin) tMin = t; }
+        else { if (t < tMin) { overlaps = false; break; } if (t < tMax) tMax = t; }
+      }
+      if (overlaps && tMin <= tMax) return true;
+    }
+    return false;
+  };
+  for (const rival of activities.rivals) {
+    for (let i = 0; i < rival.waypoints.length - 1; i++) {
+      const a = rival.waypoints[i], b = rival.waypoints[i + 1];
+      assert.equal(
+        legBlocked(a.x, a.z, b.x, b.z), false,
+        `${rival.id} leg ${i} (${a.x},${a.z}) -> (${b.x},${b.z}) must not cut through a building`
+      );
+    }
+  }
+});
+
+test('Lighting: open-world time-of-day, sun direction and shader view vectors are wired', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const internals = map as unknown as {
+    oceanUniforms: { uShallowColor: { value: THREE.Color } };
+    buildingMats: THREE.MeshStandardMaterial[];
+  };
+  const dayWater = internals.oceanUniforms.uShallowColor.value.getHexString();
+  const dayGlow = internals.buildingMats[0].emissiveIntensity;
+  map.setTimeOfDay('NIGHT');
+  assert.notEqual(internals.oceanUniforms.uShallowColor.value.getHexString(), dayWater);
+  assert.notEqual(internals.buildingMats[0].emissiveIntensity, dayGlow);
+
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  assert.match(main, /this\.openWorld\.setTimeOfDay\(tod\)/);
+  assert.match(main, /addScaledVector\(this\.sunDirection, 150\)/);
+  const shaders = fs.readFileSync(path.join(process.cwd(), 'src/graphics/Shaders.ts'), 'utf8');
+  assert.match(shaders, /vWorldDir = worldPos\.xyz - cameraPosition/);
+  assert.match(shaders, /viewDir = normalize\(cameraPosition - vWorldPos\)/);
+});
+
+test('World art: lamps avoid expressway, waterfront decks reach below water, wet materials complete', () => {
+  const scene = new THREE.Scene();
+  const track = new TrackEnvironment(scene);
+  const map = new OpenWorldMap(scene);
+  const mapSrc = fs.readFileSync(path.join(process.cwd(), 'src/graphics/OpenWorldMap.ts'), 'utf8');
+  const trackSrc = fs.readFileSync(path.join(process.cwd(), 'src/graphics/TrackEnvironment.ts'), 'utf8');
+  assert.match(mapSrc, /\[-160, -40, 30, 150, 224\]\.some\(\(sz\) => Math\.abs\(z - sz\) < 9\.5\)/);
+  assert.match(mapSrc, /BoxGeometry\(282, 1\.2, 38\)/);
+  assert.match(mapSrc, /BoxGeometry\(56, 1\.2, 34\)/);
+  assert.match(trackSrc, /roadUVs\.push\(0\.035, i \* 0\.3, 0\.965, i \* 0\.3\)/);
+
+  assert.ok(track.startGridMesh, 'start grid must be registered for wet-surface updates');
+  const gridMat = track.startGridMesh!.material as THREE.MeshStandardMaterial;
+  track.setWetSurface(true);
+  assert.equal(gridMat.roughness, 0.22);
+  track.setWetSurface(false);
+  assert.equal(gridMat.roughness, 0.75);
+
+  const pierAndPitch = (map as unknown as { roadMats: THREE.MeshStandardMaterial[] }).roadMats
+    .filter((m) => m.color.getHex() === 0x334155 || m.color.getHex() === 0x166534);
+  assert.ok(pierAndPitch.length >= 3, 'quay, pier and pitch must all respond to rain');
+  map.setWetSurface(true);
+  assert.ok(pierAndPitch.every((m) => m.roughness === 0.18));
+  map.setWetSurface(false);
+  assert.ok(pierAndPitch.every((m) => m.roughness === 0.82));
+});
+
+test('AdaptiveResolution: a borderline GPU settles instead of pumping between two ratios', () => {
+  const feed = (gov: AdaptiveResolution, fps: number, seconds: number) => {
+    const dt = 1 / fps;
+    for (let i = 0; i < Math.round(seconds * fps); i++) gov.sample(dt);
+  };
+  const gov = new AdaptiveResolution(1, {
+    minRatio: 0.8, maxRatio: 1.1, step: 0.1, windowSec: 0.5,
+    warmupSec: 0, downFps: 45, upFps: 57, downWindows: 2, upWindows: 3
+  });
+  // At 1.1 the device can only hold 44fps, so it steps back to 1.0.
+  feed(gov, 60, 4);
+  assert.equal(gov.currentRatio, 1.1);
+  feed(gov, 44, 1.5);
+  assert.equal(gov.currentRatio, 1);
+  // A 60fps display cap is not enough evidence that 1.1 is now safe.
+  feed(gov, 60, 12);
+  assert.equal(gov.currentRatio, 1, 'must not pump back into the failed ratio');
+  // Genuine headroom above the failed setting still allows recovery.
+  feed(gov, 75, 6);
+  assert.equal(gov.currentRatio, 1.1);
+});
+
+test('Combat LOS: sparring fighters and police busts cannot reach through solid walls', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const wall = map.colliders.find((c) =>
+    c.minX <= 103.4 && c.maxX >= 104 && c.minZ <= -100 && c.maxZ >= -100
+  )!;
+  assert.ok(wall, 'expected Harbor Inn wall collider');
+  assert.equal(
+    hasLineOfSight(102.5, -100, 104.5, -100, map.colliders, 0.2, 0, 0, map.getElevatedOccluders()),
+    false
+  );
+
+  let punches = 0;
+  const fighter = new SparringFighter('Test', 'kaito', new THREE.Vector3(102.5, 0, -100), scene, map);
+  fighter.controller.onPunchStrike = () => { punches++; };
+  for (let i = 0; i < 180; i++) {
+    fighter.update(1 / 60, new THREE.Vector3(104.5, 0, -100), true);
+  }
+  assert.equal(punches, 0, 'fighter must not punch a target separated by a wall');
+
+  const policeSrc = fs.readFileSync(path.join(process.cwd(), 'src/game/PoliceSystem.ts'), 'utf8');
+  assert.match(
+    policeSrc,
+    /dist < 6\.8[\s\S]{0,280}hasLineOfSight\(/,
+    'bust branch must re-check line-of-sight before arresting'
+  );
+});
+
+test('Pedestrian reactions and patrol routes respect walls and stuck recovery', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const peds = new PedestrianSystem(scene, map, () => 0, 1);
+  const agent = peds.agents[0];
+  agent.controller.position.set(102, 0, -100);
+  agent.state = 'WALK';
+  peds.alertDanger(new THREE.Vector3(106, 0, -100), 20);
+  assert.notEqual(agent.state, 'FLEE', 'visual danger behind a wall must not trigger FLEE');
+
+  const witnessed = peds.notifyCrime(new THREE.Vector3(106, 0, -100), 'TEST', 30);
+  assert.equal(witnessed, false, 'a crime behind a wall must not produce a witness');
+  assert.notEqual(agent.state, 'WITNESS');
+
+  const src = fs.readFileSync(path.join(process.cwd(), 'src/ai/PedestrianSystem.ts'), 'utf8');
+  assert.match(src, /\[\[224, -140\], \[224, 16\]\]/, 'patrol must route around Harbor Inn');
+  assert.equal(new PedestrianSystem(scene, map, () => 0).agents.length, 14, 'all 14 patrol agents must remain');
+  assert.match(src, /stuckTimer > 2\.5/, 'patrol must have bounded stuck recovery');
+});
+
+test('RoadGraph: elevated nodes stay distinct from ground routing and detours use the ramp mouth', () => {
+  const graph = new RoadGraph();
+  const map = new OpenWorldMap(new THREE.Scene());
+  const groundId = graph.nearestNodeId(155, -296, 0);
+  const deckId = graph.nearestNodeId(155, -296, 6);
+  assert.equal(graph.nodes[groundId].y, 0, 'a ground unit under the deck must not snap onto the summit');
+  assert.equal(graph.nodes[deckId].y, 6, 'a unit on the deck must snap onto the summit');
+
+  const from = new THREE.Vector3(155, 0, -240);
+  const target = new THREE.Vector3(155, 6, -296);
+  assert.equal(hasLineOfSight(
+    from.x, from.z, target.x, target.z, map.colliders, 1.6,
+    from.y, target.y, map.getElevatedOccluders()
+  ), false);
+  const detour = graph.findBlockedWaypoint(
+    from, target, map.colliders, new THREE.Vector3(), from.y, target.y, map.getElevatedOccluders()
+  );
+  assert.equal(detour.y, 0, 'the first detour waypoint must be reachable from the ground');
+  assert.notEqual(detour.y, graph.nodes[deckId].y);
+});
+
+test('Police pursue an elevated target through the Touge ramp without per-frame target flipping', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const track = new TrackEnvironment(scene);
+  const police = new PoliceSystem(scene, track, map);
+  const elevated = new THREE.Vector3(155, 6, -296);
+  police.addHeat(2, 'TEST', new THREE.Vector3(215, 0, -120));
+  (police as unknown as { crimeCooldown: number }).crimeCooldown = 9999;
+  for (let i = 0; i < 600 && police.units.length === 0; i++) {
+    police.update(1 / 60, elevated, false, null);
+  }
+  assert.equal(police.units.length, 1, 'a cruiser must be dispatched');
+  const unit = police.units[0];
+  unit.physics.resetToTrack(new THREE.Vector3(155, 0, -240), Math.PI);
+  unit.mode = 'PURSUING';
+  (police as unknown as { lastKnownPos: THREE.Vector3 }).lastKnownPos.copy(elevated);
+  unit.navTarget.set(0, 0, 0);
+
+  let previous = new THREE.Vector3();
+  let flips = 0;
+  let minDistance = Infinity;
+  for (let i = 0; i < 2400; i++) {
+    police.update(1 / 60, elevated, false, null);
+    if (i > 2 && unit.navTarget.distanceToSquared(previous) > 400) flips++;
+    previous.copy(unit.navTarget);
+    minDistance = Math.min(minDistance, unit.physics.position.distanceTo(elevated));
+  }
+  assert.ok(minDistance < 3, `cruiser must actually climb the ramp to the target, closest ${minDistance.toFixed(1)}m`);
+  assert.ok(flips < 20, `nav target must not flip every frame, saw ${flips} flips in 40s`);
+});
+
+test('AI cars use ocean ground and recover from splashdowns like the player', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const track = new TrackEnvironment(scene);
+  const bot = new CityCruiserBot('probe', 'Test', '#fff', [
+    new THREE.Vector3(46, 0, -160), new THREE.Vector3(224, 0, -160),
+    new THREE.Vector3(224, 0, 150), new THREE.Vector3(46, 0, 150)
+  ], 0, map, track, scene);
+  assert.equal(bot.physics.groundHeightSampler(168, 310).height, -1.05);
+  const safe = new THREE.Vector3(168, 0, 240);
+  bot.physics.resetToTrack(safe, Math.PI);
+  bot.physics.position.set(168, -1, 310);
+  assert.equal(map.shouldRecoverFromWater(bot.physics.position), true);
+  bot.update(1 / 60, new THREE.Vector3(0, 0, 0), null, []);
+  assert.ok(bot.physics.position.distanceTo(safe) < 1, 'a splashed traffic bot must return to its last safe road');
+  assert.equal(map.shouldRecoverFromWater(bot.physics.position), false);
+
+  const policeSrc = fs.readFileSync(path.join(process.cwd(), 'src/game/PoliceSystem.ts'), 'utf8');
+  const activitiesSrc = fs.readFileSync(path.join(process.cwd(), 'src/game/WorldActivities.ts'), 'utf8');
+  for (const src of [policeSrc, activitiesSrc]) {
+    assert.match(src, /isOverOpenWater\(x, z\)/);
+    assert.match(src, /shouldRecoverFromWater\(/);
+  }
 });

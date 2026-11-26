@@ -1,5 +1,5 @@
 # APEX ZERO: NEON VELO — Master Game Audit
-**Date:** 2026-11-26 | **Inspector:** Game Director AI | **Verified Build:** Clean (`tsc && vite build`, 72 modules) | **Automated Tests:** 51/51 Pass
+**Date:** 2026-11-26 | **Inspector:** Game Director AI | **Verified Build:** Clean (`tsc && vite build`, 72 modules, 937ms) | **Automated Tests:** 62/62 Pass
 
 ---
 
@@ -35,10 +35,14 @@
 6. **Texture / Material Leaks in World & Characters (`CarMesh.ts`, `HumanCharacterMesh.ts`, `OpenWorldMap.ts`, `RaceBotAI.ts`)** — fixed and verified via shared-resource disposal test.
 7. **LAN Peer Disconnect Ghost State (`server/lanLobbyPlugin.ts`)** — fixed `leaveCurrentRoom()` to broadcast pruned `WORLD_STATE` and verified via live 2-client WebSocket test.
 8. **Empty vs Occupied Car Visual Distinction & Amateur Lighting/UI Polish (`CarMesh.ts`, `main.ts`, `OpenWorldMap.ts`, `HumanCharacterMesh.ts`, `index.html`, `SoundManager.ts`)** — implemented and typechecked/built cleanly; visual WebGL framing remains to be observed on a live screen.
+9. **Pier jump snap-back & fake water driving (`OpenWorldMap.ts`, `main.ts`, `PoliceSystem.ts`, `RaceBotAI.ts`, `WorldActivities.ts`)** — FIXED: ocean sampler `-1.05`, splash recovery to last safe road for player and all AI cars. Runtime pier drive reached `z=327.97` with 0 backward jumps (was `z≈307` then snapped to `290`).
+10. **Time-of-day/AI coherence (`main.ts`, `Shaders.ts`, `WorldActivities.ts`, `PedestrianSystem.ts`, `RaceBotAI.ts`)** — FIXED: `openWorld.setTimeOfDay()` + sun direction + camera-relative sky/water specular; centralized headlights; no timed-race reward farming; rivals clear of colliders; LOS required for bust/punch/witness/danger.
+11. **Police navigation (`RoadGraph.ts`, `PoliceSystem.ts`)** — FIXED: 3D node selection, ramp-mouth nodes, cached path following and ramp re-planning. Deck chase reached the target at 1.4m with 6 target changes in 60s; ground detours no longer flip per frame.
+12. **World art & governor (`OpenWorldMap.ts`, `TrackEnvironment.ts`, `AdaptiveResolution.ts`)** — FIXED: lamps off the expressway, decks below water, wet-surface coverage, painted edge UVs, bounded adaptive-resolution retry for borderline GPUs.
 
 ---
 
 ## 3. Remaining Known Weaknesses & Unverified Areas (HONEST AUDIT)
 - **Live WebGL Visual Rendering, Mobile Touch & Web Audio Hardware:** Because no browser binary, Android device, or Browser Automation MCP is active in this environment, live GPU shading, FPS across `HIGH`/`MED`/`LOW`, touchscreen multi-finger feel, and real speaker playback remain **NOT TESTED**.
 - **Large Monolithic Orchestrator (`src/main.ts`, ~2,400 lines):** Further feature growth should extract `MultiplayerSync` from `GameApp`.
-- **Bundle Chunk Size Warning:** `vite build` reports `dist/assets/index-mWQCux-j.js` at `953.14 kB` (`254.93 kB` gzip) because Three.js + game code sit in a single bundle (`codeSplitting` optional for faster mobile load).
+- **Bundle Chunk Size Warning:** `vite build` reports `dist/assets/index-DqIJ4VqU.js` at `1,059.11 kB` (`282.62 kB` gzip) because Three.js + game code sit in a single bundle (`codeSplitting` optional for faster mobile load). Real mobile download/parse time remains **NOT TESTED**.

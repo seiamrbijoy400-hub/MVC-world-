@@ -47,6 +47,10 @@ export class AdaptiveResolution {
   private warmupLeft: number;
   private downStreak = 0;
   private upStreak = 0;
+  // Remembers the ratio/fps pair that just failed so a borderline GPU cannot
+  // pump forever between two pixel ratios (fast at one, slow at the next).
+  private blockedRatio: number | null = null;
+  private blockedFps = 0;
 
   constructor(initialRatio: number, options: AdaptiveResolutionOptions = {}) {
     this.opts = { ...DEFAULTS, ...options };
@@ -72,6 +76,7 @@ export class AdaptiveResolution {
     this.opts.minRatio = Math.max(0.4, Math.min(minRatio, maxRatio));
     this.opts.maxRatio = Math.max(this.opts.minRatio, maxRatio);
     this.ratio = this.clamp(currentRatio);
+    this.blockedRatio = null;
     this.reset();
   }
 
@@ -82,6 +87,8 @@ export class AdaptiveResolution {
     this.warmupLeft = Math.max(0, this.opts.warmupSec);
     this.downStreak = 0;
     this.upStreak = 0;
+    this.blockedRatio = null;
+    this.blockedFps = 0;
   }
 
   /**
@@ -115,8 +122,11 @@ export class AdaptiveResolution {
       this.upStreak = 0;
       if (this.downStreak >= this.opts.downWindows) {
         this.downStreak = 0;
+        const failedRatio = this.ratio;
         const next = this.clamp(this.ratio - this.opts.step);
         if (next < this.ratio) {
+          this.blockedRatio = failedRatio;
+          this.blockedFps = fps;
           this.ratio = next;
           return this.ratio;
         }
@@ -131,6 +141,15 @@ export class AdaptiveResolution {
         this.upStreak = 0;
         const next = this.clamp(this.ratio + this.opts.step);
         if (next > this.ratio) {
+          // Returning to a ratio that just produced `blockedFps` needs real
+          // headroom (e.g. 70fps after a 44fps failure), not a 60fps display
+          // cap that merely alternates with the heavier setting.
+          const retryFps = Math.max(this.opts.upFps, this.blockedFps * 1.35 + 6);
+          if (this.blockedRatio !== null
+            && Math.abs(next - this.blockedRatio) < 1e-9
+            && fps <= retryFps) return null;
+          this.blockedRatio = null;
+          this.blockedFps = 0;
           this.ratio = next;
           return this.ratio;
         }

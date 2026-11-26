@@ -19,6 +19,8 @@ export interface PedestrianAgent {
   patrolA: THREE.Vector3;
   patrolB: THREE.Vector3;
   headingToB: boolean;
+  stuckTimer: number;
+  lastProgressPos: THREE.Vector3;
   threatPos: THREE.Vector3;
   pendingCrimeReason: string;
   witnessReported: boolean;
@@ -39,7 +41,9 @@ const PATROL_ROUTES: Array<[[number, number], [number, number]]> = [
   [[133, 19], [210, 19]],
   [[133, -140], [133, -52]],
   [[133, -26], [133, 16]],
-  [[212, -140], [212, 16]],
+  // Shift the Harbor Inn patrol onto the x=224 avenue instead of walking
+  // through the building's x=191.6..216.4 collider.
+  [[224, -140], [224, 16]],
   [[35, -24], [35, 36]],
   [[129, 52], [129, 126]],
   [[60, 164], [208, 164]],
@@ -120,6 +124,8 @@ export class PedestrianSystem {
         patrolA: new THREE.Vector3(a[0], 0, a[1]),
         patrolB: new THREE.Vector3(b[0], 0, b[1]),
         headingToB: i % 2 === 0,
+        stuckTimer: 0,
+        lastProgressPos: start.clone(),
         threatPos: new THREE.Vector3(),
         pendingCrimeReason: '',
         witnessReported: false
@@ -134,6 +140,8 @@ export class PedestrianSystem {
       ctrl.onRespawn = (spawn) => {
         agent.state = 'WALK';
         agent.stateTimer = 0;
+        agent.stuckTimer = 0;
+        agent.lastProgressPos.copy(spawn);
         agent.witnessReported = false;
         mesh.root.position.copy(spawn);
       };
@@ -152,9 +160,13 @@ export class PedestrianSystem {
       if (a === exclude || a.controller.isDead || a.state === 'KO') continue;
       const d = Math.hypot(a.controller.position.x - crimePos.x, a.controller.position.z - crimePos.z);
       if (d > radius) continue;
-      if (!hasLineOfSight(a.controller.position.x, a.controller.position.z, crimePos.x, crimePos.z, this.openWorld.colliders)) {
-        continue;
-      }
+      if (!hasLineOfSight(
+        a.controller.position.x, a.controller.position.z,
+        crimePos.x, crimePos.z,
+        this.openWorld.colliders, 0.2,
+        a.controller.position.y, crimePos.y,
+        this.openWorld.getElevatedOccluders()
+      )) continue;
       if (a.state !== 'WITNESS') {
         a.state = 'WITNESS';
         a.stateTimer = 1.65;
@@ -182,7 +194,13 @@ export class PedestrianSystem {
     for (const a of this.agents) {
       if (a.controller.isDead || a.state === 'KO' || a.state === 'WITNESS') continue;
       const d = Math.hypot(a.controller.position.x - dangerPos.x, a.controller.position.z - dangerPos.z);
-      if (d <= radius) {
+      if (d <= radius && hasLineOfSight(
+        a.controller.position.x, a.controller.position.z,
+        dangerPos.x, dangerPos.z,
+        this.openWorld.colliders, 0.2,
+        a.controller.position.y, dangerPos.y,
+        this.openWorld.getElevatedOccluders()
+      )) {
         a.state = 'FLEE';
         a.stateTimer = 4.5;
         a.threatPos.copy(dangerPos);
@@ -288,6 +306,24 @@ export class PedestrianSystem {
       }
 
       a.controller.update(dt, { moveX, moveY, sprint, jump: false, punch: false }, 0);
+      // A patrol segment can be blocked by scenery/dynamic props. Bounded
+      // recovery prevents an agent from pushing into one wall forever.
+      if (a.state === 'WALK') {
+        if (a.controller.position.distanceTo(a.lastProgressPos) > 0.45) {
+          a.lastProgressPos.copy(a.controller.position);
+          a.stuckTimer = 0;
+        } else {
+          a.stuckTimer += dt;
+          if (a.stuckTimer > 2.5) {
+            a.headingToB = !a.headingToB;
+            a.stuckTimer = 0;
+            a.lastProgressPos.copy(a.controller.position);
+          }
+        }
+      } else {
+        a.stuckTimer = 0;
+        a.lastProgressPos.copy(a.controller.position);
+      }
       a.mesh.root.position.copy(a.controller.position);
       a.mesh.root.rotation.y = a.controller.yaw;
 

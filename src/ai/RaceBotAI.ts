@@ -7,6 +7,7 @@ import { GLTFCharacterMesh } from '../graphics/GLTFCharacterMesh';
 import { DEFAULT_APPEARANCE_BY_ID } from '../graphics/HumanCharacterMesh';
 import { MODEL_URLS, modelForCharacter } from '../graphics/CharacterAnimationMap';
 import { CharacterController } from '../physics/CharacterController';
+import { hasLineOfSight } from '../game/RoadGraph';
 import type { BotDifficulty, CharacterId } from '../network/LobbyProtocol';
 
 export class RaceBot {
@@ -192,6 +193,7 @@ export class CityCruiserBot {
   public physics: CarPhysics;
   public mesh: CarMesh;
   private route: THREE.Vector3[];
+  private openWorld: OpenWorldMap;
   private wpIndex = 0;
   private emojiSprite: THREE.Sprite;
   private emojiTimer = 0;
@@ -215,6 +217,7 @@ export class CityCruiserBot {
     this.name = name;
     this.color = color;
     this.route = route;
+    this.openWorld = openWorld;
     this.wpIndex = startWpIndex % route.length;
 
     this.physics = new CarPhysics();
@@ -222,6 +225,7 @@ export class CityCruiserBot {
     this.physics.groundHeightSampler = (x, z) => {
       const g = track.sampleGround(x, z);
       const rH = openWorld.sampleRampHeight(x, z);
+      if (openWorld.isOverOpenWater(x, z)) return { ...g, height: -1.05, isRoad: false };
       return { ...g, height: Math.max(g.height, rH), isRoad: g.isRoad || openWorld.isInsideCityOrPlayground(x, z) || rH > 0 };
     };
     this.physics.worldCollider = (pos, vel, rad) => openWorld.resolveCollision(pos, vel, rad);
@@ -397,6 +401,12 @@ export class CityCruiserBot {
       }
     }
 
+    if (this.openWorld.shouldRecoverFromWater(this.physics.position)) {
+      this.physics.resetToTrack();
+      this.stuckTimer = 0;
+      this.reverseTimer = 0;
+    }
+
     this.physics.update(dt, {
       throttle,
       brake,
@@ -418,15 +428,18 @@ export class SparringFighter {
   public onKilled: (fighter: SparringFighter) => void = () => {};
   private homePos: THREE.Vector3;
   private wanderTarget: THREE.Vector3;
+  private openWorld: OpenWorldMap | null;
   private timer = 0;
 
   constructor(
     name: string,
     charId: CharacterId,
     pos: THREE.Vector3,
-    scene: THREE.Scene
+    scene: THREE.Scene,
+    openWorld: OpenWorldMap | null = null
   ) {
     this.name = name;
+    this.openWorld = openWorld;
     this.homePos = pos.clone();
     this.wanderTarget = pos.clone();
     this.controller = new CharacterController();
@@ -458,6 +471,17 @@ export class SparringFighter {
     return this.controller.isDead;
   }
 
+  private canSeePlayer(playerPos: THREE.Vector3): boolean {
+    if (!this.openWorld) return true;
+    return hasLineOfSight(
+      this.controller.position.x, this.controller.position.z,
+      playerPos.x, playerPos.z,
+      this.openWorld.colliders, 0.2,
+      this.controller.position.y, playerPos.y,
+      this.openWorld.getElevatedOccluders()
+    );
+  }
+
   public update(dt: number, playerPos: THREE.Vector3, playerOnFoot: boolean): void {
     if (this.controller.isDead) {
       this.controller.update(dt, { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false }, 0);
@@ -484,7 +508,7 @@ export class SparringFighter {
         moveX = dx / len;
         moveY = -dz / len;
         sprint = distToPlayer > 5;
-      } else if (this.timer <= 0) {
+      } else if (this.timer <= 0 && this.canSeePlayer(playerPos)) {
         punch = true;
         this.timer = 1.4;
       }

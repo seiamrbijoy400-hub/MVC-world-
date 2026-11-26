@@ -24,6 +24,11 @@ export interface PoliceUnit {
   lightA: THREE.Mesh;
   lightB: THREE.Mesh;
   sirenPhase: number;
+  navTarget: THREE.Vector3;
+  navPath: THREE.Vector3[];
+  navIndex: number;
+  navGoal: THREE.Vector3;
+  navRetry: number;
   stuckTimer: number;
   reverseTimer: number;
   age: number;
@@ -44,6 +49,7 @@ const SPAWN_POINTS: Array<[number, number]> = [
 export class PoliceSystem {
   public heat = 0;
   public units: PoliceUnit[] = [];
+  public headlightsOn = true;
   public nearestDistance = 999;
   public isSpotted = false;
   public bustProgress = 0;
@@ -66,7 +72,6 @@ export class PoliceSystem {
   private bustCooldown = 0;
   private lastKnownPos = new THREE.Vector3();
   private scratch = new THREE.Vector3();
-  private navScratch = new THREE.Vector3();
   private bodyMat: THREE.MeshStandardMaterial;
   private barMat: THREE.MeshStandardMaterial;
   private barGeo: THREE.BoxGeometry;
@@ -136,6 +141,11 @@ export class PoliceSystem {
   }
 
   /** Allows the player to steal a nearby stopped police cruiser cleanly without dual ownership. */
+  public setHeadlights(enabled: boolean): void {
+    this.headlightsOn = enabled;
+    for (const unit of this.units) unit.mesh.setHeadlights(enabled);
+  }
+
   public takeNearestUnit(
     pos: THREE.Vector3,
     maxRadius = 4.4
@@ -241,6 +251,12 @@ export class PoliceSystem {
         continue;
       }
 
+      if (this.openWorld.shouldRecoverFromWater(unit.physics.position)) {
+        unit.physics.resetToTrack();
+        unit.navTarget.set(0, 0, 0);
+        unit.navPath.length = 0;
+        unit.navIndex = 0;
+      }
       this.driveUnit(unit, dt, playerPos, dist, playerInCar, playerCar);
 
       if (
@@ -250,7 +266,14 @@ export class PoliceSystem {
         this.bustCooldown <= 0 &&
         dist < 6.8 &&
         unit.physics.speedKmh < 32 &&
-        Math.abs(playerPos.y - unit.physics.position.y) < 3.0
+        Math.abs(playerPos.y - unit.physics.position.y) < 3.0 &&
+        hasLineOfSight(
+          unit.physics.position.x, unit.physics.position.z,
+          playerPos.x, playerPos.z,
+          this.openWorld.colliders, 0.2,
+          unit.physics.position.y, playerPos.y,
+          this.openWorld.getElevatedOccluders()
+        )
       ) {
         closestSlowCop = true;
       }
@@ -308,6 +331,7 @@ export class PoliceSystem {
     physics.groundHeightSampler = (x, z) => {
       const g = this.track.sampleGround(x, z);
       const rH = this.openWorld.sampleRampHeight(x, z);
+      if (this.openWorld.isOverOpenWater(x, z)) return { ...g, height: -1.05, isRoad: false };
       return {
         ...g,
         height: Math.max(g.height, rH),
@@ -322,7 +346,7 @@ export class PoliceSystem {
 
     const mesh = new CarMesh();
     mesh.setColor('#e2e8f0');
-    mesh.setHeadlights(true);
+    mesh.setHeadlights(this.headlightsOn);
     this.scene.add(mesh.root);
 
     const barBase = new THREE.Mesh(this.barGeo, this.barMat);
@@ -354,6 +378,11 @@ export class PoliceSystem {
       lightA,
       lightB,
       sirenPhase: Math.random() * Math.PI * 2,
+      navTarget: new THREE.Vector3(),
+      navPath: [],
+      navIndex: 0,
+      navGoal: new THREE.Vector3(),
+      navRetry: 0,
       stuckTimer: 0,
       reverseTimer: 0,
       age: 0,
@@ -386,9 +415,63 @@ export class PoliceSystem {
       this.openWorld.getElevatedOccluders()
     );
 
-    const steerTarget = hasLOS || goalDist < 18
-      ? goalPos
-      : this.roadGraph.findBlockedWaypoint(unit.physics.position, goalPos, this.openWorld.colliders, this.navScratch);
+    let steerTarget: THREE.Vector3;
+    if (hasLOS || goalDist < 18) {
+      steerTarget = unit.navTarget.copy(goalPos);
+    } else {
+      // Follow a cached route by index. Re-selecting the nearest node every
+      // frame made targets flip around corners; advancing through one planned
+      // path keeps the cruiser committed to a turn (and to a ramp mouth).
+      const plannedNode = unit.navPath[unit.navIndex];
+      unit.navRetry += dt;
+      const belowPlannedDeck = plannedNode && plannedNode.y > 1
+        && unit.physics.position.y < plannedNode.y - 1
+        && unit.physics.speedKmh < 25;
+      if (unit.navPath.length === 0
+        || unit.navGoal.distanceToSquared(goalPos) > 900
+        || (belowPlannedDeck && unit.navRetry > 1.2)) {
+        // If the car ends up under an elevated waypoint (e.g. overshooting
+        // past the ramp mouth), re-plan from where it actually is so the
+        // route re-enters via the ramp instead of pushing into its side wall.
+        unit.navPath = this.roadGraph.findPath(
+          unit.physics.position, goalPos, unit.physics.position.y, goalPos.y
+        );
+        unit.navIndex = 0;
+        unit.navGoal.copy(goalPos);
+        unit.navRetry = 0;
+      }
+      // Tight enough that the cruiser actually drives through the ramp mouth
+      // instead of cutting diagonally into the ramp's solid side wall.
+      const arrivalRadius = 7 + unit.physics.speedKmh * 0.035;
+      while (unit.navIndex < unit.navPath.length) {
+        const node = unit.navPath[unit.navIndex];
+        const dNode = Math.hypot(node.x - unit.physics.position.x, node.z - unit.physics.position.z);
+        const next = unit.navPath[unit.navIndex + 1];
+        const entersRamp = next && next.y > node.y + 2;
+        const radius = entersRamp ? 4 : arrivalRadius;
+        const aligned = !entersRamp || Math.abs(unit.physics.position.z - node.z) < 3.5;
+        let passed = false;
+        if (next) {
+          const segX = next.x - node.x;
+          const segZ = next.z - node.z;
+          const segSq = segX * segX + segZ * segZ;
+          if (segSq > 1) {
+            const offX = unit.physics.position.x - node.x;
+            const offZ = unit.physics.position.z - node.z;
+            const along = (offX * segX + offZ * segZ) / Math.sqrt(segSq);
+            const across = Math.abs(offX * segZ - offZ * segX) / Math.sqrt(segSq);
+            // Only skip a node when the car is genuinely past it on the road
+            // segment. A car beside a ramp must still drive through its mouth.
+            passed = along > 2 && across < 11;
+          }
+        }
+        if ((dNode < radius && aligned) || passed) unit.navIndex++;
+        else break;
+      }
+      steerTarget = unit.navTarget.copy(
+        unit.navPath[Math.min(unit.navIndex, unit.navPath.length - 1)] ?? goalPos
+      );
+    }
 
     const toTarget = this.scratch.set(
       steerTarget.x - unit.physics.position.x,
@@ -404,6 +487,12 @@ export class PoliceSystem {
     let throttle = 0;
     let brake = 0;
 
+    // Climbing the Touge ramp is legitimately slow. Treating that as a stuck
+    // collision made cruisers reverse back down the slope forever.
+    const rampHeight = this.openWorld.sampleRampHeight(unit.physics.position.x, unit.physics.position.z);
+    const climbingRamp = rampHeight > 0.5 && unit.physics.position.y >= rampHeight - 1.2;
+    if (climbingRamp) unit.reverseTimer = 0;
+
     if (unit.reverseTimer > 0) {
       unit.reverseTimer -= dt;
       throttle = 0;
@@ -411,9 +500,18 @@ export class PoliceSystem {
       steer = -steer;
     } else {
       const tooClose = playerInCar ? dist < 6.5 : dist < 6.0;
-      const targetSpeed = tooClose ? 0 : (hasLOS ? (dist > 40 ? 148 : 96) : 78);
+      let targetSpeed = tooClose ? 0 : (hasLOS ? (dist > 40 ? 148 : 96) : 78);
+      const navNode = unit.navPath[unit.navIndex];
+      const rampNext = unit.navPath[unit.navIndex + 1];
+      const rampApproach = navNode && (
+        navNode.y > 0.5 || (rampNext && rampNext.y > navNode.y + 2)
+      ) && Math.hypot(navNode.x - unit.physics.position.x, navNode.z - unit.physics.position.z) < 50;
+      if (rampApproach && targetSpeed > 36) targetSpeed = 36;
 
-      if (unit.physics.speedKmh < targetSpeed - 6) {
+      if (climbingRamp) {
+        throttle = 1.0;
+        brake = 0;
+      } else if (unit.physics.speedKmh < targetSpeed - 6) {
         throttle = dist > 60 ? 1.0 : 0.84;
       } else if (unit.physics.speedKmh > targetSpeed + 10) {
         brake = unit.physics.speedKmh > 12 ? 0.7 : 0;
@@ -429,7 +527,7 @@ export class PoliceSystem {
         }
       }
 
-      if (unit.physics.speedKmh < 3.5 && throttle > 0.2) {
+      if (!climbingRamp && unit.physics.speedKmh < 3.5 && throttle > 0.2) {
         unit.stuckTimer += dt;
       } else {
         unit.stuckTimer = Math.max(0, unit.stuckTimer - dt * 2);

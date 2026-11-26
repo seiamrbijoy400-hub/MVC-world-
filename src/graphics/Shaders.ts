@@ -38,7 +38,9 @@ export function createAnimeSkyMaterial(): {
       varying vec3 vWorldDir;
       void main() {
         vec4 worldPos = modelMatrix * vec4(position, 1.0);
-        vWorldDir = position;
+        // The dome is anchored at the origin, but shading must follow the eye:
+        // using local position makes the sun/cloud field swim while driving.
+        vWorldDir = worldPos.xyz - cameraPosition;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
@@ -227,7 +229,8 @@ export function createAnimeWaterMaterial(shoreRadius = 82.0): {
           1.0,
           sin(vWorldPos.z * 0.35 - uTime * 1.7) * 0.18
         ));
-        vec3 halfDir = normalize(normalize(uSunDir) + vec3(0.0, 0.35, 0.65));
+        vec3 viewDir = normalize(cameraPosition - vWorldPos);
+        vec3 halfDir = normalize(normalize(uSunDir) + viewDir);
         float spec = pow(max(dot(n, halfDir), 0.0), 42.0);
         baseCol += uSunColor * spec * 0.85;
 
