@@ -258,6 +258,9 @@ test('OpenWorldMap: walk-in restaurant has a door gap, two floors, stairs and se
   assert.ok(map.isInInteriorStairs(sx, (zone.stairs.minZ + zone.stairs.maxZ) * 0.5));
   assert.equal(map.isInInteriorStairs(90, -100), false);
   assert.ok(map.sitSpots.length >= 10, 'restaurant must provide multiple sit-able chairs');
+  // Anchors are hip targets on the seat surface, not character root positions.
+  assert.ok(map.sitSpots.some((s) => Math.abs(s.pos.y - 0.58) < 0.01), 'ground seats anchor at seat surface');
+  assert.ok(map.sitSpots.some((s) => Math.abs(s.pos.y - 4.78) < 0.01), 'mezzanine seats anchor at seat surface');
 });
 
 test('Connected Crime -> Witness -> Police Dispatch -> Search/Escape -> Arrest pipeline', () => {
@@ -893,6 +896,51 @@ test('GLTFCharacterMesh: native sit and stair clips drive chairs and mezzanine s
     assert.equal(internal.currentClipName, spec.down, `${spec.id} must use the native downstairs clip`);
     actor.dispose();
   }
+});
+
+test('GLTFCharacterMesh: native sit pose lands hips on the chair seat (both rigs)', async () => {
+  for (const [url, id] of [['/assets/models/male.glb', 'kaito'], ['/assets/models/female.glb', 'mika']] as const) {
+    const actor = new GLTFCharacterMesh(url, id, '', null, 0, false);
+    const deadline = Date.now() + 4000;
+    while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+
+    const seat = new THREE.Vector3(84, 4.78, -100);
+    const yaw = 0.8;
+    actor.root.position.copy(actor.sitRootPosition({ pos: seat, yaw }));
+    actor.root.rotation.y = yaw;
+    actor.setSitting(true);
+    for (let i = 0; i < 180; i++) actor.updateAnimation(1 / 60, 'IDLE');
+
+    const inst = (actor as unknown as { instance: { group: THREE.Group; bones: Map<string, THREE.Bone> } }).instance;
+    actor.root.updateMatrixWorld(true);
+    const hips = inst.bones.get('hips');
+    assert.ok(hips);
+    const p = hips.getWorldPosition(new THREE.Vector3());
+    assert.ok(Math.abs(p.y - seat.y) < 0.08, `${id} hips must rest on seat height, got y=${p.y.toFixed(3)}`);
+    assert.ok(Math.hypot(p.x - seat.x, p.z - seat.z) < 0.12, `${id} hips must land over the seat center`);
+    actor.dispose();
+  }
+});
+
+test('GLTFCharacterMesh: female stair clips do not slide or float after root-motion cleanup', async () => {
+  const actor = new GLTFCharacterMesh('/assets/models/female.glb', 'mika', '', null, 0, false);
+  const deadline = Date.now() + 4000;
+  while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  actor.setStairs(true, 'up');
+  actor.updateAnimation(0.02, 'WALK');
+
+  const inst = (actor as unknown as { instance: { group: THREE.Group; bones: Map<string, THREE.Bone> } }).instance;
+  const hips = inst.bones.get('hips');
+  assert.ok(hips);
+  actor.root.updateMatrixWorld(true);
+  const start = hips.getWorldPosition(new THREE.Vector3());
+  for (let i = 0; i < 180; i++) actor.updateAnimation(1 / 60, 'WALK');
+  actor.root.updateMatrixWorld(true);
+  const end = hips.getWorldPosition(new THREE.Vector3());
+
+  assert.ok(Math.hypot(end.x - start.x, end.z - start.z) < 0.12, 'stair clip must not slide the hips horizontally');
+  assert.ok(Math.abs(end.y - start.y) < 0.15, 'stair clip must not float the hips vertically');
+  actor.dispose();
 });
 
 test('GLTFCharacterMesh: KO topples the body forward, not backward', async () => {

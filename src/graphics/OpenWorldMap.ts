@@ -582,8 +582,10 @@ export class OpenWorldMap {
       dummy.updateMatrix();
       backMesh.setMatrixAt(i, dummy.matrix);
 
+      // Anchor is the seat surface (hip target), not the character root. The
+      // rig-specific root offset is applied in GLTFCharacterMesh.sitRootPosition.
       this.sitSpots.push({
-        pos: new THREE.Vector3(c.x + backOffset.x * -0.35, c.y + 0.56, c.z + backOffset.z * -0.35),
+        pos: new THREE.Vector3(c.x, c.y + 0.58, c.z),
         yaw: c.yaw,
         label: c.y > 1 ? 'MEZZANINE SEAT' : 'RESTAURANT SEAT'
       });

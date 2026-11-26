@@ -18,6 +18,42 @@ import {
 } from './GLTFCharacterCache';
 
 /**
+ * Native female stair clips animate the hips bone across ~0.45 source units.
+ * Controller already drives the ramp, so freeze that root motion once per
+ * template and keep only the leg/arm rotations. Clips are cached per template,
+ * not per character, so all mobile instances share the same sanitized tracks.
+ */
+const STAIR_ROOT_CLIPS = new Set(['walk_stairway_root', 'walk_stairway_down_root']);
+const sanitizedClips = new WeakMap<CharacterTemplate, Map<string, THREE.AnimationClip>>();
+
+function clipWithoutRootMotion(template: CharacterTemplate, clip: THREE.AnimationClip): THREE.AnimationClip {
+  if (!STAIR_ROOT_CLIPS.has(clip.name)) return clip;
+  let cache = sanitizedClips.get(template);
+  if (!cache) {
+    cache = new Map();
+    sanitizedClips.set(template, cache);
+  }
+  const cached = cache.get(clip.name);
+  if (cached) return cached;
+
+  const frozen = clip.clone();
+  frozen.tracks = frozen.tracks.map((track) => {
+    const bone = track.name.split('.')[0];
+    if (!track.name.endsWith('.position') || !/hips/i.test(bone)) return track;
+    const values = track.values.slice();
+    const [x, y, z] = [values[0], values[1], values[2]];
+    for (let i = 0; i < values.length; i += 3) {
+      values[i] = x;
+      values[i + 1] = y;
+      values[i + 2] = z;
+    }
+    return new THREE.VectorKeyframeTrack(track.name, track.times.slice(), values);
+  });
+  cache.set(clip.name, frozen);
+  return frozen;
+}
+
+/**
  * Rigged GLB character with the same public surface as HumanCharacterMesh.
  *
  * Geometry, textures and animation clips are loaded once per model and shared
@@ -74,6 +110,16 @@ export class GLTFCharacterMesh {
   private static readonly STAIR_CLIPS: Record<CharacterModelId, { up: string; down: string }> = {
     male: { up: 'Rig|walk', down: 'Rig|walk' },
     female: { up: 'walk_stairway_root', down: 'walk_stairway_down_root' }
+  };
+
+  /**
+   * World-scaled hips offset measured in each rig's native sitting idle clip.
+   * The chair anchor is the hip target, so the root must be placed behind/below
+   * it by this amount or the character visibly floats above the seat.
+   */
+  private static readonly SIT_HIPS_OFFSET: Record<CharacterModelId, { y: number; z: number }> = {
+    male: { y: 0.586, z: 0.204 },
+    female: { y: 0.498, z: 0.290 }
   };
 
   constructor(
@@ -142,7 +188,7 @@ export class GLTFCharacterMesh {
     this.root.add(instance.group);
     for (const clip of template.animations) {
       if (!clip.tracks.length) continue;
-      this.actions.set(clip.name, instance.mixer!.clipAction(clip));
+      this.actions.set(clip.name, instance.mixer!.clipAction(clipWithoutRootMotion(template, clip)));
     }
     for (const bone of instance.bones.values()) {
       this.restQuats.set(bone, bone.quaternion.clone());
@@ -283,6 +329,16 @@ export class GLTFCharacterMesh {
 
   public get isSitting(): boolean {
     return this.sitPhase === 'enter' || this.sitPhase === 'idle';
+  }
+
+  /** Root position that lands the rig's hips exactly on a chair seat anchor. */
+  public sitRootPosition(spot: { pos: THREE.Vector3; yaw: number }): THREE.Vector3 {
+    const offset = GLTFCharacterMesh.SIT_HIPS_OFFSET[this.model];
+    return new THREE.Vector3(
+      spot.pos.x - Math.sin(spot.yaw) * offset.z,
+      spot.pos.y - offset.y,
+      spot.pos.z - Math.cos(spot.yaw) * offset.z
+    );
   }
 
   private startSitPhase(): void {

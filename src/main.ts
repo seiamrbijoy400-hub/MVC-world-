@@ -127,7 +127,7 @@ class GameApp {
   private activeCarName = 'Your Zenvo';
   private activePoliceLights: { a: THREE.Mesh; b: THREE.Mesh; active: boolean } | undefined;
   private lastGaragePrompt = false;
-  private sittingSpot: { pos: THREE.Vector3; yaw: number; label: string } | null = null;
+  private sittingSpot: { pos: THREE.Vector3; yaw: number; label: string; root: THREE.Vector3 } | null = null;
   private wasInteract = false;
   private fighterHitCooldown = 0;
   private assaultHeatCooldown = 0;
@@ -1536,6 +1536,12 @@ class GameApp {
     if (prompt) prompt.style.display = 'none';
   }
 
+  private sitRootFor(spot: { pos: THREE.Vector3; yaw: number }): THREE.Vector3 {
+    if (this.avatarMesh instanceof GLTFCharacterMesh) return this.avatarMesh.sitRootPosition(spot);
+    // Procedural fallback has no native sit pose; keep it close to the seat.
+    return spot.pos.clone().setY(spot.pos.y - 0.55);
+  }
+
   private nearbySitSpot(): { pos: THREE.Vector3; yaw: number; label: string } | null {
     let best: { pos: THREE.Vector3; yaw: number; label: string } | null = null;
     let bestDist = 1.9;
@@ -2087,8 +2093,9 @@ class GameApp {
           } else {
             const spot = this.nearbySitSpot();
             if (spot) {
-              this.sittingSpot = spot;
-              this.charCtrl.position.copy(spot.pos);
+              const root = this.sitRootFor(spot);
+              this.sittingSpot = { ...spot, root };
+              this.charCtrl.position.copy(root);
               this.charCtrl.yaw = spot.yaw;
               this.charCtrl.velocity.set(0, 0, 0);
               if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(true);
@@ -2106,7 +2113,7 @@ class GameApp {
           charInputs.jump = false;
           charInputs.punch = false;
           charInputs.interact = false;
-          this.charCtrl.position.copy(this.sittingSpot.pos);
+          this.charCtrl.position.copy(this.sittingSpot.root);
           this.charCtrl.yaw = this.sittingSpot.yaw;
           this.charCtrl.velocity.set(0, 0, 0);
         }
@@ -2114,9 +2121,10 @@ class GameApp {
         const wasGroundedBeforeStep = this.charCtrl.isGrounded;
         this.charCtrl.update(dt, charInputs, this.footCamYaw);
         if (seated && this.sittingSpot) {
-          this.charCtrl.position.copy(this.sittingSpot.pos);
+          this.charCtrl.position.copy(this.sittingSpot.root);
           this.charCtrl.yaw = this.sittingSpot.yaw;
           this.charCtrl.velocity.set(0, 0, 0);
+          this.charCtrl.isGrounded = true;
         }
 
         // Character vs every car hull (parked, civic, police, moving traffic, race bots, sprint rival)
@@ -2133,6 +2141,7 @@ class GameApp {
           ],
           (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad)
         );
+        if (seated && this.sittingSpot) this.charCtrl.position.copy(this.sittingSpot.root);
 
         this.avatarMesh.root.position.copy(this.charCtrl.position);
         this.avatarMesh.root.rotation.y = this.charCtrl.yaw;
