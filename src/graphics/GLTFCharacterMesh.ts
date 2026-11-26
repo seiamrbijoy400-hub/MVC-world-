@@ -113,6 +113,7 @@ export class GLTFCharacterMesh {
   private loadGeneration = 0;
   private sitPhase: 'enter' | 'idle' | 'exit' | null = null;
   private sitTimer = 0;
+  private sitDuration = 0;
   private sitAction: THREE.AnimationAction | null = null;
   private stairsActive = false;
   private stairDir: 'up' | 'down' = 'up';
@@ -501,6 +502,12 @@ export class GLTFCharacterMesh {
     return this.sitPhase === 'enter' || this.sitPhase === 'idle';
   }
 
+  /** 0..1 progress of the native stand-up clip, or null when not standing up. */
+  public get standUpProgress(): number | null {
+    if (this.sitPhase !== 'exit' || this.sitDuration <= 0) return null;
+    return THREE.MathUtils.clamp(1 - this.sitTimer / this.sitDuration, 0, 1);
+  }
+
   /** Root position that lands the rig's hips exactly on a chair seat anchor. */
   public sitRootPosition(spot: { pos: THREE.Vector3; yaw: number }): THREE.Vector3 {
     const offset = GLTFCharacterMesh.SIT_HIPS_OFFSET[this.model];
@@ -536,7 +543,8 @@ export class GLTFCharacterMesh {
     const window = !isIdle ? GLTFCharacterMesh.SIT_EXIT_WINDOW[clipName] : undefined;
     const start = window?.start ?? 0;
     const available = Math.max(0.2, (clip?.duration ?? 1.2) - start);
-    this.sitTimer = isIdle ? Infinity : Math.min(available, window?.maxDuration ?? available);
+    this.sitDuration = isIdle ? 0 : Math.min(available, window?.maxDuration ?? available);
+    this.sitTimer = this.sitDuration;
     action.reset();
     // Skip the dead lead-in of the male stand-up clip; the action plays from
     // the first keyed rise instead of holding the seated pose for 4 seconds.

@@ -1326,3 +1326,42 @@ test('GameApp: remote peer outfits are only recoloured when they actually change
   assert.match(helper, /a\.hairStyle === b\.hairStyle/);
   assert.match(helper, /a\.accessory === b\.accessory/);
 });
+
+test('GLTFCharacterMesh: standUpProgress rises smoothly so the chair exit can be animated', async () => {
+  const actor = new GLTFCharacterMesh('/assets/models/male.glb', 'kaito', '', null, 0, false);
+  const deadline = Date.now() + 4000;
+  while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(actor.isRealistic, true);
+  actor.setSitting(true);
+  for (let i = 0; i < 90; i++) actor.updateAnimation(1 / 60, 'IDLE');
+  actor.setSitting(false);
+
+  const progress: number[] = [];
+  while (actor.isSitting === false && progress.length < 150) {
+    const p = actor.standUpProgress;
+    if (p === null) break;
+    progress.push(p);
+    actor.updateAnimation(1 / 60, 'IDLE');
+  }
+  assert.ok(progress.length >= 40 && progress.length <= 100, `stand-up should take ~1s, got ${progress.length} frames`);
+  assert.ok(progress[0] < 0.1, 'stand-up must start near zero');
+  let maxStep = 0;
+  for (let i = 1; i < progress.length; i++) {
+    assert.ok(progress[i] >= progress[i - 1], 'progress must be monotonic');
+    maxStep = Math.max(maxStep, progress[i] - progress[i - 1]);
+  }
+  assert.ok(maxStep < 0.08, `no single frame may jump progress more than 8%, got ${(maxStep * 100).toFixed(1)}%`);
+  actor.dispose();
+});
+
+test('GameApp: standing up scoots out of the chair gradually instead of teleporting', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  const exit = main.slice(main.indexOf('private exitSeat('), main.indexOf('private sitRootFor('));
+  assert.match(exit, /this\.standScootTotal\.copy\(fwd\)\.multiplyScalar\(1\.1\)/);
+  assert.match(exit, /this\.standScootApplied = 0/);
+  assert.doesNotMatch(exit, /this\.charCtrl\.position\.addScaledVector\(fwd, 1\.1\)/, 'instant 1.1m teleport must be gone');
+  const loop = main.slice(main.indexOf('// Scoot out of the chair in step'), main.indexOf('const wasGroundedBeforeStep'));
+  assert.match(loop, /this\.avatarMesh\.standUpProgress/);
+  assert.match(loop, /Math\.pow\(1 - this\.standScootApplied, 3\)/, 'ease-out keeps the first frame slow');
+  assert.match(loop, /this\.charCtrl\.position\.addScaledVector\(this\.standScootTotal, easedAfter - easedBefore\)/);
+});

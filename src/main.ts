@@ -128,6 +128,9 @@ class GameApp {
   private activePoliceLights: { a: THREE.Mesh; b: THREE.Mesh; active: boolean } | undefined;
   private lastGaragePrompt = false;
   private sittingSpot: { pos: THREE.Vector3; yaw: number; label: string; root: THREE.Vector3 } | null = null;
+  // Smooth scoot out of the chair, driven by the avatar's stand-up clip progress.
+  private standScootTotal = new THREE.Vector3();
+  private standScootApplied = 1;
   private wasInteract = false;
   private fighterHitCooldown = 0;
   private policeHitCooldown = 0;
@@ -1582,8 +1585,14 @@ class GameApp {
     if (!this.sittingSpot) return;
     if (standUp) {
       const fwd = new THREE.Vector3(-Math.sin(this.charCtrl.yaw), 0, -Math.cos(this.charCtrl.yaw));
-      this.charCtrl.position.addScaledVector(fwd, 1.1);
+      // Don't teleport a seated character 1.1m forward in a single frame. The
+      // offset is applied gradually, in sync with the rig's stand-up clip.
+      this.standScootTotal.copy(fwd).multiplyScalar(1.1);
+      this.standScootApplied = 0;
       this.charCtrl.velocity.set(0, 0, 0);
+    } else {
+      this.standScootTotal.set(0, 0, 0);
+      this.standScootApplied = 1;
     }
     this.sittingSpot = null;
     if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(false);
@@ -2158,6 +2167,8 @@ class GameApp {
             if (spot) {
               const root = this.sitRootFor(spot);
               this.sittingSpot = { ...spot, root };
+              this.standScootTotal.set(0, 0, 0);
+              this.standScootApplied = 1;
               this.charCtrl.position.copy(root);
               this.charCtrl.yaw = spot.yaw;
               this.charCtrl.velocity.set(0, 0, 0);
@@ -2179,6 +2190,19 @@ class GameApp {
           this.charCtrl.position.copy(this.sittingSpot.root);
           this.charCtrl.yaw = this.sittingSpot.yaw;
           this.charCtrl.velocity.set(0, 0, 0);
+        }
+
+        // Scoot out of the chair in step with the native stand-up animation
+        // instead of jumping 1.1m in a single frame while still seated.
+        if (!seated && this.standScootApplied < 1 && this.standScootTotal.lengthSq() > 0) {
+          const clipProgress = this.avatarMesh instanceof GLTFCharacterMesh
+            ? this.avatarMesh.standUpProgress
+            : null;
+          const progress = clipProgress === null ? 1 : Math.max(this.standScootApplied, clipProgress);
+          const easedBefore = 1 - Math.pow(1 - this.standScootApplied, 3);
+          this.standScootApplied = Math.min(1, progress);
+          const easedAfter = 1 - Math.pow(1 - this.standScootApplied, 3);
+          this.charCtrl.position.addScaledVector(this.standScootTotal, easedAfter - easedBefore);
         }
 
         const wasGroundedBeforeStep = this.charCtrl.isGrounded;
