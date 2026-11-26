@@ -1198,3 +1198,101 @@ test('Gameplay: sparring fighters do not send the police, civilians still do', (
   // Civilians remain protected.
   assert.match(main, /onPedestrianKnockedOut[\s\S]{0,220}police\.addHeat\(1, 'ASSAULT ON CIVILIAN'/);
 });
+
+test('GLTFCharacterMesh: guard pose is allocation-free and does not rebuild bone subtrees', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'src/graphics/GLTFCharacterMesh.ts'), 'utf8');
+  const start = src.indexOf('private applyCombatPose(');
+  const end = src.indexOf('/** Play the rig\'s own sit/stand clips', start);
+  assert.ok(start > 0 && end > start, 'combat pose body must be present');
+  // Ignore comments when checking the executable body.
+  const pose = src.slice(start, end).split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n');
+  assert.doesNotMatch(pose, /new THREE\.(Quaternion|Vector3)/, 'per-frame combat pose must reuse scratch quats/axes');
+  assert.doesNotMatch(pose, /updateMatrixWorld\(/, 'per-bone subtree matrix rebuilds were redundant and expensive');
+  assert.match(pose, /getWorldQuaternion\(this\.poseGroupQ\)/, 'scratch group quaternion must be used');
+});
+
+test('GameApp: leaving a car relocates the character without healing or clearing hit state', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  const start = main.indexOf('if (this.inCar) {', main.indexOf('private toggleEnterExitCar'));
+  const end = main.indexOf('} else {', start);
+  const exit = main.slice(start, end);
+  assert.match(exit, /this\.charCtrl\.position\.copy\(exitPos\)/);
+  assert.match(exit, /this\.charCtrl\.velocity\.set\(0, 0, 0\)/);
+  assert.doesNotMatch(exit, /this\.charCtrl\.resetAt\(/, 'resetAt() on exit would restore HP and erase hit stun');
+});
+
+test('PoliceSystem: dispatched cruisers reuse shared beacon resources across spawns and disposal', () => {
+  const scene = new THREE.Scene();
+  const track = new TrackEnvironment(scene);
+  const map = new OpenWorldMap(scene);
+  const police = new PoliceSystem(scene, track, map);
+  const player = new THREE.Vector3(57, 0, -37);
+  police.addHeat(2, 'TEST CRIME', player);
+  for (let i = 0; i < 220; i++) police.update(1 / 60, player, true, null, false);
+  assert.equal(police.units.length, 2, 'two heat should dispatch two cruisers');
+
+  const [a, b] = police.units;
+  assert.equal(a.lightA.geometry, b.lightA.geometry, 'light geometry is shared between units');
+  assert.equal((a.lightA.geometry.userData as Record<string, unknown>).shared, true);
+  assert.equal(a.lightA.material === b.lightA.material, false, 'strobes stay independently toggleable');
+  let sharedStripe = 0;
+  a.mesh.root.traverse((obj) => {
+    const m = obj as THREE.Mesh;
+    if (m.material && (m.material as THREE.Material).userData?.shared) sharedStripe++;
+  });
+  assert.ok(sharedStripe >= 1, 'shared police stripe material is flagged for safe disposal');
+
+  police.clearHeat();
+  assert.equal(police.units.length, 0);
+  assert.equal(scene.children.some((c) => c === a.mesh.root || c === b.mesh.root), false);
+  assert.ok(a.lightA.geometry.getAttribute('position'), 'shared geometry survives a unit despawn');
+});
+
+test('OpenWorldMap: camera clamp scratch results are stable across repeated calls', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const focus = new THREE.Vector3(20, 1, 20);
+  const first = map.clampCameraToWorld(focus, new THREE.Vector3(24, 3, 26)).clone();
+  const second = map.clampCameraToWorld(focus, new THREE.Vector3(-40, 3, -40)).clone();
+  assert.ok(first.distanceTo(new THREE.Vector3(24, 3, 26)) < 0.01, 'unobstructed camera is unchanged');
+  assert.ok(second.x < first.x, 'different desired cameras must not alias the shared scratch result');
+  assert.ok(Number.isFinite(second.y) && Number.isFinite(second.z));
+});
+
+test('GameApp: camera updates reuse scratch vectors and skip redundant projection rebuilds', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  const start = main.indexOf('private updateCamera(');
+  const camera = main.slice(start, main.indexOf('\n}\n\nwindow.addEventListener', start));
+  assert.doesNotMatch(camera, /new THREE\.Vector3/, 'no per-frame vector allocation in the camera path');
+  assert.doesNotMatch(camera, /\.clone\(\)/, 'camera path must not clone vectors each frame');
+  assert.match(camera, /this\.setCameraFov\(/, 'projection matrix is only rebuilt on actual fov changes');
+  const helper = main.slice(main.indexOf('private setCameraFov('), main.indexOf('private updateCamera('));
+  assert.match(helper, /Math\.abs\(this\.camera\.fov - fov\) < 0\.01\) return/);
+});
+
+test('GLTFCharacterCache: outfit recolouring updates uniforms without recompiling shaders', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'src/graphics/GLTFCharacterCache.ts'), 'utf8');
+  const start = src.indexOf('export function applyCharacterAppearance');
+  const end = src.indexOf('/** Only per-instance materials', start);
+  assert.ok(start > 0 && end > start);
+  const body = src.slice(start, end).split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n');
+  assert.match(body, /std\.color\.copy\(base\)\.lerp\(target, 0\.42\)/);
+  assert.doesNotMatch(body, /needsUpdate/, 'material.needsUpdate would recompile the shader on every sync');
+});
+
+test('GLTFCharacterMesh: HP name tag redraws only on whole-percent changes', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'src/graphics/GLTFCharacterMesh.ts'), 'utf8');
+  const start = src.indexOf('public setNameAndHp(');
+  const body = src.slice(start, src.indexOf('private showSprite(', start));
+  assert.match(body, /const shownHp = Math\.round\(hp\)/);
+  assert.match(body, /shownHp === this\.lastDrawnHp\)\) return/);
+  assert.match(body, /this\.lastDrawnHp = shownHp/);
+});
+
+test('GameApp: remote peer outfits are only recoloured when they actually change', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  assert.match(main, /st\.appearance && !this\.sameAppearance\(peer\.charMesh\.getAppearance\(\), st\.appearance\)/);
+  const helper = main.slice(main.indexOf('private sameAppearance('), main.indexOf('private bindMultiplayerEvents('));
+  assert.match(helper, /a\.hairStyle === b\.hairStyle/);
+  assert.match(helper, /a\.accessory === b\.accessory/);
+});

@@ -1419,12 +1419,17 @@ export class OpenWorldMap {
     return true;
   }
 
+  private camClampOut = new THREE.Vector3();
+  private camClampDir = new THREE.Vector3();
+  private camClampSafe = new THREE.Vector3();
+
+  /** Returns a shared scratch vector — copy/consume the result immediately. */
   public clampCameraToWorld(focus: THREE.Vector3, desiredCam: THREE.Vector3, margin = 0.55): THREE.Vector3 {
-    const out = desiredCam.clone();
+    const out = this.camClampOut.copy(desiredCam);
     out.x = THREE.MathUtils.clamp(out.x, WORLD_BOUNDS.minX + margin, WORLD_BOUNDS.maxX - margin);
     out.z = THREE.MathUtils.clamp(out.z, WORLD_BOUNDS.minZ + margin, WORLD_BOUNDS.maxZ - margin);
 
-    const dir = out.clone().sub(focus);
+    const dir = this.camClampDir.copy(out).sub(focus);
     const totalLen = dir.length();
     if (totalLen < 0.1) return out;
     dir.divideScalar(totalLen);
@@ -1437,7 +1442,7 @@ export class OpenWorldMap {
       for (const b of this.colliders) {
         if (sy < b.height && sx > b.minX - margin && sx < b.maxX + margin && sz > b.minZ - margin && sz < b.maxZ + margin) {
           const safeDist = Math.max(1.2, ((step - 1) / 6) * totalLen);
-          return focus.clone().addScaledVector(dir, safeDist);
+          return this.camClampSafe.copy(focus).addScaledVector(dir, safeDist);
         }
       }
     }

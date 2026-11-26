@@ -8,16 +8,28 @@ Command executed after final edits:
 `pnpm run build` (`tsc && vite build`)
 - **Result:** Exit code `0`
 - **Modules:** `72 modules transformed`
-- **Bundle Output:** `dist/index.html` (`52.91 kB` / `12.24 kB` gzip), `dist/assets/index-sa94nyxn.js` (`1,045.74 kB` / `281.85 kB` gzip) in `1.10s`
+- **Bundle Output:** `dist/index.html` (`52.91 kB` / `12.24 kB` gzip), `dist/assets/index-BQyMm_vX.js` (`1,049.39 kB` / `282.99 kB` gzip) in `1.03s`
 - **Subpath hosting:** built `index.html` references `./assets/...`; a static server at `/game/` returned HTTP 200 for the built JS and `male.glb` (6,264,280 bytes) — verified 2026-11-26.
 - **TypeScript Errors:** `0`
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (33/33)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`33` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (41/41)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`41` pass, `0` fail, `0` skipped):
 
-### Sprint 9 regression coverage (added 2026-11-26)
+### Sprint 10 — performance & state repair (2026-11-26, current)
+| Issue | Status | Evidence |
+| :--- | :---: | :--- |
+| Procedural guard pose rebuilt bone subtrees and allocated ~20 quaternions/vectors per character per frame | **FIXED** | Headless 600-frame microbenchmark: guard overhead over neutral idle **202.1 µs/frame before → 14.2-48.2 µs/frame after** (3 runs, same rig/clip). Scratch quaternion/axis reuse; removed redundant `updateMatrixWorld(true)` per bone. Both rigs' guard/punch trajectory regressions still pass. |
+| Camera path allocated ~8-10 vectors/frame and rebuilt the projection matrix unconditionally | **FIXED** | Source guards in `tests/gameplay.test.ts`; `setCameraFov()` skips unchanged fov; `clampCameraToWorld()` now reuses three scratch vectors (31 colliders, ~13.4 µs/call measured). |
+| Remote peer outfit sync recoloured every 50 ms and set `material.needsUpdate`, forcing shader recompiles | **FIXED** | Appearance equality gate added; colour is a uniform update only. Source guards verify both. |
+| Fractional HP regeneration redrew and re-uploaded the 256x64 name canvas every frame | **FIXED** | Name tag now caches whole-percent HP. |
+| Police cruiser spawns allocated fresh beacon geometry and disposed a material shared by all units | **FIXED** | Runtime test: two dispatched units share geometry, keep independent strobe materials, and survive a unit despawn. |
+| Exiting a car restored full HP via `resetAt()` | **FIXED** | Exit path now only relocates/zeros velocity, preserving HP and hit state. |
+| Static scene baseline (headless, before GLB characters/vehicles are added) | **MEASURED** | `285` normal meshes + `24` instanced meshes, `131` unique materials, `276` unique geometries, `31` world colliders. Real GPU draw calls / FPS remain unmeasured (no WebGL context available). |
+| Reported issues re-verified | **MIXED** | Crime→witness→dispatch→arrest→escape pipeline passes end-to-end; dead fighters/pedestrians stop acting (KO animation only) and respawn after 24s/4s; police dispatch from player punch was removed for sanctioned sparring but remains for civilian assaults. Visual quality of procedural world assets is **NOT TESTED** on a real display. |
+
+## Sprint 9 regression coverage (added 2026-11-26)
 | Test Case | Outcome | What Was Verified |
 | :--- | :---: | :--- |
 | Pier-end collision | **PASS** | Car stops at `z≈294.5` and walker at `z≈295.5` instead of snapping ~30m back to the seawall; non-pier shoreline still blocks at `z≈268`. |

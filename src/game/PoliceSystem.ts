@@ -68,6 +68,10 @@ export class PoliceSystem {
   private scratch = new THREE.Vector3();
   private navScratch = new THREE.Vector3();
   private bodyMat: THREE.MeshStandardMaterial;
+  private barMat: THREE.MeshStandardMaterial;
+  private barGeo: THREE.BoxGeometry;
+  private lightGeo: THREE.BoxGeometry;
+  private stripeGeo: THREE.BoxGeometry;
 
   constructor(scene: THREE.Scene, track: TrackEnvironment, openWorld: OpenWorldMap) {
     this.scene = scene;
@@ -78,6 +82,15 @@ export class PoliceSystem {
       roughness: 0.55,
       metalness: 0.25
     });
+    this.barMat = new THREE.MeshStandardMaterial({ color: 0x0b1120, roughness: 0.5, metalness: 0.4 });
+    // Every dispatched cruiser used to allocate fresh geometries. Share the
+    // immutable shapes; CarMesh.dispose() honours userData.shared.
+    this.barGeo = new THREE.BoxGeometry(1.05, 0.075, 0.26);
+    this.lightGeo = new THREE.BoxGeometry(0.34, 0.11, 0.2);
+    this.stripeGeo = new THREE.BoxGeometry(1.9, 0.34, 1.1);
+    for (const res of [this.bodyMat, this.barMat, this.barGeo, this.lightGeo, this.stripeGeo]) {
+      res.userData.shared = true;
+    }
   }
 
   public get isActive(): boolean {
@@ -308,21 +321,19 @@ export class PoliceSystem {
     mesh.setHeadlights(true);
     this.scene.add(mesh.root);
 
-    const barBase = new THREE.Mesh(
-      new THREE.BoxGeometry(1.05, 0.075, 0.26),
-      new THREE.MeshStandardMaterial({ color: 0x0b1120, roughness: 0.5, metalness: 0.4 })
-    );
+    const barBase = new THREE.Mesh(this.barGeo, this.barMat);
     barBase.position.set(0, 1.0, 0.12);
     mesh.root.add(barBase);
 
-    const lightGeo = new THREE.BoxGeometry(0.34, 0.11, 0.2);
-    const lightA = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: 0xff2a3c }));
+    // Beacon materials stay per-unit: the player can steal a cruiser and
+    // toggle its strobes without changing every other unit's lights.
+    const lightA = new THREE.Mesh(this.lightGeo, new THREE.MeshBasicMaterial({ color: 0xff2a3c }));
     lightA.position.set(-0.24, 1.075, 0.12);
-    const lightB = new THREE.Mesh(lightGeo, new THREE.MeshBasicMaterial({ color: 0x2563eb }));
+    const lightB = new THREE.Mesh(this.lightGeo, new THREE.MeshBasicMaterial({ color: 0x2563eb }));
     lightB.position.set(0.24, 1.075, 0.12);
     mesh.root.add(lightA, lightB);
 
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.34, 1.1), this.bodyMat);
+    const stripe = new THREE.Mesh(this.stripeGeo, this.bodyMat);
     stripe.position.set(0, 0.56, 0.0);
     mesh.root.add(stripe);
 

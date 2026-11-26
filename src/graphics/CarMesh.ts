@@ -241,6 +241,10 @@ export class CarMesh {
       if (m.material) {
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         for (const mat of mats) {
+          // Police beacons and stripes deliberately share system-owned
+          // materials/geometries across cruisers; disposing them on one
+          // despawn would force every surviving unit to re-upload its shader.
+          if (mat.userData?.shared) continue;
           const anyMat = mat as THREE.MeshStandardMaterial;
           if (anyMat.map && !anyMat.map.userData?.shared) anyMat.map.dispose();
           mat.dispose();

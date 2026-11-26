@@ -83,6 +83,17 @@ export class GLTFCharacterMesh {
    * and down with the idle sway; this base keeps the guard readable.
    */
   private combatBaseQuats = new Map<THREE.Bone, THREE.Quaternion>();
+  // Scratch objects for the procedural combat pose. Guard stance runs for
+  // every on-foot character every frame; allocating quaternions and forcing
+  // subtree matrix updates there caused measurable GC/CPU spikes on mobile.
+  private poseGroupQ = new THREE.Quaternion();
+  private poseParentQ = new THREE.Quaternion();
+  private poseInvParentQ = new THREE.Quaternion();
+  private poseWorldQ = new THREE.Quaternion();
+  private poseLocalQ = new THREE.Quaternion();
+  private poseAxisX = new THREE.Vector3();
+  private poseAxisY = new THREE.Vector3();
+  private poseAxisZ = new THREE.Vector3();
 
   private loaded = false;
   private failed = false;
@@ -365,25 +376,27 @@ export class GLTFCharacterMesh {
       const b = bone(key);
       if (!b || Math.abs(angle) < 1e-4) return;
       const base = this.animatedQuats.has(b) ? b.quaternion : (this.restQuats.get(b) ?? b.quaternion);
-      b.quaternion.copy(base).multiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
+      this.poseLocalQ.setFromAxisAngle(axis, angle);
+      b.quaternion.copy(base).multiply(this.poseLocalQ);
       this.touchedBones.add(b);
     };
 
     if (state === 'KO') {
       const t = Math.min(1, this.poseTime / 0.6);
       const settle = 1 - (1 - t) * (1 - t);
-      rotateLocal('hips', new THREE.Vector3(1, 0, 0), (this.model === 'male' ? 1.35 : 1.45) * settle);
-      rotateLocal('head', new THREE.Vector3(1, 0, 0), 0.22 * settle);
+      const knockAxis = this.poseAxisX.set(1, 0, 0);
+      rotateLocal('hips', knockAxis, (this.model === 'male' ? 1.35 : 1.45) * settle);
+      rotateLocal('head', knockAxis, 0.22 * settle);
       instance.group.position.y = (this.model === 'male' ? -0.02 : -0.42) * settle;
       return;
     }
 
     // Character-space axes: +X = right, +Y = up, +Z = behind the fighter.
-    const groupQ = instance.group.getWorldQuaternion(new THREE.Quaternion());
-    const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(groupQ);
-    const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(groupQ);
-    const axisZ = new THREE.Vector3(0, 0, 1).applyQuaternion(groupQ);
-    const parentQ = new THREE.Quaternion();
+    const groupQ = instance.group.getWorldQuaternion(this.poseGroupQ);
+    const axisX = this.poseAxisX.set(1, 0, 0).applyQuaternion(groupQ);
+    const axisY = this.poseAxisY.set(0, 1, 0).applyQuaternion(groupQ);
+    const axisZ = this.poseAxisZ.set(0, 0, 1).applyQuaternion(groupQ);
+    const parentQ = this.poseParentQ;
     const rotateWorld = (key: string, axis: THREE.Vector3, angle: number): void => {
       const b = bone(key);
       if (!b || Math.abs(angle) < 1e-4) return;
@@ -394,10 +407,13 @@ export class GLTFCharacterMesh {
         this.touchedBones.add(b);
       }
       if (!b.parent) return;
+      // getWorldQuaternion() refreshes the parent chain on demand, so an
+      // explicit b.updateMatrixWorld(true) per bone was pure duplicated work.
       b.parent.getWorldQuaternion(parentQ);
-      const worldRot = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-      b.quaternion.premultiply(parentQ.clone().invert().multiply(worldRot).multiply(parentQ));
-      b.updateMatrixWorld(true);
+      this.poseInvParentQ.copy(parentQ).invert();
+      this.poseWorldQ.setFromAxisAngle(axis, angle);
+      this.poseLocalQ.copy(this.poseInvParentQ).multiply(this.poseWorldQ).multiply(parentQ);
+      b.quaternion.premultiply(this.poseLocalQ);
     };
 
     const smooth = (x: number): number => {
@@ -599,9 +615,13 @@ export class GLTFCharacterMesh {
       this.nameSprite.renderOrder = 20;
       this.root.add(this.nameSprite);
     }
-    if (!this.nameCtx || name === this.lastDrawnName && hp === this.lastDrawnHp) return;
+    // Health regenerates in fractional steps every frame. Redrawing and
+    // re-uploading the 256x64 name texture at 60 Hz was pure GPU waste; the
+    // tag only displays whole percent anyway.
+    const shownHp = Math.round(hp);
+    if (!this.nameCtx || (name === this.lastDrawnName && shownHp === this.lastDrawnHp)) return;
     this.lastDrawnName = name;
-    this.lastDrawnHp = hp;
+    this.lastDrawnHp = shownHp;
     const ctx = this.nameCtx;
     ctx.clearRect(0, 0, 256, 64);
     ctx.fillStyle = 'rgba(9,13,22,0.72)';
@@ -616,7 +636,7 @@ export class GLTFCharacterMesh {
     ctx.font = 'bold 21px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(name.slice(0, 14), 128, 30);
-    const pct = Math.max(0, Math.min(1, hp / 100));
+    const pct = Math.max(0, Math.min(1, shownHp / 100));
     ctx.fillStyle = 'rgba(255,255,255,0.22)';
     ctx.fillRect(38, 41, 180, 7);
     ctx.fillStyle = pct > 0.4 ? '#22c55e' : '#ef4444';

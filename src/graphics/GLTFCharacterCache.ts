@@ -233,8 +233,9 @@ export function applyCharacterAppearance(
     const target = parts
       .map((p) => partColor(p, app))
       .reduce((a, b) => (b.getHSL({ h: 0, s: 0, l: 0 }).s > a.getHSL({ h: 0, s: 0, l: 0 }).s ? b : a));
+    // Color is a uniform update. needsUpdate=true would recompile the shader
+    // on every appearance sync (20 Hz per remote peer) and stall the GPU.
     std.color.copy(base).lerp(target, 0.42);
-    std.needsUpdate = true;
   }
 }
 

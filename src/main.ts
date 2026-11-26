@@ -29,7 +29,7 @@ import {
   resolveMovingVehicleImpactOnCharacter
 } from './physics/CollisionResolver';
 import { PoliceSystem } from './game/PoliceSystem';
-import type { NetworkPlayerSync } from './network/LobbyProtocol';
+import type { NetworkPlayerSync, CharacterAppearance } from './network/LobbyProtocol';
 
 enum CameraView {
   CHASE = 'CHASE',
@@ -130,7 +130,6 @@ class GameApp {
   private sittingSpot: { pos: THREE.Vector3; yaw: number; label: string; root: THREE.Vector3 } | null = null;
   private wasInteract = false;
   private fighterHitCooldown = 0;
-  private assaultHeatCooldown = 0;
   private policeHitCooldown = 0;
   private footstepTimer = 0;
   private koReason: 'WASTED' | 'BUSTED' | null = null;
@@ -144,12 +143,23 @@ class GameApp {
   private cameraView: CameraView = CameraView.CHASE;
   private chaseCamPos = new THREE.Vector3(12, 3, 30);
   private chaseCamLook = new THREE.Vector3(14, 1, 22);
+  // Reused by updateCamera(): allocating 8-10 vectors per frame in the chase
+  // camera was a steady source of GC stutter on Android browsers.
+  private camScratchA = new THREE.Vector3();
+  private camScratchB = new THREE.Vector3();
+  private camScratchC = new THREE.Vector3();
+  private camScratchD = new THREE.Vector3();
+  private camScratchE = new THREE.Vector3();
   private orbitAngle = 0.55;
   private footCamYaw = 0.45;
   private cameraShake = 0;
   private syncAccumulator = 0;
   private boostCooldown = 0;
   private peerScratch = new THREE.Vector3();
+  // Per-frame HUD lookups are cached; getElementById walks the DOM each call.
+  private interactPromptEl = document.getElementById('interact-prompt');
+  private garagePromptEl = document.getElementById('garage-prompt');
+  private timerPillEl = document.getElementById('activity-timer-pill');
 
   private lastTime = performance.now();
   private isPaused = false;
@@ -717,6 +727,14 @@ class GameApp {
     }
   }
 
+  private sameAppearance(a: CharacterAppearance | null, b: CharacterAppearance): boolean {
+    return !!a
+      && a.hairStyle === b.hairStyle && a.hairColor === b.hairColor
+      && a.eyeColor === b.eyeColor && a.jacketColor === b.jacketColor
+      && a.accentColor === b.accentColor && a.pantsColor === b.pantsColor
+      && a.skinColor === b.skinColor && a.accessory === b.accessory;
+  }
+
   private bindMultiplayerEvents(): void {
     this.lobbyClient.onWorldState = (states) => {
       for (const [id, peer] of this.remotePeers.entries()) {
@@ -742,7 +760,9 @@ class GameApp {
           this.scene.add(charM.root);
           peer = { id, carMesh: carM, charMesh: charM, lastState: st };
           this.remotePeers.set(id, peer);
-        } else if (st.appearance) {
+        } else if (st.appearance && !this.sameAppearance(peer.charMesh.getAppearance(), st.appearance)) {
+          // World sync arrives ~20x/second; recolouring an unchanged outfit
+          // would traverse every skinned mesh and dirty its material each time.
           peer.charMesh.setAppearance(st.appearance);
         }
         peer.lastState = st;
@@ -939,7 +959,13 @@ class GameApp {
       this.parkActiveCar();
       const rgt = this.physics.getRightVector();
       const exitPos = this.physics.position.clone().addScaledVector(rgt, -1.9);
-      this.charCtrl.resetAt(exitPos, this.physics.rotation.y);
+      // Only relocate the character: resetAt() would also restore full HP and
+      // clear hit stun, letting players heal instantly by stepping out of a car.
+      this.charCtrl.position.copy(exitPos);
+      this.charCtrl.velocity.set(0, 0, 0);
+      this.charCtrl.yaw = this.physics.rotation.y;
+      this.charCtrl.isGrounded = true;
+      this.charCtrl.animState = 'IDLE';
       this.footCamYaw = this.physics.rotation.y;
       this.avatarMesh.root.visible = true;
       this.avatarMesh.root.position.copy(this.charCtrl.position);
@@ -1561,8 +1587,7 @@ class GameApp {
     }
     this.sittingSpot = null;
     if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(false);
-    const prompt = document.getElementById('interact-prompt');
-    if (prompt) prompt.style.display = 'none';
+    if (this.interactPromptEl) this.interactPromptEl.style.display = 'none';
   }
 
   private sitRootFor(spot: { pos: THREE.Vector3; yaw: number }): THREE.Vector3 {
@@ -1994,7 +2019,6 @@ class GameApp {
       );
 
       if (this.boostCooldown > 0) this.boostCooldown -= dt;
-      if (this.assaultHeatCooldown > 0) this.assaultHeatCooldown -= dt;
 
       if (this.gameState === GameState.COUNTDOWN) {
         this.countdownTimer -= dt;
@@ -2198,15 +2222,15 @@ class GameApp {
         this.avatarMesh.updateAnimation(dt, this.charCtrl.animState);
         this.avatarMesh.setNameAndHp(this.lobbyUI.config.playerName, this.charCtrl.hp);
 
-        const promptEl = document.getElementById('interact-prompt');
         const promptSpot = this.sittingSpot ?? this.nearbySitSpot();
         this.hud.setUseLabel(this.sittingSpot ? 'STAND' : (promptSpot ? 'SIT' : 'USE'));
-        if (promptEl) {
+        if (this.interactPromptEl) {
           if (promptSpot && !this.charCtrl.isDead) {
-            promptEl.textContent = this.sittingSpot ? 'E / USE — Stand up' : `E / USE — Sit (${promptSpot.label})`;
-            promptEl.style.display = 'block';
+            const label = this.sittingSpot ? 'E / USE — Stand up' : `E / USE — Sit (${promptSpot.label})`;
+            if (this.interactPromptEl.textContent !== label) this.interactPromptEl.textContent = label;
+            this.interactPromptEl.style.display = 'block';
           } else {
-            promptEl.style.display = 'none';
+            this.interactPromptEl.style.display = 'none';
           }
         }
 
@@ -2303,11 +2327,10 @@ class GameApp {
         && Math.hypot(activePos.x - 84, activePos.z - 15) < 12;
       if (nearDriftGarage !== this.lastGaragePrompt) {
         this.lastGaragePrompt = nearDriftGarage;
-        const gp = document.getElementById('garage-prompt');
-        if (gp) gp.style.display = nearDriftGarage ? 'flex' : 'none';
+        if (this.garagePromptEl) this.garagePromptEl.style.display = nearDriftGarage ? 'flex' : 'none';
       }
 
-      const timerPill = document.getElementById('activity-timer-pill');
+      const timerPill = this.timerPillEl;
       if (timerPill) {
         if (this.activities.activeCourier) {
           const ac = this.activities.activeCourier;
@@ -2556,6 +2579,13 @@ class GameApp {
     this.updateAdaptiveResolution(rawDt);
   }
 
+  /** Changing fov forces a projection-matrix rebuild; skip it when unchanged. */
+  private setCameraFov(fov: number): void {
+    if (Math.abs(this.camera.fov - fov) < 0.01) return;
+    this.camera.fov = fov;
+    this.camera.updateProjectionMatrix();
+  }
+
   private updateCamera(dt: number): void {
     if (this.cameraShake > 0) {
       this.cameraShake = Math.max(0, this.cameraShake - dt * 1.6);
@@ -2566,12 +2596,11 @@ class GameApp {
 
       // Dedicated Studio turntable showcase angle when Character Studio drawer is open
       if (this.studio.isOpen) {
-        this.camera.fov = 44;
-        this.camera.updateProjectionMatrix();
+        this.setCameraFov(44);
         const fwd = this.charCtrl.getForwardVector();
-        const rgt = new THREE.Vector3(-fwd.z, 0, fwd.x);
-        const focus = new THREE.Vector3(cPos.x + rgt.x * 0.55, cPos.y + 1.08, cPos.z + rgt.z * 0.55);
-        const camWanted = new THREE.Vector3(
+        const rgt = this.camScratchD.set(-fwd.z, 0, fwd.x);
+        const focus = this.camScratchA.set(cPos.x + rgt.x * 0.55, cPos.y + 1.08, cPos.z + rgt.z * 0.55);
+        const camWanted = this.camScratchB.set(
           cPos.x + fwd.x * 2.55 + rgt.x * 0.85,
           cPos.y + 1.38,
           cPos.z + fwd.z * 2.55 + rgt.z * 0.85
@@ -2583,12 +2612,11 @@ class GameApp {
         return;
       }
 
-      this.camera.fov = 62;
-      this.camera.updateProjectionMatrix();
+      this.setCameraFov(62);
 
       const dist = 4.4;
-      const focusPt = new THREE.Vector3(cPos.x, cPos.y + 1.35, cPos.z);
-      const rawCam = new THREE.Vector3(
+      const focusPt = this.camScratchA.set(cPos.x, cPos.y + 1.35, cPos.z);
+      const rawCam = this.camScratchB.set(
         cPos.x + Math.sin(this.footCamYaw) * dist,
         cPos.y + 2.15,
         cPos.z + Math.cos(this.footCamYaw) * dist
@@ -2612,23 +2640,22 @@ class GameApp {
     if (this.cameraView === CameraView.CHASE) {
       const speedKmh = this.physics.speedKmh;
       const targetFov = 62 + Math.min(20, (speedKmh / 280) * 20);
-      this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 7, dt);
-      this.camera.updateProjectionMatrix();
+      this.setCameraFov(THREE.MathUtils.damp(this.camera.fov, targetFov, 7, dt));
 
       const posAlpha = 1 - Math.exp(-10 * dt);
       const lookAlpha = 1 - Math.exp(-14 * dt);
 
       // Drift corner-peek: blend car forward with travel direction at speed so apex stays visible
-      const camDir = forward.clone();
+      const camDir = this.camScratchA.copy(forward);
       const speedMs = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
       if (speedMs > 7 && this.physics.forwardVelocity > 2) {
-        const velDir = new THREE.Vector3(this.physics.velocity.x, 0, this.physics.velocity.z).normalize();
+        const velDir = this.camScratchB.set(this.physics.velocity.x, 0, this.physics.velocity.z).normalize();
         camDir.lerp(velDir, 0.28).normalize();
       }
 
-      const wantedCam = carPos.clone().addScaledVector(camDir, -6.2).addScaledVector(up, 2.25);
+      const wantedCam = this.camScratchC.copy(carPos).addScaledVector(camDir, -6.2).addScaledVector(up, 2.25);
       const targetCamPos = this.openWorld.clampCameraToWorld(
-        carPos.clone().addScaledVector(up, 0.8), wantedCam
+        this.camScratchD.copy(carPos).addScaledVector(up, 0.8), wantedCam
       );
       this.chaseCamPos.lerp(targetCamPos, posAlpha);
       this.camera.position.copy(this.chaseCamPos);
@@ -2638,29 +2665,27 @@ class GameApp {
         this.camera.position.y += (Math.random() - 0.5) * this.cameraShake;
       }
 
-      const targetLook = carPos.clone().addScaledVector(camDir, 3.4).addScaledVector(up, 0.85);
+      const targetLook = this.camScratchE.copy(carPos).addScaledVector(camDir, 3.4).addScaledVector(up, 0.85);
       this.chaseCamLook.lerp(targetLook, lookAlpha);
       this.camera.lookAt(this.chaseCamLook);
     } else if (this.cameraView === CameraView.HOOD) {
-      this.camera.fov = 74;
-      this.camera.updateProjectionMatrix();
+      this.setCameraFov(74);
 
-      const hoodPos = carPos.clone().addScaledVector(forward, 0.65).addScaledVector(up, 1.05);
+      const hoodPos = this.camScratchC.copy(carPos).addScaledVector(forward, 0.65).addScaledVector(up, 1.05);
       this.camera.position.copy(hoodPos);
-      const hoodLook = carPos.clone().addScaledVector(forward, 35).addScaledVector(up, 0.9);
+      const hoodLook = this.camScratchE.copy(carPos).addScaledVector(forward, 35).addScaledVector(up, 0.9);
       this.camera.lookAt(hoodLook);
     } else if (this.cameraView === CameraView.ORBIT) {
-      this.camera.fov = 52;
-      this.camera.updateProjectionMatrix();
+      this.setCameraFov(52);
 
       this.orbitAngle += dt * 0.3;
       const dist = 7.0;
-      const wanted = new THREE.Vector3(
+      const wanted = this.camScratchC.set(
         carPos.x + Math.sin(this.orbitAngle) * dist,
         carPos.y + 2.1,
         carPos.z + Math.cos(this.orbitAngle) * dist
       );
-      const safe = this.openWorld.clampCameraToWorld(carPos.clone().addScaledVector(up, 0.8), wanted);
+      const safe = this.openWorld.clampCameraToWorld(this.camScratchD.copy(carPos).addScaledVector(up, 0.8), wanted);
       this.camera.position.copy(safe);
       this.camera.lookAt(carPos.x, carPos.y + 0.75, carPos.z);
     }
