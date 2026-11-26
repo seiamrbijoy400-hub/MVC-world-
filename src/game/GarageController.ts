@@ -52,6 +52,7 @@ export class GarageController {
     this.deps.clearAllInputs();
     this.refresh();
     this.modal.classList.add('open');
+    (document.getElementById('garage-close-btn') as HTMLElement | null)?.focus();
     this.deps.onPauseChange(true);
   }
 
@@ -156,9 +157,15 @@ export class GarageController {
       engDesc.textContent = engSt === 0 ? 'Stock V8 Output (+0% torque)' : `Twin-Supercharged Stage ${engSt} (+${engSt * 8}% torque)`;
     }
     if (engBtn) {
-      engBtn.textContent = engSt >= 3 ? 'MAXED' : `Upgrade ₡${ENGINE_COSTS[engSt].toLocaleString()}`;
-      engBtn.disabled = engSt >= 3 || save.data.credits < ENGINE_COSTS[engSt];
-      engBtn.style.opacity = engBtn.disabled ? '0.5' : '1';
+      const cost = ENGINE_COSTS[engSt];
+      const cantAfford = engSt < 3 && save.data.credits < cost;
+      engBtn.textContent = engSt >= 3 ? 'MAXED' : `Upgrade ₡${cost.toLocaleString()}`;
+      // Keep it clickable when funds are short so the "need credits" feedback
+      // still fires; only the truly maxed state is a real disabled state.
+      engBtn.disabled = engSt >= 3;
+      engBtn.classList.toggle('cant-afford', cantAfford);
+      engBtn.setAttribute('aria-disabled', String(engBtn.disabled));
+      engBtn.title = cantAfford ? `Need ₡${cost.toLocaleString()} credits` : '';
     }
 
     const nitSt = save.data.nitroStage;
@@ -170,27 +177,38 @@ export class GarageController {
       nitDesc.textContent = nitSt === 0 ? 'Standard N2O Bottle' : `High-Flow Stage ${nitSt} (+${nitSt * 6}% boost & faster regen)`;
     }
     if (nitBtn) {
-      nitBtn.textContent = nitSt >= 3 ? 'MAXED' : `Upgrade ₡${NITRO_COSTS[nitSt].toLocaleString()}`;
-      nitBtn.disabled = nitSt >= 3 || save.data.credits < NITRO_COSTS[nitSt];
-      nitBtn.style.opacity = nitBtn.disabled ? '0.5' : '1';
+      const cost = NITRO_COSTS[nitSt];
+      const cantAfford = nitSt < 3 && save.data.credits < cost;
+      nitBtn.textContent = nitSt >= 3 ? 'MAXED' : `Upgrade ₡${cost.toLocaleString()}`;
+      nitBtn.disabled = nitSt >= 3;
+      nitBtn.classList.toggle('cant-afford', cantAfford);
+      nitBtn.setAttribute('aria-disabled', String(nitBtn.disabled));
+      nitBtn.title = cantAfford ? `Need ₡${cost.toLocaleString()} credits` : '';
     }
 
     const heatBtn = document.getElementById('btn-garage-clear-heat') as HTMLButtonElement | null;
     if (heatBtn) {
       const heat = this.deps.getHeat();
-      heatBtn.disabled = heat <= 0 || save.data.credits < RESPRAY_COST;
-      heatBtn.style.opacity = heatBtn.disabled ? '0.45' : '1';
+      const cantAfford = heat > 0 && save.data.credits < RESPRAY_COST;
+      heatBtn.disabled = heat <= 0;
+      heatBtn.classList.toggle('cant-afford', cantAfford);
+      heatBtn.setAttribute('aria-disabled', String(heatBtn.disabled));
+      heatBtn.title = cantAfford ? `Need ₡${RESPRAY_COST} credits` : '';
       heatBtn.textContent = heat > 0 ? `Respray ₡${RESPRAY_COST}` : 'Clean';
     }
 
     const glowRow = document.getElementById('garage-underglow-row');
     if (glowRow) {
-      glowRow.innerHTML = '';
+      // Rebuilding this row destroys keyboard focus; restore it by key.
+      const focusedGlow = (document.activeElement as HTMLElement | null)?.dataset?.glow;
+      glowRow.replaceChildren();
       for (const item of UNDERGLOW_PALETTE) {
         const unlocked = save.data.unlockedUnderglows.includes(item.hex);
         const equipped = save.data.underglowColor === item.hex;
         const btn = document.createElement('button');
         btn.className = `option-btn${equipped ? ' selected' : ''}`;
+        btn.dataset.glow = item.hex;
+        btn.setAttribute('aria-pressed', String(equipped));
         btn.style.flex = '0 0 auto';
         btn.style.padding = '6px 10px';
         btn.style.fontSize = '11px';
@@ -215,6 +233,9 @@ export class GarageController {
           this.refresh();
         });
         glowRow.appendChild(btn);
+      }
+      if (focusedGlow) {
+        glowRow.querySelector<HTMLElement>(`[data-glow="${CSS.escape(focusedGlow)}"]`)?.focus();
       }
     }
 

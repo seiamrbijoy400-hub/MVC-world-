@@ -53,6 +53,10 @@ export class LobbyUI {
   public onColorPreview: (color: string) => void = () => {};
   public onGearboxChange: (gb: GearboxType) => void = () => {};
   public onLaunchSession: (config: LobbyConfig) => void = () => {};
+  /** Lets the host pause gameplay and block hotkeys while the lobby is open. */
+  public onVisibilityChange: (visible: boolean) => void = () => {};
+  /** In-app replacement for blocking native alert() dialogs. */
+  public onErrorToast: (message: string) => void = () => {};
 
   private hostIpText: HTMLElement;
   private apkBtn: HTMLButtonElement;
@@ -134,6 +138,8 @@ export class LobbyUI {
 
   public setVisible(visible: boolean): void {
     this.overlay.classList.toggle('hidden', !visible);
+    if (visible) this.overlay.querySelector<HTMLElement>('button, input')?.focus();
+    this.onVisibilityChange(visible);
   }
 
   private checkUrlRoomParam(): void {
@@ -161,7 +167,11 @@ export class LobbyUI {
       card.addEventListener('click', () => {
         const charId = card.getAttribute('data-char') as CharacterId;
         this.config.characterId = charId;
-        document.querySelectorAll('.char-card').forEach(c => c.classList.toggle('selected', c === card));
+        document.querySelectorAll('.char-card').forEach(c => {
+          const selected = c === card;
+          c.classList.toggle('selected', selected);
+          c.setAttribute('aria-pressed', String(selected));
+        });
         this.onCharacterPreview(charId);
         if (this.client.currentRoom) {
           this.client.updatePlayer({ characterId: charId });
@@ -175,7 +185,9 @@ export class LobbyUI {
         const color = sw.getAttribute('data-color')!;
         this.config.carColor = color;
         document.querySelectorAll('.color-swatch').forEach(s => {
-          s.classList.toggle('selected', s.getAttribute('data-color') === color);
+          const selected = s.getAttribute('data-color') === color;
+          s.classList.toggle('selected', selected);
+          s.setAttribute('aria-pressed', String(selected));
         });
         this.onColorPreview(color);
         if (this.client.currentRoom) {
@@ -364,31 +376,42 @@ export class LobbyUI {
     };
 
     this.client.onError = (msg) => {
-      alert(msg);
+      this.onErrorToast(msg);
     };
   }
 
   private renderRoomList(rooms: RoomSummary[]): void {
+    // Room names/codes arrive over LAN: build text nodes, never parse HTML.
+    this.roomListBox.replaceChildren();
     if (rooms.length === 0) {
-      this.roomListBox.innerHTML = `<div style="font-size:11px;color:#64748b;text-align:center;padding:8px;">No active hotspot rooms yet. Tap "Host Hotspot Room" to create one!</div>`;
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:11px;color:#94a3b8;text-align:center;padding:8px;';
+      empty.textContent = 'No active hotspot rooms yet. Tap "Host Hotspot Room" to create one!';
+      this.roomListBox.appendChild(empty);
       return;
     }
 
-    this.roomListBox.innerHTML = '';
     for (const r of rooms) {
       const item = document.createElement('div');
       item.className = 'room-item';
-      item.innerHTML = `
-        <div>
-          <div style="font-weight:800;color:#f8fafc;">${r.name} <span style="color:#ff5500;">#${r.code}</span></div>
-          <div style="font-size:10px;color:#94a3b8;">${r.mode.replace('_', ' ')} • ${r.playerCount} Players, ${r.botCount} Bots</div>
-        </div>
-      `;
+      const info = document.createElement('div');
+      const name = document.createElement('div');
+      name.style.cssText = 'font-weight:800;color:#f8fafc;';
+      name.append(document.createTextNode(`${r.name} `));
+      const code = document.createElement('span');
+      code.style.color = '#ff5500';
+      code.textContent = `#${r.code}`;
+      name.appendChild(code);
+      const meta = document.createElement('div');
+      meta.style.cssText = 'font-size:11px;color:#cbd5e1;';
+      meta.textContent = `${r.mode.replace('_', ' ')} • ${r.playerCount} Players, ${r.botCount} Bots`;
+      info.append(name, meta);
+
       const joinBtn = document.createElement('button');
       joinBtn.className = 'room-join-btn';
       joinBtn.textContent = 'JOIN';
       joinBtn.addEventListener('click', () => this.joinByCode(r.code));
-      item.appendChild(joinBtn);
+      item.append(info, joinBtn);
       this.roomListBox.appendChild(item);
     }
   }
@@ -415,31 +438,48 @@ export class LobbyUI {
     for (const p of room.players) {
       const row = document.createElement('div');
       row.className = `roster-slot${p.isBot ? ' bot' : ''}${p.id === this.client.clientId ? ' me' : ''}`;
-      const statusBadge = p.isHost
-        ? `<span class="badge-tag" style="background:rgba(255,85,0,0.3);color:#fdba74;">HOST</span>`
-        : p.isBot
-          ? `<span class="badge-tag badge-bot">BOT • ${p.botDifficulty || 'PRO'}</span>`
-          : `<span class="badge-tag ${p.ready ? 'badge-ready' : ''}">${p.ready ? 'READY' : 'WAITING'}</span>`;
 
-      row.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="width:12px;height:12px;border-radius:3px;background:${p.carColor};display:inline-block;"></span>
-          <span style="font-weight:800;">${p.name}</span>
-          <span style="font-size:10px;color:#94a3b8;text-transform:uppercase;">${p.characterId}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          ${statusBadge}
-        </div>
-      `;
+      const identity = document.createElement('div');
+      identity.style.cssText = 'display:flex;align-items:center;gap:8px;';
+      const swatch = document.createElement('span');
+      swatch.style.cssText = 'width:12px;height:12px;border-radius:3px;display:inline-block;';
+      // Peer-supplied colour must be a plain hex value, never injected CSS.
+      swatch.style.background = /^#[0-9a-f]{3,8}$/i.test(p.carColor) ? p.carColor : '#64748b';
+      const name = document.createElement('span');
+      name.style.fontWeight = '800';
+      name.textContent = p.name;
+      const character = document.createElement('span');
+      character.style.cssText = 'font-size:11px;color:#cbd5e1;text-transform:uppercase;';
+      character.textContent = p.characterId;
+      identity.append(swatch, name, character);
+
+      const status = document.createElement('div');
+      status.style.cssText = 'display:flex;align-items:center;gap:6px;';
+      const badge = document.createElement('span');
+      if (p.isHost) {
+        badge.className = 'badge-tag';
+        badge.style.cssText = 'background:rgba(255,85,0,0.3);color:#fdba74;';
+        badge.textContent = 'HOST';
+      } else if (p.isBot) {
+        badge.className = 'badge-tag badge-bot';
+        badge.textContent = `BOT • ${p.botDifficulty || 'PRO'}`;
+      } else {
+        badge.className = `badge-tag${p.ready ? ' badge-ready' : ''}`;
+        badge.textContent = p.ready ? 'READY' : 'WAITING';
+      }
+      status.appendChild(badge);
 
       if (isHost && p.isBot) {
         const rmBtn = document.createElement('button');
+        rmBtn.className = 'roster-remove-btn';
+        rmBtn.type = 'button';
+        rmBtn.setAttribute('aria-label', `Remove bot ${p.name}`);
         rmBtn.textContent = '×';
-        rmBtn.style.cssText = 'background:#7f1d1d;color:#fff;border:none;border-radius:4px;width:20px;height:20px;cursor:pointer;font-weight:900;';
         rmBtn.addEventListener('click', () => this.client.removeBot(p.id));
-        row.lastElementChild!.appendChild(rmBtn);
+        status.appendChild(rmBtn);
       }
 
+      row.append(identity, status);
       this.rosterList.appendChild(row);
     }
 

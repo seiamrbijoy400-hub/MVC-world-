@@ -17,7 +17,8 @@ export class FloatingJoystick {
   private activePointerId: number | null = null;
   private centerX = 0;
   private centerY = 0;
-  private readonly maxRadius = 46;
+  // 66px zone half - 23px knob radius - 10px base drift = 33px safe throw.
+  private readonly maxRadius = 32;
 
   public value: JoystickOutput = { x: 0, y: 0, sprint: false, active: false };
 
@@ -99,5 +100,15 @@ export class FloatingJoystick {
     this.value.active = false;
     this.knobEl.style.transform = 'translate(0px, 0px)';
     this.baseEl.classList.remove('sprinting');
+  }
+
+  /** Pause/blur path: also drop the captured pointer so movement cannot resume. */
+  public forceReset(): void {
+    const pointerId = this.activePointerId;
+    this.activePointerId = null;
+    if (pointerId !== null && this.zoneEl.hasPointerCapture?.(pointerId)) {
+      this.zoneEl.releasePointerCapture(pointerId);
+    }
+    this.reset();
   }
 }

@@ -5,17 +5,48 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>APEX ZERO: Neon Velo — Open World Racing &amp; Action</title>
   <style>
+    :root {
+      --accent-primary: #ff5500;
+      --accent-selected: #38bdf8;
+      --accent-danger: #ef4444;
+      --surface-glass: rgba(9, 13, 22, 0.86);
+      --focus-ring: #7dd3fc;
+    }
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+    }
+    /* Only the game surfaces suppress selection. Room codes, times and
+       credits must remain copyable. */
+    #game-container, #hud-overlay, #mobile-controls, #foot-controls {
       user-select: none;
       -webkit-user-select: none;
       -webkit-touch-callout: none;
     }
-    input {
+    input, .selectable-text {
       user-select: text;
       -webkit-user-select: text;
+      -webkit-touch-callout: default;
+    }
+    :focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 2px;
+    }
+    @media (pointer: coarse) {
+      .emoji-btn, .modal-close, .option-btn, .color-swatch,
+      .lobby-utility-btn, .touch-btn, .char-card, .room-join-btn,
+      .primary-cta, .room-item button {
+        min-width: 44px;
+        min-height: 44px;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
     }
     body, html {
       width: 100%;
@@ -36,10 +67,11 @@
       display: flex;
       justify-content: flex-end;
       align-items: stretch;
-      padding: 14px;
+      padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
       pointer-events: none;
       background: linear-gradient(90deg, rgba(4,7,15,0.08) 0%, rgba(4,7,15,0.45) 45%, rgba(4,7,15,0.88) 100%);
     }
+    #lobby-overlay:not(.hidden) { pointer-events: auto; }
     #lobby-overlay.hidden { display: none; }
 
     .lobby-panel {
@@ -66,12 +98,23 @@
       border-bottom: 1px solid rgba(255,255,255,0.1);
       padding-bottom: 10px;
     }
+    .lobby-kicker {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: #fb923c;
+      margin-bottom: 2px;
+    }
     .brand-title {
       font-size: 22px;
       font-weight: 900;
       letter-spacing: 1px;
-      background: linear-gradient(90deg, #ff5500, #facc15);
+      color: #fb923c;
+      background: linear-gradient(90deg, var(--accent-primary), #facc15);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
     }
     .brand-sub {
@@ -128,6 +171,8 @@
       gap: 7px;
     }
     .char-card {
+      font: inherit;
+      color: inherit;
       background: rgba(30, 41, 59, 0.75);
       border: 2px solid rgba(255, 255, 255, 0.1);
       border-radius: 10px;
@@ -149,7 +194,7 @@
       border: 2px solid rgba(255,255,255,0.4);
     }
     .char-name { font-size: 11px; font-weight: 800; color: #f8fafc; }
-    .char-role { font-size: 9px; color: #94a3b8; }
+    .char-role { font-size: 11px; color: #cbd5e1; }
 
     .color-picker-row { display: flex; gap: 9px; align-items: center; }
     .color-swatch {
@@ -175,6 +220,8 @@
       cursor: pointer;
       text-align: center;
     }
+    /* Visible "can't afford" cue that stays clickable so the reason can be shown. */
+    .cant-afford { opacity: 0.62; border-style: dashed; }
     .option-btn.selected {
       background: #2563eb;
       border-color: #60a5fa;
@@ -282,6 +329,17 @@
     }
     .roster-slot.bot { border-left-color: #f59e0b; }
     .roster-slot.me { background: rgba(37, 99, 235, 0.25); }
+    .roster-remove-btn {
+      background: #7f1d1d;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      min-width: 44px;
+      min-height: 44px;
+      cursor: pointer;
+      font-weight: 900;
+      font-size: 16px;
+    }
     .badge-tag {
       font-size: 9px;
       font-weight: 800;
@@ -310,11 +368,11 @@
       #lobby-overlay {
         justify-content: center;
         align-items: flex-end;
-        padding: 8px;
+        padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
         background: linear-gradient(180deg, rgba(4,7,15,0) 0%, rgba(4,7,15,0.72) 45%, rgba(4,7,15,0.95) 100%);
       }
       .lobby-panel {
-        max-height: 76vh;
+        max-height: calc(76dvh - env(safe-area-inset-bottom));
         padding: 14px;
       }
     }
@@ -328,7 +386,9 @@
       flex-direction: column;
       justify-content: space-between;
       padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
-      z-index: 10;
+      /* Above touch controls (15) and world popups (18) so its child
+         notices/prompts/KO are no longer trapped in a lower stacking context. */
+      z-index: 30;
     }
     #hud-overlay.hidden { display: none; }
 
@@ -372,7 +432,7 @@
     .profile-card { display: flex; flex-direction: column; gap: 5px; min-width: 198px; }
     .profile-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .profile-rank { font-size: 12px; font-weight: 900; letter-spacing: 0.6px; color: #f8fafc; }
-    .profile-level { font-size: 9px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px; }
+    .profile-level { font-size: 11px; font-weight: 700; color: #cbd5e1; letter-spacing: 0.8px; }
     .xp-track { height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
     #hud-xp-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22d3ee, #facc15); transition: width 0.3s ease; }
     .profile-credits { font-size: 11px; font-weight: 900; color: #facc15; font-variant-numeric: tabular-nums; }
@@ -451,6 +511,70 @@
       text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
     }
 
+    /* Root toast portal. Sits above modals (100) and the lobby (90), so
+       feedback is never hidden behind the surface that triggered it. */
+    #toast-layer {
+      position: fixed;
+      top: max(12px, env(safe-area-inset-top));
+      right: max(12px, env(safe-area-inset-right));
+      width: min(340px, calc(100vw - 24px));
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 120;
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: none;
+      background: var(--surface-glass);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-left: 3px solid var(--accent-selected);
+      border-radius: 12px;
+      padding: 9px 12px;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+      animation: toast-in 0.18s ease-out;
+    }
+    .toast--collectible { border-left-color: #22d3ee; }
+    .toast--error { border-left-color: var(--accent-danger); }
+    .toast--hero { border-left-color: var(--accent-primary); }
+    .toast-title {
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .toast-title .toast-icon { font-size: 16px; color: #22d3ee; }
+    .toast-desc {
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #cbd5e1;
+      max-height: 3.2em;
+      overflow: hidden;
+    }
+    .toast-progress {
+      margin-top: 6px;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      overflow: hidden;
+    }
+    .toast-progress > i {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, #22d3ee, var(--accent-primary));
+    }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(18px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
     .bottom-hud {
       display: flex;
       justify-content: center;
@@ -487,7 +611,7 @@
       margin-bottom: 10px;
     }
     .bar-item { display: flex; flex-direction: column; gap: 2px; }
-    .bar-title { font-size: 8px; font-weight: 800; color: #94a3b8; }
+    .bar-title { font-size: 11px; font-weight: 800; color: #e2e8f0; }
     .bar-bg { height: 5px; background: rgba(255,255,255,0.14); border-radius: 3px; overflow: hidden; }
     .bar-fill { height: 100%; width: 0%; border-radius: 3px; }
     .bar-gas { background: #22c55e; }
@@ -560,6 +684,15 @@
     .touch-btn.gas.pressed { background: rgba(34, 197, 94, 0.9); }
     .touch-btn.fight { background: rgba(249, 115, 22, 0.55); border-color: #fb923c; width: 66px; height: 66px; font-size: 12px; }
     .touch-btn.fight.pressed { background: rgba(234, 88, 12, 0.95); }
+    .touch-btn--exit { width: 50px; height: 50px; font-size: 10px; background: rgba(255,85,0,0.65); border-color: #fb923c; }
+    .touch-btn--clutch { width: 52px; height: 52px; font-size: 10px; }
+    .touch-btn--shift { width: 46px; height: 46px; font-size: 11px; }
+    .touch-btn--drift { width: 54px; height: 54px; font-size: 10px; }
+    .touch-btn--sprint { width: 50px; height: 50px; font-size: 10px; background: rgba(15,23,42,0.78); border-color: rgba(148,163,184,0.45); }
+    .touch-btn--drive { width: 62px; height: 62px; font-size: 11px; background: rgba(34,197,94,0.75); border-color: #4ade80; }
+    .touch-btn--dash { width: 52px; height: 52px; font-size: 10px; background: rgba(168,85,247,0.72); border-color: #c084fc; }
+    .touch-btn--jump { width: 58px; height: 58px; font-size: 11px; }
+    .touch-btn--use { width: 62px; height: 58px; font-size: 10px; background: rgba(56,189,248,0.72); border-color: #38bdf8; }
     .left-controls, .right-controls { display: flex; gap: 10px; align-items: flex-end; }
     .joystick-zone {
       width: 132px;
@@ -602,8 +735,8 @@
     /* Emoji Bar & In-Game Chat — Top-Right safely clear of Minimap & Controls */
     .social-bar {
       position: absolute;
-      right: 16px;
-      top: 62px;
+      right: max(16px, env(safe-area-inset-right));
+      top: calc(62px + env(safe-area-inset-top));
       display: flex;
       flex-direction: column;
       align-items: flex-end;
@@ -611,10 +744,11 @@
       pointer-events: auto;
       z-index: 18;
     }
+    .social-bar.drawer-open .emoji-strip { display: none; }
     .more-drawer {
       position: absolute;
-      right: 16px;
-      top: 58px;
+      right: max(16px, env(safe-area-inset-right));
+      top: calc(58px + env(safe-area-inset-top));
       background: rgba(9, 13, 22, 0.92);
       backdrop-filter: blur(14px);
       border: 1px solid rgba(255,255,255,0.16);
@@ -769,7 +903,7 @@
       text-align: center;
       padding: 24px;
     }
-    #ko-overlay.open { opacity: 1; visibility: visible; }
+    #ko-overlay.open { opacity: 1; visibility: visible; pointer-events: auto; }
     #ko-title {
       font-size: clamp(42px, 11vw, 96px);
       font-weight: 900;
@@ -795,9 +929,21 @@
       .telemetry-bars { display: none; }
       #tachometer-canvas { width: 136px; height: 136px; }
       .minimap-container { width: 88px; height: 88px; }
-      .touch-btn { width: 56px; height: 56px; }
-      .touch-btn.gas { width: 64px; height: 64px; }
+      .steer-pad { width: clamp(112px, 40vw, 172px); }
+      .left-controls { max-width: 42vw; gap: 6px; }
+      .right-controls {
+        max-width: 56vw;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 6px;
+      }
+      .touch-btn { width: 52px; height: 52px; min-width: 44px; min-height: 44px; font-size: 10px; }
+      .touch-btn.gas { width: clamp(56px, 17vw, 72px); height: clamp(56px, 17vw, 72px); }
       .touch-btn.brake { width: 54px; height: 54px; }
+      .touch-btn--exit, .touch-btn--clutch, .touch-btn--shift,
+      .touch-btn--drift, .touch-btn--sprint, .touch-btn--dash { width: 48px; height: 48px; }
+      .touch-btn--use, .touch-btn--jump, .touch-btn--drive { width: 54px; height: 54px; }
+      #manual-touch-box { flex-direction: row !important; }
     }
     @media (max-height: 460px) {
       .profile-card { padding: 5px 10px; min-width: 162px; }
@@ -806,6 +952,7 @@
       #tachometer-canvas { width: 122px; height: 122px; }
       #race-prompt { top: 56px !important; padding: 6px 10px !important; }
       #rival-prompt { top: 106px !important; padding: 6px 10px !important; }
+      #courier-prompt { top: 162px !important; padding: 6px 10px !important; }
       #steal-prompt { bottom: 112px; }
     }
 
@@ -822,7 +969,7 @@
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.2s ease;
-      padding: 16px;
+      padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
     }
     .modal-backdrop.open { opacity: 1; pointer-events: auto; }
     .modal-box {
@@ -833,7 +980,7 @@
       max-width: 480px;
       padding: 20px;
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.85);
-      max-height: 90vh;
+      max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
       overflow-y: auto;
     }
     .modal-title { font-size: 18px; font-weight: 800; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
@@ -845,7 +992,7 @@
     .keys-table td.key-badge { font-family: monospace; color: #38bdf8; font-weight: 700; width: 130px; }
     .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
     .result-card { background: rgba(30, 41, 59, 0.75); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 10px 12px; }
-    .result-card span { display: block; font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 700; }
+    .result-card span { display: block; font-size: 11px; color: #cbd5e1; text-transform: uppercase; font-weight: 700; }
     .result-card strong { font-size: 18px; color: #f8fafc; font-variant-numeric: tabular-nums; }
   </style>
   <link rel="manifest" href="/manifest.webmanifest">
@@ -865,12 +1012,13 @@
     <div class="lobby-panel">
       <div class="lobby-header">
         <div>
+          <div class="lobby-kicker">// RACER PROFILE · NEON VELO NETWORK</div>
           <div class="brand-title">APEX ZERO: NEON VELO</div>
           <div class="brand-sub">Hotspot LAN &amp; Open World • Customize Driver</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <div id="lan-status-badge" class="lan-status-badge offline">CONNECTING...</div>
-          <button id="btn-close-lobby" class="modal-close" title="Back to Open World" style="font-size:26px;line-height:1;">&times;</button>
+          <button id="btn-close-lobby" class="modal-close" aria-label="Close lobby and return to open world" title="Back to Open World" style="font-size:26px;line-height:1;">&times;</button>
         </div>
       </div>
 
@@ -886,26 +1034,26 @@
         <div>
           <span class="section-label">Driver Character</span>
           <div class="char-grid">
-            <div class="char-card selected" data-char="kaito">
+            <button type="button" class="char-card selected" data-char="kaito" aria-label="Kaito, street racer" aria-pressed="true">
               <div class="char-dot" style="background:#ff5500;"></div>
               <div class="char-name">Kaito</div>
               <div class="char-role">Street Racer</div>
-            </div>
-            <div class="char-card" data-char="mika">
+            </button>
+            <button type="button" class="char-card" data-char="mika" aria-label="Mika, drift queen" aria-pressed="false">
               <div class="char-dot" style="background:#ec4899;"></div>
               <div class="char-name">Mika</div>
               <div class="char-role">Drift Queen</div>
-            </div>
-            <div class="char-card" data-char="ren">
+            </button>
+            <button type="button" class="char-card" data-char="ren" aria-label="Ren, cyber pilot" aria-pressed="false">
               <div class="char-dot" style="background:#38bdf8;"></div>
               <div class="char-name">Ren</div>
               <div class="char-role">Cyber Pilot</div>
-            </div>
-            <div class="char-card" data-char="sora">
+            </button>
+            <button type="button" class="char-card" data-char="sora" aria-label="Sora, stunt ace" aria-pressed="false">
               <div class="char-dot" style="background:#facc15;"></div>
               <div class="char-name">Sora</div>
               <div class="char-role">Stunt Ace</div>
-            </div>
+            </button>
           </div>
         </div>
 
@@ -1099,7 +1247,7 @@
       </div>
 
       <!-- Wasted / Busted -->
-      <div id="ko-overlay">
+      <div id="ko-overlay" role="alertdialog" aria-live="assertive" aria-labelledby="ko-title" aria-describedby="ko-desc">
         <h1 id="ko-title">WASTED</h1>
         <p id="ko-desc">Respawning at Metro General Hospital…</p>
       </div>
@@ -1161,7 +1309,7 @@
     </div>
 
     <!-- Street Courier Time-Trial Prompt -->
-    <div id="courier-prompt" class="glass-card" style="position:absolute;top:132px;left:50%;transform:translateX(-50%);display:none;pointer-events:auto;align-items:center;gap:12px;border:2px solid #f59e0b;z-index:25;">
+    <div id="courier-prompt" class="glass-card" style="position:absolute;top:188px;left:50%;transform:translateX(-50%);display:none;pointer-events:auto;align-items:center;gap:12px;border:2px solid #f59e0b;z-index:25;">
       <div>
         <div style="font-size:12px;font-weight:900;color:#fbbf24;">📦 <span id="courier-prompt-name">COURIER EXPRESS</span></div>
         <div id="courier-prompt-sub" style="font-size:10px;color:#cbd5e1;">Timed Delivery Contract</div>
@@ -1170,7 +1318,7 @@
     </div>
 
     <!-- Active Courier / Sprint Live Timer Pill -->
-    <div id="activity-timer-pill" class="glass-card" style="position:absolute;top:12px;left:50%;transform:translateX(-50%);display:none;padding:6px 14px;border:1.5px solid #f59e0b;font-size:12px;font-weight:900;color:#fde68a;z-index:22;pointer-events:none;white-space:nowrap;"></div>
+    <div id="activity-timer-pill" class="glass-card selectable-text" style="position:absolute;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:none;padding:6px 14px;border:1.5px solid #f59e0b;font-size:12px;font-weight:900;color:#fde68a;z-index:22;pointer-events:none;max-width:min(320px,72vw);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
 
     <!-- Animated Emoji Reactions & Live Chat -->
     <div class="social-bar">
@@ -1193,10 +1341,11 @@
 
     <div id="drift-pill" class="drift-pill">DRIFTING +0 PTS</div>
 
-    <div id="center-notice" class="center-notice">
+    <div id="center-notice" class="center-notice" role="status" aria-live="polite">
       <h1 id="notice-title">OPEN WORLD</h1>
       <p id="notice-desc">Explore City or Drive to Track!</p>
     </div>
+    <div id="toast-layer" aria-live="polite" aria-atomic="false"></div>
 
     <div id="bottom-hud-wrap" class="bottom-hud">
       <div class="gauges-container">
@@ -1219,14 +1368,14 @@
     </div>
 
     <div class="right-controls">
-      <button id="touch-exit" class="touch-btn" style="width:50px;height:50px;font-size:10px;background:rgba(255,85,0,0.65);border-color:#fb923c;">EXIT</button>
-      <button id="touch-clutch" class="touch-btn" style="display:none;width:52px;height:52px;font-size:10px;">CLUTCH</button>
-      <div id="manual-touch-box" style="display:none;flex-direction:column;gap:6px;">
-        <button id="touch-shift-up" class="touch-btn" style="width:46px;height:46px;font-size:11px;">▲</button>
-        <button id="touch-shift-down" class="touch-btn" style="width:46px;height:46px;font-size:11px;">▼</button>
+      <button id="touch-exit" class="touch-btn touch-btn--exit">EXIT</button>
+      <button id="touch-clutch" class="touch-btn touch-btn--clutch" style="display:none;">CLUTCH</button>
+      <div id="manual-touch-box" style="display:none;gap:6px;">
+        <button id="touch-shift-up" class="touch-btn touch-btn--shift">▲</button>
+        <button id="touch-shift-down" class="touch-btn touch-btn--shift">▼</button>
       </div>
       <button id="touch-nitro" class="touch-btn nitro">NITRO</button>
-      <button id="touch-handbrake" class="touch-btn" style="width:54px;height:54px;font-size:10px;">DRIFT</button>
+      <button id="touch-handbrake" class="touch-btn touch-btn--drift">DRIFT</button>
       <button id="touch-brake" class="touch-btn brake">BRAKE</button>
       <button id="touch-gas" class="touch-btn gas">GAS</button>
     </div>
@@ -1248,11 +1397,11 @@
   </div>
 
   <!-- Character Customization Studio (Live 3D Preview Side Drawer) -->
-  <div id="studio-modal" class="modal-backdrop">
+  <div id="studio-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
       <div class="modal-title">
         <span>🎨 Driver Style Studio</span>
-        <button id="studio-close-btn" class="modal-close">&times;</button>
+        <button id="studio-close-btn" class="modal-close" aria-label="Close character studio">&times;</button>
       </div>
       <div id="studio-body"></div>
       <div style="display:flex;gap:8px;margin-top:10px;">
@@ -1263,13 +1412,14 @@
   </div>
 
   <!-- Garage, Performance Tuning & Career Stats Modal -->
-  <div id="garage-modal" class="modal-backdrop">
+  <div id="garage-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
+      <div id="garage-status" class="brand-sub" role="status" aria-live="polite" style="min-height:16px;color:#fbbf24;"></div>
       <div class="modal-title">
         <span>🔧 Drift Garage &amp; Career</span>
         <div style="display:flex;align-items:center;gap:10px;">
           <span style="font-size:13px;font-weight:900;color:#4ade80;">₡ <span id="garage-credits">1,000</span></span>
-          <button id="garage-close-btn" class="modal-close">&times;</button>
+          <button id="garage-close-btn" class="modal-close" aria-label="Close garage">&times;</button>
         </div>
       </div>
 
@@ -1310,21 +1460,22 @@
   </div>
 
   <!-- Settings / Pause Modal -->
-  <div id="settings-modal" class="modal-backdrop">
+  <div id="settings-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
+      <div id="settings-status" class="brand-sub" role="status" aria-live="polite" style="min-height:16px;color:#fbbf24;"></div>
       <div class="modal-title">
         <span>Settings &amp; Controls</span>
-        <button id="modal-close-btn" class="modal-close">&times;</button>
+        <button id="modal-close-btn" class="modal-close" aria-label="Close settings">&times;</button>
       </div>
 
       <div class="setting-group">
         <label>Car Paint</label>
         <div class="color-picker-row">
-          <div class="color-swatch selected" data-color="#ff5500" style="background:#ff5500;"></div>
-          <div class="color-swatch" data-color="#dc2626" style="background:#dc2626;"></div>
-          <div class="color-swatch" data-color="#2563eb" style="background:#2563eb;"></div>
-          <div class="color-swatch" data-color="#18181b" style="background:#18181b;"></div>
-          <div class="color-swatch" data-color="#eab308" style="background:#eab308;"></div>
+          <button type="button" class="color-swatch selected" data-color="#ff5500" aria-label="Apex orange paint" aria-pressed="true" style="background:#ff5500;"></button>
+          <button type="button" class="color-swatch" data-color="#dc2626" aria-label="Red paint" aria-pressed="false" style="background:#dc2626;"></button>
+          <button type="button" class="color-swatch" data-color="#2563eb" aria-label="Blue paint" aria-pressed="false" style="background:#2563eb;"></button>
+          <button type="button" class="color-swatch" data-color="#18181b" aria-label="Black paint" aria-pressed="false" style="background:#18181b;"></button>
+          <button type="button" class="color-swatch" data-color="#eab308" aria-label="Gold paint" aria-pressed="false" style="background:#eab308;"></button>
         </div>
       </div>
 
@@ -1446,10 +1597,14 @@
   </div>
 
   <!-- Race Results Modal -->
-  <div id="results-modal" class="modal-backdrop">
+  <div id="results-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
-      <div class="brand-title">RACE COMPLETE!</div>
+      <div class="brand-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>RACE COMPLETE!</span>
+        <button id="results-close-btn" class="modal-close" aria-label="Close race results">&times;</button>
+      </div>
       <div class="brand-sub">Zenvo GP Lake Circuit Summary</div>
+      <div id="results-status" class="brand-sub" role="status" aria-live="polite" style="min-height:15px;color:#fbbf24;"></div>
 
       <div class="results-grid">
         <div class="result-card"><span>Total Time</span><strong id="res-total-time">--:--.--</strong></div>

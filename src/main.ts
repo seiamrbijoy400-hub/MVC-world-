@@ -171,6 +171,7 @@ class GameApp {
 
   private lastTime = performance.now();
   private isPaused = false;
+  private lobbyOpen = false;
 
   constructor() {
     const canvas = document.getElementById('render-canvas') as HTMLCanvasElement;
@@ -333,11 +334,7 @@ class GameApp {
       }
       // Character Studio is a modal showcase: freeze simulation and on-foot
       // input so the avatar cannot wander into traffic behind the drawer.
-      const settingsOpen = document.getElementById('settings-modal')?.classList.contains('open') ?? false;
-      this.isPaused = open || settingsOpen;
-      this.hud.setPaused(this.isPaused);
-      if (open) this.sound.pauseAudio();
-      else if (!settingsOpen) this.sound.resumeAudio();
+      this.syncPause();
     };
 
     this.particles = new ParticleSystem(this.scene);
@@ -442,7 +439,7 @@ class GameApp {
       },
       onShardCollected: (shard, found, total) => {
         this.sound.playDiscoveryChime();
-        this.hud.showNotification(`APEX LOG ${found}/${total}: ${shard.title}`, shard.lore, 3.6);
+        this.hud.showCollectible(found, total, shard.title);
         this.award(150, 120);
       },
       onNearRivalPrompt: (rival) => this.setRivalPrompt(rival),
@@ -538,6 +535,13 @@ class GameApp {
       this.hud.updateTouchVisibility(gb);
     };
     this.lobbyUI.onLaunchSession = (cfg) => this.applyLobbyLaunch(cfg);
+    this.lobbyUI.onErrorToast = (message) =>
+      this.hud.showNotification('LAN ERROR', message, 3.2, { kind: 'error' });
+    this.lobbyUI.onVisibilityChange = (visible) => {
+      this.lobbyOpen = visible;
+      if (visible) this.hud.clearAllInputs();
+      this.syncPause();
+    };
 
     this.lobbyUI.config.playerName = this.save.data.playerName;
     this.lobbyUI.config.characterId = this.save.data.characterId;
@@ -546,10 +550,14 @@ class GameApp {
     const savedNameInput = document.getElementById('input-player-name') as HTMLInputElement | null;
     if (savedNameInput) savedNameInput.value = this.save.data.playerName;
     document.querySelectorAll('.color-swatch').forEach((s) => {
-      s.classList.toggle('selected', s.getAttribute('data-color') === this.save.data.carColor);
+      const selected = s.getAttribute('data-color') === this.save.data.carColor;
+      s.classList.toggle('selected', selected);
+      s.setAttribute('aria-pressed', String(selected));
     });
     document.querySelectorAll('.char-card').forEach((c) => {
-      c.classList.toggle('selected', c.getAttribute('data-char') === this.save.data.characterId);
+      const selected = c.getAttribute('data-char') === this.save.data.characterId;
+      c.classList.toggle('selected', selected);
+      c.setAttribute('aria-pressed', String(selected));
     });
 
     this.spawnCityCruisers();
@@ -695,6 +703,7 @@ class GameApp {
     this.activities.cancelCourier();
     this.activities.resetTransientState();
     document.getElementById('results-modal')!.classList.remove('open');
+    this.syncPause();
 
     // Always put player inside their tuned Zenvo on the Starting Grid (keep any stolen ride parked cleanly)
     if (this.physics !== this.ownZenvo.physics) {
@@ -1685,8 +1694,12 @@ class GameApp {
     const btn = document.getElementById('btn-start-rival') as HTMLButtonElement | null;
     if (btn) {
       btn.disabled = !unlocked;
-      btn.style.opacity = unlocked ? '1' : '0.5';
+      btn.style.opacity = unlocked ? '1' : '0.62';
+      btn.setAttribute('aria-disabled', String(!unlocked));
+      btn.title = unlocked ? 'Start 1v1 sprint' : `Requires Legend Rank ${rival.minRank}`;
     }
+    // Portal triggers overlap: show only one prompt at a time (rival wins).
+    document.getElementById('courier-prompt')!.style.display = 'none';
     el.style.display = 'flex';
   }
 
@@ -1717,6 +1730,11 @@ class GameApp {
     const el = document.getElementById('courier-prompt');
     if (!el) return;
     if (!contract || !this.inCar || this.gameState !== GameState.OPEN_WORLD) {
+      el.style.display = 'none';
+      return;
+    }
+    // Both portals share the same spot; never stack two clickable cards.
+    if (document.getElementById('rival-prompt')?.style.display === 'flex') {
       el.style.display = 'none';
       return;
     }
@@ -1760,7 +1778,10 @@ class GameApp {
       .map((t, i) => `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);"><span>Lap ${i + 1}</span><strong>${this.lapManager.formatTime(t)}</strong></div>`)
       .join('');
 
-    document.getElementById('results-modal')!.classList.add('open');
+    const resultsModal = document.getElementById('results-modal')!;
+    resultsModal.classList.add('open');
+    (document.getElementById('results-close-btn') as HTMLElement | null)?.focus();
+    this.syncPause();
   }
 
   private setupUIHandlers(): void {
@@ -1813,31 +1834,37 @@ class GameApp {
     soundBtn.addEventListener('click', () => {
       const muted = this.sound.toggleMute();
       soundBtn.style.opacity = muted ? '0.45' : '1.0';
-      if (soundLabel) soundLabel.textContent = muted ? 'Muted' : 'Audio';
+      soundBtn.setAttribute('aria-pressed', String(!muted));
+      soundBtn.classList.toggle('is-off', muted);
+      if (soundLabel) soundLabel.textContent = muted ? '🔇 Muted' : '🔊 Audio';
     });
 
     document.getElementById('res-again-btn')!.addEventListener('click', () => {
       this.startTimedCircuitRace(3);
     });
-    document.getElementById('res-garage-btn')!.addEventListener('click', () => {
+    const closeResults = () => {
       document.getElementById('results-modal')!.classList.remove('open');
       this.gameState = GameState.OPEN_WORLD;
       this.physics.enforceTrackWalls = false;
       this.lapManager.resetRace(0);
+      this.syncPause();
+    };
+    document.getElementById('res-garage-btn')!.addEventListener('click', closeResults);
+    document.getElementById('results-close-btn')?.addEventListener('click', closeResults);
+    document.getElementById('results-modal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeResults();
     });
 
     const modal = document.getElementById('settings-modal')!;
     const openModal = () => {
-      this.hud.setPaused(true);
+      this.hud.clearAllInputs();
       modal.classList.add('open');
-      this.isPaused = true;
-      this.sound.pauseAudio();
+      (document.getElementById('modal-close-btn') as HTMLElement | null)?.focus();
+      this.syncPause();
     };
     const closeModal = () => {
       modal.classList.remove('open');
-      this.isPaused = false;
-      this.hud.setPaused(false);
-      this.sound.resumeAudio();
+      this.syncPause();
     };
 
     document.getElementById('btn-settings')!.addEventListener('click', openModal);
@@ -1850,12 +1877,38 @@ class GameApp {
 
     window.addEventListener('keydown', (e) => {
       if (this.hud.isTypingChat()) return;
-      if (e.code === 'Escape') {
-        if (modal.classList.contains('open')) closeModal();
+      const topModal = Array.from(document.querySelectorAll<HTMLElement>('.modal-backdrop.open')).pop();
+      if (e.key === 'Escape') {
+        // Escape always closes the topmost surface instead of stacking modals.
+        const closers: Record<string, () => void> = {
+          'results-modal': closeResults,
+          'garage-modal': () => this.garage.close(),
+          'settings-modal': closeModal
+        };
+        if (topModal) (closers[topModal.id] ?? (() => topModal.classList.remove('open')))();
+        else if (this.lobbyOpen) this.lobbyUI.setVisible(false);
         else openModal();
+        e.preventDefault();
         return;
       }
-      if (this.isPaused) return;
+      if (topModal && e.key === 'Tab') {
+        const focusables = Array.from(topModal.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])'
+        )).filter((el) => el.offsetParent !== null);
+        if (focusables.length) {
+          const first = focusables[0];
+          const last = focusables[focusables.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+        return;
+      }
+      if (this.isPaused || this.lobbyOpen) return;
       if (e.code === 'KeyV') cycleCam();
       if (e.code === 'KeyM') soundBtn.click();
       if (e.code === 'KeyY') this.startNearbyRival();
@@ -1870,16 +1923,17 @@ class GameApp {
       getHeat: () => this.police.heat,
       clearHeat: () => this.police.clearHeat(false),
       onRefreshProfile: () => this.refreshProfile(),
-      onNotify: (title, desc, dur) => this.hud.showNotification(title, desc, dur),
+      onNotify: (title, desc, dur) => {
+        // The garage backdrop paints above the HUD, so show feedback inside it.
+        const garageOpen = document.getElementById('garage-modal')?.classList.contains('open');
+        if (garageOpen) this.hud.showModalStatus('garage-status', `${title} — ${desc}`);
+        else this.hud.showNotification(title, desc, dur);
+      },
       onPlayBeep: (freq, dur) => this.sound.playBeep(freq, dur),
       onPlaySuccess: () => this.sound.playRankUpFanfare(),
       onPlayChime: () => this.sound.playDiscoveryChime(),
       onPlayDoor: () => this.sound.playCarDoor(),
-      onPauseChange: (paused) => {
-        this.isPaused = paused;
-        if (paused) this.sound.pauseAudio();
-        else this.sound.resumeAudio();
-      },
+      onPauseChange: () => this.syncPause(),
       clearAllInputs: () => this.hud.clearAllInputs()
     });
 
@@ -1924,7 +1978,7 @@ class GameApp {
         this.save.data.ghostReplayEnabled = on;
         this.save.scheduleSave();
         this.syncOptionSelection('.ghost-options .option-btn', 'data-ghost', on ? 'ON' : 'OFF');
-        this.hud.showNotification('BEST-LAP GHOST', on ? 'Ghost replay enabled' : 'Ghost replay disabled', 1.6);
+        this.hud.showModalStatus('settings-status', on ? 'BEST-LAP GHOST • enabled' : 'BEST-LAP GHOST • disabled');
       });
     });
 
@@ -1936,7 +1990,7 @@ class GameApp {
         this.save.data.musicEnabled = on;
         this.save.scheduleSave();
         this.syncOptionSelection('.music-options .option-btn', 'data-music', on ? 'ON' : 'OFF');
-        this.hud.showNotification('EUROBEAT', on ? 'Music channel on' : 'Music channel off', 1.4);
+        this.hud.showModalStatus('settings-status', on ? 'EUROBEAT • music on' : 'EUROBEAT • music off');
       });
     });
 
@@ -1962,7 +2016,7 @@ class GameApp {
         this.save.data.carArchetype = arch;
         this.save.scheduleSave();
         this.syncOptionSelection('.archetype-options .option-btn', 'data-arch', arch);
-        this.hud.showNotification(`SPEC: ${arch}`, 'Handling & suspension tuned', 1.5);
+        this.hud.showModalStatus('settings-status', `SPEC: ${arch} — handling & suspension tuned`);
       });
     });
 
@@ -1972,14 +2026,34 @@ class GameApp {
         this.save.data.graphicsQuality = q;
         this.save.scheduleSave();
         this.applyGraphicsQuality(q);
-        this.hud.showNotification(`GRAPHICS: ${q}`, q === 'LOW' ? 'Shadows off • Max mobile FPS' : 'Display quality updated', 1.6);
+        this.hud.showModalStatus('settings-status', `GRAPHICS: ${q} — ${q === 'LOW' ? 'shadows off, max mobile FPS' : 'display quality updated'}`);
       });
     });
   }
 
+  /** Single source of truth for pause: lobby, studio and every modal. */
+  private syncPause(): void {
+    const isOpen = (id: string) => document.getElementById(id)?.classList.contains('open') ?? false;
+    const lobbyVisible = !(document.getElementById('lobby-overlay')?.classList.contains('hidden') ?? true);
+    const paused =
+      this.lobbyOpen ||
+      lobbyVisible ||
+      isOpen('settings-modal') ||
+      isOpen('garage-modal') ||
+      isOpen('results-modal') ||
+      (this.studio?.isOpen ?? false) ||
+      (this.garage?.isOpen ?? false);
+    this.isPaused = paused;
+    this.hud.setPaused(paused);
+    if (paused) this.sound.pauseAudio();
+    else this.sound.resumeAudio();
+  }
+
   private syncOptionSelection(selector: string, attr: string, val: string): void {
     document.querySelectorAll(selector).forEach((el) => {
-      el.classList.toggle('selected', el.getAttribute(attr) === val);
+      const selected = el.getAttribute(attr) === val;
+      el.classList.toggle('selected', selected);
+      el.setAttribute('aria-pressed', String(selected));
     });
   }
 
@@ -2083,13 +2157,13 @@ class GameApp {
           this.lastCountdownStep = step;
           this.sound.playBeep(520, 0.14);
           this.track.setCountdownLights(4 - step + 2, false);
-          this.hud.showNotification(`${step}`, 'Rev your engine!', 0.9);
+          this.hud.showNotification(`${step}`, 'Rev your engine!', 0.9, { hero: true });
         }
         if (this.countdownTimer <= 0) {
           this.gameState = GameState.TIMED_RACE;
           this.track.setCountdownLights(5, true);
           this.sound.playBeep(1040, 0.32);
-          this.hud.showNotification('GO!', 'Race Started — Hit All Cyan Gates!', 1.4);
+          this.hud.showNotification('GO!', 'Race Started — Hit All Cyan Gates!', 1.4, { hero: true });
         }
       }
 

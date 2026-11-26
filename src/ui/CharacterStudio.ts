@@ -117,12 +117,18 @@ export class CharacterStudio {
   }
 
   private renderControls(): void {
+    // Preserve keyboard focus across the full re-render triggered by a pick.
+    const active = document.activeElement as HTMLElement | null;
+    const focusedKey = active?.getAttribute('data-studio-key');
+    const focusedVal = active?.getAttribute('data-studio-val');
+
     const swatchRow = (key: keyof CharacterAppearance, colors: string[]) => `
       <div class="color-picker-row" style="flex-wrap:wrap;">
         ${colors.map(c => `
-          <div class="color-swatch ${this.appearance[key] === c ? 'selected' : ''}"
+          <button type="button" class="color-swatch ${this.appearance[key] === c ? 'selected' : ''}"
                data-studio-key="${key}" data-studio-val="${c}"
-               style="background:${c};width:28px;height:28px;"></div>
+               aria-label="${key} ${c}" aria-pressed="${this.appearance[key] === c}"
+               style="background:${c};width:28px;height:28px;"></button>
         `).join('')}
       </div>
     `;
@@ -130,8 +136,9 @@ export class CharacterStudio {
     const chipRow = (key: keyof CharacterAppearance, items: { id: string; label: string }[]) => `
       <div class="options-row" style="flex-wrap:wrap;">
         ${items.map(it => `
-          <button class="option-btn ${this.appearance[key] === it.id ? 'selected' : ''}"
+          <button type="button" class="option-btn ${this.appearance[key] === it.id ? 'selected' : ''}"
                   data-studio-key="${key}" data-studio-val="${it.id}"
+                  aria-pressed="${this.appearance[key] === it.id}"
                   style="flex:0 0 auto;padding:6px 10px;">${it.label}</button>
         `).join('')}
       </div>
@@ -179,5 +186,10 @@ export class CharacterStudio {
         this.updateField(key, val as never);
       });
     });
+
+    if (focusedKey && focusedVal) {
+      const selector = `[data-studio-key="${CSS.escape(focusedKey)}"][data-studio-val="${CSS.escape(focusedVal)}"]`;
+      this.bodyEl.querySelector<HTMLElement>(selector)?.focus();
+    }
   }
 }

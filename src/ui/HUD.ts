@@ -76,6 +76,8 @@ export class HUD {
   private noticeTitle: HTMLElement;
   private noticeDesc: HTMLElement;
   private noticeTimer = 0;
+  private noticeExpiresAt = 0;
+  private toastLayer: HTMLElement | null = null;
 
   public inputs: CarInputs = {
     throttle: 0,
@@ -192,6 +194,7 @@ export class HUD {
     this.noticeEl = document.getElementById('center-notice')!;
     this.noticeTitle = document.getElementById('notice-title')!;
     this.noticeDesc = document.getElementById('notice-desc')!;
+    this.toastLayer = document.getElementById('toast-layer');
 
     this.isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
@@ -207,6 +210,12 @@ export class HUD {
     window.addEventListener('blur', () => this.clearAllInputs());
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) this.clearAllInputs();
+      // The main loop skips frames while hidden, so expire hero notices by
+      // wall clock on return instead of leaving a stale title on screen.
+      if (!document.hidden && this.noticeTimer > 0 && performance.now() >= this.noticeExpiresAt) {
+        this.noticeTimer = 0;
+        this.noticeEl.classList.remove('show');
+      }
     });
 
     this.setupKeyboardListeners();
@@ -237,7 +246,7 @@ export class HUD {
     this.keyShiftUp = false;
     this.keyShiftDown = false;
     this.keyReset = false;
-    this.joystick.reset();
+    this.joystick.forceReset();
     document.querySelectorAll('.touch-btn.pressed').forEach((el) => el.classList.remove('pressed'));
   }
 
@@ -256,7 +265,9 @@ export class HUD {
   }
 
   public isTypingChat(): boolean {
-    return document.activeElement === this.chatInput || document.activeElement?.tagName === 'INPUT';
+    // Only the in-game chat field should suppress driving. Lobby inputs are
+    // unrelated to gameplay and may stay focused after a panel is hidden.
+    return document.activeElement === this.chatInput;
   }
 
   public setVisible(visible: boolean, gearbox: GearboxType): void {
@@ -268,6 +279,8 @@ export class HUD {
       this.hudOverlay.classList.add('hidden');
       this.mobileControls.classList.add('hidden');
       this.footControls.classList.add('hidden');
+      // A focused hidden input would suppress driving inputs forever.
+      this.chatInput?.blur();
     }
   }
 
@@ -417,11 +430,86 @@ export class HUD {
     this.chatLog.scrollTop = this.chatLog.scrollHeight;
   }
 
-  public showNotification(title: string, desc: string, duration = 2.2): void {
-    this.noticeTitle.textContent = title;
-    this.noticeDesc.textContent = desc;
-    this.noticeEl.classList.add('show');
-    this.noticeTimer = duration;
+  /**
+   * Routine feedback goes to a compact root toast portal so it never looks
+   * like a login title and never overwrites another message. Race-critical
+   * announcements can still opt into the large centred hero notice.
+   */
+  public showNotification(
+    title: string,
+    desc: string,
+    duration = 2.2,
+    opts: { hero?: boolean; kind?: 'notice' | 'collectible' | 'error' } = {}
+  ): void {
+    if (opts.hero) {
+      this.noticeTitle.textContent = title;
+      this.noticeDesc.textContent = desc;
+      this.noticeEl.classList.add('show');
+      this.noticeTimer = duration;
+      this.noticeExpiresAt = performance.now() + duration * 1000;
+      return;
+    }
+    this.pushToast(title, desc, opts.kind ?? 'notice', duration);
+  }
+
+  /** Dedicated collectible toast: APEX LOG progress + lore at a glance. */
+  public showCollectible(found: number, total: number, lore: string): void {
+    const layer = this.toastLayer;
+    if (!layer) return;
+    const toast = this.createToast(`APEX LOG ${found}/${total}`, lore, 'collectible');
+    const icon = document.createElement('span');
+    icon.className = 'toast-icon';
+    icon.textContent = '◆';
+    const title = toast.querySelector('.toast-title');
+    title?.prepend(icon);
+    const progress = document.createElement('div');
+    progress.className = 'toast-progress';
+    const fill = document.createElement('i');
+    fill.style.width = `${Math.round((Math.max(0, found) / Math.max(1, total)) * 100)}%`;
+    progress.appendChild(fill);
+    toast.appendChild(progress);
+    this.mountToast(layer, toast, 3.6);
+  }
+
+  /** Modal-local status without blocking gameplay toasts. */
+  public showModalStatus(elementId: string, message: string): void {
+    const el = document.getElementById(elementId);
+    if (el) el.textContent = message;
+  }
+
+  private createToast(
+    title: string,
+    desc: string,
+    kind: 'notice' | 'collectible' | 'error'
+  ): HTMLElement {
+    const toast = document.createElement('div');
+    toast.className = `toast toast--${kind}`;
+    const titleEl = document.createElement('div');
+    titleEl.className = 'toast-title';
+    titleEl.textContent = title;
+    const descEl = document.createElement('div');
+    descEl.className = 'toast-desc';
+    descEl.textContent = desc;
+    toast.append(titleEl, descEl);
+    return toast;
+  }
+
+  private pushToast(
+    title: string,
+    desc: string,
+    kind: 'notice' | 'collectible' | 'error',
+    duration: number
+  ): void {
+    const layer = this.toastLayer;
+    if (!layer) return;
+    this.mountToast(layer, this.createToast(title, desc, kind), duration);
+  }
+
+  private mountToast(layer: HTMLElement, toast: HTMLElement, duration: number): void {
+    layer.appendChild(toast);
+    // Keep the stack readable: drop the oldest toast first.
+    while (layer.childElementCount > 4) layer.firstElementChild?.remove();
+    window.setTimeout(() => toast.remove(), Math.max(900, duration * 1000));
   }
 
   private setupSocialListeners(): void {
@@ -432,6 +520,10 @@ export class HUD {
     document.getElementById('btn-more')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this.moreDrawer.classList.toggle('open');
+      // Never let the emote strip stick out behind the drawer.
+      document.querySelector('.social-bar')?.classList.toggle(
+        'drawer-open', this.moreDrawer.classList.contains('open')
+      );
     });
     window.addEventListener('click', (e) => {
       if (!this.moreDrawer.contains(e.target as Node) && (e.target as HTMLElement)?.id !== 'btn-more') {
@@ -641,7 +733,8 @@ export class HUD {
 
     if (this.noticeTimer > 0) {
       this.noticeTimer -= dt;
-      if (this.noticeTimer <= 0) {
+      if (this.noticeTimer <= 0 || performance.now() >= this.noticeExpiresAt) {
+        this.noticeTimer = 0;
         this.noticeEl.classList.remove('show');
       }
     }
@@ -658,7 +751,12 @@ export class HUD {
     }
     this.bestTimeEl.textContent = stats.bestLapTime ? lapManager.formatTime(stats.bestLapTime) : '--:--.--';
 
-    if (!this.isOnFoot && stats.currentDriftPoints > 5) {
+    const promptVisible = ['race-prompt', 'rival-prompt', 'courier-prompt', 'steal-prompt']
+      .some((id) => {
+        const el = document.getElementById(id);
+        return !!el && el.style.display !== 'none';
+      });
+    if (!this.isOnFoot && stats.currentDriftPoints > 5 && !promptVisible) {
       this.driftPillEl.textContent = `DRIFTING +${Math.round(stats.currentDriftPoints)} PTS • ${Math.round(physics.driftAngle)}°`;
       this.driftPillEl.classList.add('active');
     } else {
