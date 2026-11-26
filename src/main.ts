@@ -854,22 +854,20 @@ class GameApp {
           this.sound.playCrash(28);
           this.particles.emitSparks(f.controller.position, killed ? 22 : 10);
           this.cameraShake = 0.16;
-          this.pedestrians.alertDanger(origin, 20);
 
           if (killed) {
             this.save.data.knockouts++;
             this.save.scheduleSave();
             this.award(120, 160);
-            this.police.addHeat(2, 'ASSAULT', origin);
+            // Sparring fighters attack the player first, so beating them is a
+            // sanctioned fight, not a street assault. No police heat and no
+            // witness report here (civilian pedestrians still report crimes).
             this.hud.showNotification(
               `${f.name.toUpperCase()} DOWN`,
-              'Knockout. The city noticed that. Expect police.',
+              'Sparring win. No heat — the fighters agreed to this.',
               2.6
             );
             this.sound.playRankUpFanfare();
-          } else if (this.assaultHeatCooldown <= 0) {
-            this.assaultHeatCooldown = 6;
-            this.pedestrians.notifyCrime(origin, 'STREET ASSAULT', 28);
           }
         }
       }
@@ -2112,6 +2110,7 @@ class GameApp {
         this.sound.updateTireSkid(maxSkid);
 
         this.avatarMesh.root.position.copy(this.physics.position);
+        if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setCombatStance(false);
         this.avatarMesh.updateAnimation(dt, 'IDLE');
       } else {
         // ON-FOOT CHARACTER
@@ -2123,10 +2122,14 @@ class GameApp {
         this.wasInteract = interactPressed;
         if (this.charCtrl.isDead && this.sittingSpot) this.exitSeat(false);
 
-        if (interactEdge && !this.charCtrl.isDead) {
+        if (!this.charCtrl.isDead) {
           if (this.sittingSpot) {
-            this.exitSeat(true);
-          } else {
+            // Standing up must not require hunting for the USE key: any real
+            // movement input, a jump, E/USE or F all get the player out of the
+            // chair. The touch button is relabelled STAND while seated.
+            const wantsMove = Math.hypot(charInputs.moveX, charInputs.moveY) > 0.45;
+            if (interactEdge || charInputs.jump || wantsMove) this.exitSeat(true);
+          } else if (interactEdge) {
             const spot = this.nearbySitSpot();
             if (spot) {
               const root = this.sitRootFor(spot);
@@ -2135,7 +2138,7 @@ class GameApp {
               this.charCtrl.yaw = spot.yaw;
               this.charCtrl.velocity.set(0, 0, 0);
               if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(true);
-              this.hud.showNotification('SEATED', `${spot.label} • E/USE to stand`, 1.4);
+              this.hud.showNotification('SEATED', `${spot.label} • Move / Jump / USE to stand`, 1.8);
             }
           }
         }
@@ -2186,12 +2189,18 @@ class GameApp {
           const onStairs = !seated && this.openWorld.isInInteriorStairs(this.charCtrl.position.x, this.charCtrl.position.z)
             && (this.charCtrl.animState === 'WALK' || this.charCtrl.animState === 'RUN');
           this.avatarMesh.setStairs(onStairs, stairFwdZ >= 0 ? 'up' : 'down');
+          // Raise the fists while a sparring opponent is in striking range.
+          const nearFighter = this.sparringFighters.some(
+            (f) => !f.isDead && f.controller.position.distanceTo(this.charCtrl.position) < 9
+          );
+          this.avatarMesh.setCombatStance(nearFighter && !seated);
         }
         this.avatarMesh.updateAnimation(dt, this.charCtrl.animState);
         this.avatarMesh.setNameAndHp(this.lobbyUI.config.playerName, this.charCtrl.hp);
 
         const promptEl = document.getElementById('interact-prompt');
         const promptSpot = this.sittingSpot ?? this.nearbySitSpot();
+        this.hud.setUseLabel(this.sittingSpot ? 'STAND' : (promptSpot ? 'SIT' : 'USE'));
         if (promptEl) {
           if (promptSpot && !this.charCtrl.isDead) {
             promptEl.textContent = this.sittingSpot ? 'E / USE — Stand up' : `E / USE — Sit (${promptSpot.label})`;

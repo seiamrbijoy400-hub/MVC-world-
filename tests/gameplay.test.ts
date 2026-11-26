@@ -1137,3 +1137,64 @@ test('GLTFCharacterCache: opaque female materials are not left in the transparen
     disposeCharacterInstance(instance);
   }
 });
+
+test('Character: guard and cross punch read as a real boxing exchange on both rigs', async () => {
+  for (const [url, id] of [['/assets/models/male.glb', 'kaito'], ['/assets/models/female.glb', 'mika']] as const) {
+    const actor = new GLTFCharacterMesh(url, id, '', null, 0, false);
+    const deadline = Date.now() + 4000;
+    while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    const inst = (actor as unknown as {
+      instance: { group: THREE.Group; bones: Map<string, THREE.Bone> };
+    }).instance;
+    const localHand = (): THREE.Vector3 => {
+      actor.root.updateMatrixWorld(true);
+      inst.group.updateMatrixWorld(true);
+      const p = inst.bones.get('handR')!.getWorldPosition(new THREE.Vector3());
+      return p.applyMatrix4(actor.root.matrixWorld.clone().invert());
+    };
+
+    actor.setCombatStance(true);
+    for (let i = 0; i < 24; i++) actor.updateAnimation(1 / 60, 'IDLE');
+    const guard = localHand();
+    // Guard: right fist raised to chest/chin height in front of the body.
+    assert.ok(guard.y > 1.25 && guard.y < 1.55, `${id} guard hand height ${guard.y.toFixed(2)}`);
+    assert.ok(guard.z < -0.18, `${id} guard hand must be in front of the torso, got z=${guard.z.toFixed(2)}`);
+
+    // Punch: fist travels forward and toward the centerline, then returns.
+    let peak = guard.clone();
+    for (let i = 0; i < 14; i++) {
+      actor.updateAnimation(1 / 60, 'PUNCH');
+      const h = localHand();
+      if (h.z < peak.z) peak = h;
+    }
+    assert.ok(peak.z < guard.z - 0.15, `${id} punch must reach forward: ${guard.z.toFixed(2)} -> ${peak.z.toFixed(2)}`);
+    assert.ok(Math.abs(peak.x) < 0.14, `${id} cross must land near the centerline, got x=${peak.x.toFixed(2)}`);
+    assert.ok(peak.y > guard.y - 0.05 && peak.y < 1.75, `${id} punch must stay at head height, got y=${peak.y.toFixed(2)}`);
+
+    for (let i = 0; i < 20; i++) actor.updateAnimation(1 / 60, 'PUNCH');
+    const back = localHand();
+    assert.ok(Math.abs(back.z - guard.z) < 0.12, `${id} punch must retract to guard, got z=${back.z.toFixed(2)}`);
+    actor.dispose();
+  }
+});
+
+test('Gameplay: standing up from a chair works with movement, jump, E or USE', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  const hud = fs.readFileSync(path.join(process.cwd(), 'src/ui/HUD.ts'), 'utf8');
+  assert.match(main, /const wantsMove = Math\.hypot\(charInputs\.moveX, charInputs\.moveY\) > 0\.45;/);
+  assert.match(main, /if \(interactEdge \|\| charInputs\.jump \|\| wantsMove\) this\.exitSeat\(true\);/);
+  assert.match(main, /setUseLabel\(this\.sittingSpot \? 'STAND' : \(promptSpot \? 'SIT' : 'USE'\)\)/);
+  assert.match(hud, /public setUseLabel\(label: string\): void/);
+  assert.match(hud, /this\.footInteractBtn\.textContent = label;/);
+});
+
+test('Gameplay: sparring fighters do not send the police, civilians still do', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  // The fighter KO block must not raise heat or file a witness report.
+  const fighterBlock = main.slice(main.indexOf('// 2. Hit Roaming Sparring Fighters'), main.indexOf('// 2b. Hit City Pedestrians'));
+  assert.ok(fighterBlock.includes('Sparring win. No heat'), 'fighter knockout must tell the player it is heat-free');
+  assert.doesNotMatch(fighterBlock, /police\.addHeat/, 'beating a sparring fighter must not add police heat');
+  assert.doesNotMatch(fighterBlock, /notifyCrime/, 'beating a sparring fighter must not file a crime report');
+  // Civilians remain protected.
+  assert.match(main, /onPedestrianKnockedOut[\s\S]{0,220}police\.addHeat\(1, 'ASSAULT ON CIVILIAN'/);
+});

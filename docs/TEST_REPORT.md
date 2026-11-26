@@ -14,8 +14,8 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (30/30)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`30` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (33/33)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`33` pass, `0` fail, `0` skipped):
 
 ### Sprint 9 regression coverage (added 2026-11-26)
 | Test Case | Outcome | What Was Verified |
@@ -30,6 +30,9 @@ Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests"
 | Subpath assets & LAN chat | **PASS** | Node asset URLs remain root-absolute while built HTML uses relative paths; untrusted peer names are appended as text, never parsed as HTML; SW uses stale-while-revalidate (`apex-zero-v2`). |
 | Rig sitting & stairs | **PASS** | Both rigs' hips land on the seat anchor including yaw; female stair clips no longer drift horizontally/float after per-template root-motion cleanup. |
 | Sit persistence & opacity | **PASS** | Female/male sit idle loops indefinitely (13s simulated) with hips staying on the seat; female opaque skin/dress materials are restored to the opaque depth-writing pass. |
+| Boxing guard & cross punch | **PASS** | Both rigs raise fists to chin height in guard, the right cross travels 0.23-0.25m forward to the centerline at head height, and returns to guard within 0.34s (numeric bone simulation). |
+| Stand-up from chairs | **PASS** | Source guard confirms movement, jump, E/USE and the relabelled touch STAND button all exit the seat. |
+| Sparring vs police | **PASS** | Fighter knockouts no longer add heat or file a witness report; civilian assaults still call the police. |
 | Full stair traversal simulation | **PASS** | `CharacterController` walks from the stair foot to `y≈4.2` mezzanine through real `OpenWorldMap` height sampling and AABB collision; mid-stair sideways exit resolves to ground, not an upward teleport. |
 
 | Test Case | Outcome | What Was Verified |

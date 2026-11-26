@@ -73,9 +73,16 @@ export class GLTFCharacterMesh {
   private currentClipName = '';
   private desiredState: CharAnimState = 'IDLE';
   private poseTime = 0;
+  private lastPoseState: CharAnimState | null = null;
   private touchedBones = new Set<THREE.Bone>();
   private restQuats = new Map<THREE.Bone, THREE.Quaternion>();
   private animatedQuats = new Set<THREE.Bone>();
+  /**
+   * Frozen idle pose (clip time 0) used as the base for procedural combat
+   * poses. Layering the guard over the live idle clip made the fists drift up
+   * and down with the idle sway; this base keeps the guard readable.
+   */
+  private combatBaseQuats = new Map<THREE.Bone, THREE.Quaternion>();
 
   private loaded = false;
   private failed = false;
@@ -98,6 +105,8 @@ export class GLTFCharacterMesh {
   private sitAction: THREE.AnimationAction | null = null;
   private stairsActive = false;
   private stairDir: 'up' | 'down' = 'up';
+  /** Raises the fists into a boxing guard while an opponent is close. */
+  private combatStance = false;
   private static statusListeners = new Set<(ready: boolean) => void>();
 
   /** Native sitting clips shipped inside the two rigs (no retargeting). */
@@ -219,6 +228,19 @@ export class GLTFCharacterMesh {
     if (this.sitPhase) this.startSitPhase();
     else this.playState(this.desiredState);
     instance.mixer!.update(0);
+    // Snapshot the neutral standing pose for the procedural combat layer.
+    // fadeIn starts the action at weight 0, so force the current pose in before
+    // capturing, otherwise the base would be the rig's T-pose.
+    const activeAtLoad = this.sitAction ?? this.currentAction;
+    if (activeAtLoad) {
+      activeAtLoad.stopFading();
+      activeAtLoad.setEffectiveWeight(1);
+      instance.mixer!.update(0);
+    }
+    this.combatBaseQuats.clear();
+    for (const bone of instance.bones.values()) {
+      this.combatBaseQuats.set(bone, bone.quaternion.clone());
+    }
     this.notifyStatus();
   }
 
@@ -295,17 +317,51 @@ export class GLTFCharacterMesh {
     this.currentClipName = clipName;
   }
 
-  /** Add a short procedural combat pose on top of the GLB locomotion clip. */
+  /** Show the boxing guard while an opponent is within striking distance. */
+  public setCombatStance(active: boolean): void {
+    this.combatStance = active;
+  }
+
+  /**
+   * Procedural combat pose layered over the rig's base clip.
+   *
+   * The source GLBs have no punch/hit clips, so the boxing guard, cross punch
+   * and recoil are authored here. Rotations are applied about the character's
+   * own world axes (right / up / back) instead of each rig's local bone axes,
+   * so the male and female skeletons produce the same readable motion.
+   */
   private applyCombatPose(dt: number, state: CharAnimState): void {
     const instance = this.instance;
     if (!instance) return;
-    const procedural = usesProceduralPose(state);
+    const isGuardIdle = this.combatStance && (state === 'IDLE' || state === 'WALK' || state === 'RUN');
+    const procedural = usesProceduralPose(state) || isGuardIdle;
+    // A new punch/hit/KO starts at t=0 even when the guard stance was already
+    // running; otherwise poseTime would already be past the end of the swing.
+    if (state !== this.lastPoseState) {
+      this.poseTime = 0;
+      this.lastPoseState = state;
+    }
     this.poseTime = procedural ? this.poseTime + dt : 0;
 
     // Bones not driven by the base clip keep last frame's additive rotation,
     // so clear those before layering this frame's pose.
     const bone = (key: string): THREE.Bone | null => instance.bones.get(key) ?? null;
-    const rotate = (key: string, axis: THREE.Vector3, angle: number): void => {
+    const restoreTouched = (): void => {
+      for (const b of this.touchedBones) {
+        if (!this.animatedQuats.has(b)) {
+          const rest = this.restQuats.get(b);
+          if (rest) b.quaternion.copy(rest);
+        }
+      }
+      this.touchedBones.clear();
+    };
+    restoreTouched();
+    if (!procedural) {
+      instance.group.position.y = 0;
+      return;
+    }
+
+    const rotateLocal = (key: string, axis: THREE.Vector3, angle: number): void => {
       const b = bone(key);
       if (!b || Math.abs(angle) < 1e-4) return;
       const base = this.animatedQuats.has(b) ? b.quaternion : (this.restQuats.get(b) ?? b.quaternion);
@@ -313,34 +369,90 @@ export class GLTFCharacterMesh {
       this.touchedBones.add(b);
     };
 
-    for (const b of this.touchedBones) {
-      if (!this.animatedQuats.has(b)) {
-        const rest = this.restQuats.get(b);
-        if (rest) b.quaternion.copy(rest);
-      }
-    }
-
-    if (state === 'PUNCH') {
-      const swing = Math.sin(Math.min(1, this.poseTime / 0.36) * Math.PI);
-      // The visual rig is turned 180° (see GLTFCharacterCache), so local +Z is
-      // world -Z. A positive local-Z swing drives the hand into the hit direction.
-      rotate('upperArmR', new THREE.Vector3(0, 0, 1), swing * 1.18);
-      rotate('lowerArmR', new THREE.Vector3(0, 0, 1), swing * 0.22);
-      rotate('chest', new THREE.Vector3(0, 1, 0), -swing * 0.16);
-      rotate('head', new THREE.Vector3(0, 1, 0), swing * 0.1);
-    } else if (state === 'HIT') {
-      const recoil = Math.exp(-this.poseTime * 5.5);
-      rotate('upperArmL', new THREE.Vector3(0, 0, 1), -recoil * 0.5);
-      rotate('upperArmR', new THREE.Vector3(0, 0, 1), -recoil * 0.5);
-      rotate('head', new THREE.Vector3(1, 0, 0), recoil * 0.3);
-      rotate('chest', new THREE.Vector3(1, 0, 0), recoil * 0.16);
-    } else if (state === 'KO') {
+    if (state === 'KO') {
       const t = Math.min(1, this.poseTime / 0.6);
       const settle = 1 - (1 - t) * (1 - t);
-      rotate('hips', new THREE.Vector3(1, 0, 0), (this.model === 'male' ? 1.35 : 1.45) * settle);
-      rotate('head', new THREE.Vector3(1, 0, 0), 0.22 * settle);
+      rotateLocal('hips', new THREE.Vector3(1, 0, 0), (this.model === 'male' ? 1.35 : 1.45) * settle);
+      rotateLocal('head', new THREE.Vector3(1, 0, 0), 0.22 * settle);
       instance.group.position.y = (this.model === 'male' ? -0.02 : -0.42) * settle;
       return;
+    }
+
+    // Character-space axes: +X = right, +Y = up, +Z = behind the fighter.
+    const groupQ = instance.group.getWorldQuaternion(new THREE.Quaternion());
+    const axisX = new THREE.Vector3(1, 0, 0).applyQuaternion(groupQ);
+    const axisY = new THREE.Vector3(0, 1, 0).applyQuaternion(groupQ);
+    const axisZ = new THREE.Vector3(0, 0, 1).applyQuaternion(groupQ);
+    const parentQ = new THREE.Quaternion();
+    const rotateWorld = (key: string, axis: THREE.Vector3, angle: number): void => {
+      const b = bone(key);
+      if (!b || Math.abs(angle) < 1e-4) return;
+      if (!this.touchedBones.has(b)) {
+        const base = this.combatBaseQuats.get(b)
+          ?? (this.animatedQuats.has(b) ? b.quaternion : (this.restQuats.get(b) ?? b.quaternion));
+        b.quaternion.copy(base);
+        this.touchedBones.add(b);
+      }
+      if (!b.parent) return;
+      b.parent.getWorldQuaternion(parentQ);
+      const worldRot = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+      b.quaternion.premultiply(parentQ.clone().invert().multiply(worldRot).multiply(parentQ));
+      b.updateMatrixWorld(true);
+    };
+
+    const smooth = (x: number): number => {
+      const v = Math.min(1, Math.max(0, x));
+      return v * v * (3 - 2 * v);
+    };
+
+    if (state === 'HIT') {
+      // Head and chest snap backward, arms fly outward, then settle.
+      const recoil = Math.exp(-this.poseTime * 5.5);
+      rotateWorld('hips', axisX, 0.08 * recoil);
+      rotateWorld('chest', axisX, 0.26 * recoil);
+      rotateWorld('head', axisX, 0.5 * recoil);
+      rotateWorld('upperArmR', axisZ, 0.4 * recoil);
+      rotateWorld('upperArmL', axisZ, -0.4 * recoil);
+      rotateWorld('lowerArmR', axisX, 0.35 * recoil);
+      rotateWorld('lowerArmL', axisX, 0.35 * recoil);
+      instance.group.position.y = 0;
+      return;
+    }
+
+    // Torso first: shoulders/elbows are children of the chest, so rotating it
+    // afterwards would drag the already-posed arms into the wrong plane.
+    rotateWorld('chest', axisX, 0.05);
+    rotateWorld('chest', axisY, -0.05);
+
+    if (state === 'PUNCH') {
+      // t: 0..1 over the 0.34s punch. Load the rear shoulder, snap the right
+      // cross through the target line, then recoil back to the guard.
+      const t = Math.min(1, this.poseTime / 0.34);
+      const windup = smooth(t / 0.26) * (1 - smooth((t - 0.16) / 0.18));
+      const extend = smooth((t - 0.2) / 0.18) * (1 - smooth((t - 0.62) / 0.38));
+
+      rotateWorld('hips', axisY, -0.1 * windup + 0.18 * extend);
+      rotateWorld('chest', axisY, -0.28 * windup + 0.42 * extend);
+      rotateWorld('head', axisY, 0.08 * windup - 0.1 * extend);
+      rotateWorld('chest', axisX, 0.1 * extend);
+
+      // Rear (right) arm: shoulder into the punch line, elbow straightens.
+      rotateWorld('upperArmR', axisZ, -0.16);
+      rotateWorld('upperArmR', axisX, 0.55 - 0.18 * windup + 1.0 * extend);
+      rotateWorld('upperArmR', axisY, 0.18 * extend);
+      rotateWorld('lowerArmR', axisX, 1.55 + 0.1 * windup - 1.5 * extend);
+      // Lead (left) hand holds the guard near the chin.
+      rotateWorld('upperArmL', axisZ, 0.16);
+      rotateWorld('upperArmL', axisX, 0.62);
+      rotateWorld('lowerArmL', axisX, 1.7 + 0.08 * extend);
+    } else {
+      // Both fists up in an orthodox guard: elbows down, forearms vertical.
+      rotateWorld('upperArmR', axisZ, -0.16);
+      rotateWorld('upperArmR', axisX, 0.55);
+      rotateWorld('lowerArmR', axisX, 1.55);
+      rotateWorld('upperArmL', axisZ, 0.16);
+      rotateWorld('upperArmL', axisX, 0.62);
+      rotateWorld('lowerArmL', axisX, 1.7);
     }
     instance.group.position.y = 0;
   }

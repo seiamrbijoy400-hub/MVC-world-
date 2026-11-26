@@ -23,6 +23,8 @@ export class HUD {
   private manualTouchBox: HTMLElement;
   private touchClutchBtn: HTMLElement;
   private footDriveBtn: HTMLElement;
+  private footInteractBtn: HTMLButtonElement;
+  private useLabel = 'USE';
   private enterExitBtn: HTMLElement;
   private enterExitLabel: HTMLElement;
   private racePromptEl: HTMLElement;
@@ -140,6 +142,7 @@ export class HUD {
     this.manualTouchBox = document.getElementById('manual-touch-box')!;
     this.touchClutchBtn = document.getElementById('touch-clutch')!;
     this.footDriveBtn = document.getElementById('foot-drive')!;
+    this.footInteractBtn = document.getElementById('foot-interact') as HTMLButtonElement;
     this.enterExitBtn = document.getElementById('btn-enter-exit')!;
     this.enterExitLabel = document.getElementById('enter-exit-label')!;
     this.racePromptEl = document.getElementById('race-prompt')!;
@@ -321,6 +324,13 @@ export class HUD {
 
   public hideKoOverlay(): void {
     this.koOverlay.classList.remove('open');
+  }
+
+  /** Label the context USE button (SIT / STAND / USE) for touch players. */
+  public setUseLabel(label: string): void {
+    if (label === this.useLabel) return;
+    this.useLabel = label;
+    this.footInteractBtn.textContent = label;
   }
 
   public setFootAction(enabled: boolean, label: string): void {

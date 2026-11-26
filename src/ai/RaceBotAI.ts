@@ -513,6 +513,9 @@ export class SparringFighter {
     this.controller.update(dt, { moveX, moveY, sprint, jump: false, punch }, 0);
     this.mesh.root.position.copy(this.controller.position);
     this.mesh.root.rotation.y = this.controller.yaw;
+    // Keep the fists up while squaring off, so the fighters read as boxers
+    // instead of idle NPCs that occasionally twitch an arm.
+    this.mesh.setCombatStance(playerOnFoot && distToPlayer < 12);
     this.mesh.updateAnimation(dt, this.controller.animState);
     this.mesh.setNameAndHp(this.name, this.controller.hp);
   }
