@@ -1,5 +1,5 @@
 # APEX ZERO: NEON VELO — Implementation Roadmap
-**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 72 modules, `1.03s`) | **Automated Tests:** 41/41 Pass (`tests/gameplay.test.ts`)
+**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 72 modules, `1.03s`) | **Automated Tests:** 42/42 Pass (`tests/gameplay.test.ts`)
 
 ---
 
@@ -44,5 +44,5 @@
 - **Mobile/safety:** `E` no longer latches an upshift while on foot; Character Studio pauses simulation/input; rig swaps dispose per-instance materials and name/bubble textures; studio randomizer only changes visible knobs; LAN chat names are inserted as text (XSS-safe); service worker revalidates cached assets (`apex-zero-v2`); relative `base: './'` + `assetUrl()` support subpath hosting; pinch zoom re-enabled; CC BY credits state the runtime modifications.
 - **Post-audit character fix:** native sit idle now loops with `Infinity` + cross-fades (no bind-pose stand-up after 4s/9.5s); female GLB opaque materials are forced out of the transparent pass; female sit root lowered 7cm so feet rest on the floor.
 - **Character feel pass (2026-11-26):** sit idle loops forever with cross-fades; female opaque materials leave the transparent pass; female sit root lowered 7cm; procedural boxing guard + torso-driven right cross with wind-up/retract; sparring fighters hold guard and no longer send police when knocked out; seated players stand with movement, jump, E, F or the touch STAND button.
-- **Sprint 10 (2026-11-26):** allocation-free combat/camera hot paths (guard overhead 202 µs -> 14-48 µs/frame measured headlessly), no shader recompiles on LAN outfit sync, whole-percent name-tag redraws, shared police beacon resources, car-exit no longer heals the player.
-- **Verification:** `pnpm run build` clean; `tests/gameplay.test.ts` **41/41** pass; static subpath server at `/game/` returned JS + GLB successfully. Live WebGL/touch/device FPS still NOT TESTED (no browser or Android device attached).
+- **Sprint 11 (2026-11-26):** male stand-up no longer plays the 4.2s dead lead-in of the native `Rig|sitting_end` clip; locomotion returns after ~1.05s. Runtime regression on both rigs verifies prompt stand-up and repeated cycles.\n- **Sprint 10 (2026-11-26):** allocation-free combat/camera hot paths (guard overhead 202 µs -> 14-48 µs/frame measured headlessly), no shader recompiles on LAN outfit sync, whole-percent name-tag redraws, shared police beacon resources, car-exit no longer heals the player.
+- **Verification:** `pnpm run build` clean; `tests/gameplay.test.ts` **42/42** pass; static subpath server at `/game/` returned JS + GLB successfully. Live WebGL/touch/device FPS still NOT TESTED (no browser or Android device attached).

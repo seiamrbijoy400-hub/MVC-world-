@@ -898,6 +898,36 @@ test('GLTFCharacterMesh: native sit and stair clips drive chairs and mezzanine s
   }
 });
 
+test('GLTFCharacterMesh: standing up finishes promptly on both rigs (no dead 6s clip)', async () => {
+  for (const [url, id] of [['/assets/models/male.glb', 'kaito'], ['/assets/models/female.glb', 'mika']] as const) {
+    const actor = new GLTFCharacterMesh(url, id, '', null, 0, false);
+    const deadline = Date.now() + 4000;
+    while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.equal(actor.isRealistic, true, `${id} GLB must load`);
+    const internal = actor as unknown as {
+      instance: { bones: Map<string, THREE.Bone> };
+      sitPhase: 'enter' | 'idle' | 'exit' | null;
+    };
+    const hips = internal.instance.bones.get('hips')!;
+    actor.root.position.copy(actor.sitRootPosition({ pos: new THREE.Vector3(84, 0.58, -100), yaw: Math.PI }));
+    actor.setSitting(true);
+    for (let i = 0; i < 150; i++) actor.updateAnimation(1 / 60, 'IDLE');
+    assert.equal(internal.sitPhase, 'idle', `${id} must be seated before standing`);
+    actor.root.updateMatrixWorld(true);
+    const seatedHipY = hips.getWorldPosition(new THREE.Vector3()).y;
+
+    actor.setSitting(false);
+    let standFrames = 0;
+    for (; standFrames < 150 && internal.sitPhase !== null; standFrames++) actor.updateAnimation(1 / 60, 'IDLE');
+    assert.ok(standFrames <= 100, `${id} stand-up must finish within 1.7s, took ${(standFrames / 60).toFixed(2)}s`);
+    assert.equal(internal.sitPhase, null, `${id} must return to locomotion after standing`);
+    actor.root.updateMatrixWorld(true);
+    const standingHipY = hips.getWorldPosition(new THREE.Vector3()).y;
+    assert.ok(standingHipY - seatedHipY > 0.2, `${id} hips must rise visibly, ${seatedHipY.toFixed(3)} -> ${standingHipY.toFixed(3)}`);
+    actor.dispose();
+  }
+});
+
 test('GLTFCharacterMesh: native sit pose lands hips on the chair seat (both rigs)', async () => {
   for (const [url, id] of [['/assets/models/male.glb', 'kaito'], ['/assets/models/female.glb', 'mika']] as const) {
     const actor = new GLTFCharacterMesh(url, id, '', null, 0, false);

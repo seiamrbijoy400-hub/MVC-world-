@@ -14,10 +14,16 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (41/41)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`41` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (42/42)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`42` pass, `0` fail, `0` skipped):
 
-### Sprint 10 — performance & state repair (2026-11-26, current)
+### Sprint 11 — stand-up responsiveness (2026-11-26, current)
+| Issue | Status | Evidence |
+| :--- | :---: | :--- |
+| Male rig stand-up froze locomotion for 6.17s; first ~4.2s of `Rig|sitting_end` kept the hips in the seated pose | **FIXED** | Measured GLB keyframes: hips.position.y constant at 0.217 until t=4.2, rises to 0.010 by t=5.0, clip duration 6.167s. `SIT_EXIT_WINDOW` now starts the action at t=4.2 and returns to locomotion after 1.05s. Headless rig probe: before = seated hip 0.586 still at t=3.0, stood at t≈5.0; after = standing hip 0.872 at t=1.0. Female unchanged (1.567s native clip). |
+| Repeated sit/stand cycles could leave the avatar locked in the sit phase | **FIXED** | 3 consecutive cycles on the male rig: each entered `idle`, stood in 63 frames (~1.05s), returned to `null` with hip height 0.874m. New runtime regression test verifies both rigs stand within 1.7s and hips rise >0.2m. |
+
+## Sprint 10 — performance & state repair (2026-11-26, current)
 | Issue | Status | Evidence |
 | :--- | :---: | :--- |
 | Procedural guard pose rebuilt bone subtrees and allocated ~20 quaternions/vectors per character per frame | **FIXED** | Headless 600-frame microbenchmark: guard overhead over neutral idle **202.1 µs/frame before → 14.2-48.2 µs/frame after** (3 runs, same rig/clip). Scratch quaternion/axis reuse; removed redundant `updateMatrixWorld(true)` per bone. Both rigs' guard/punch trajectory regressions still pass. |

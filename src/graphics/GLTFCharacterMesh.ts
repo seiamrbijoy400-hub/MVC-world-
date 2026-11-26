@@ -126,6 +126,17 @@ export class GLTFCharacterMesh {
     female: { enter: 'idle_to_sit', idle: 'sit_idle', exit: 'sit_to idle' }
   };
 
+  /**
+   * The male stand-up clip is 6.17s long but stays in the seated pose for the
+   * first ~4.2s (measured: hips.position.y is constant until t=4.2, then rises
+   * from 0.217 to 0.010 by t=5.0). Playing the whole clip froze locomotion for
+   * six seconds — players read that as "stand does not work". Start the action
+   * at the motion window and play at most 1s before returning to locomotion.
+   */
+  private static readonly SIT_EXIT_WINDOW: Record<string, { start: number; maxDuration: number }> = {
+    'Rig|sitting_end': { start: 4.2, maxDuration: 1.05 }
+  };
+
   /** Native stair clips; the male rig has no stair clip, so it keeps its walk. */
   private static readonly STAIR_CLIPS: Record<CharacterModelId, { up: string; down: string }> = {
     male: { up: 'Rig|walk', down: 'Rig|walk' },
@@ -522,8 +533,14 @@ export class GLTFCharacterMesh {
     // Idle must loop forever. A finite LoopRepeat stopped after ~4s (female) /
     // ~9.5s (male), after which no action owned the bones and the rig snapped
     // back to its standing bind pose while the game still thought it was seated.
-    this.sitTimer = isIdle ? Infinity : (clip?.duration ?? 1.2);
+    const window = !isIdle ? GLTFCharacterMesh.SIT_EXIT_WINDOW[clipName] : undefined;
+    const start = window?.start ?? 0;
+    const available = Math.max(0.2, (clip?.duration ?? 1.2) - start);
+    this.sitTimer = isIdle ? Infinity : Math.min(available, window?.maxDuration ?? available);
     action.reset();
+    // Skip the dead lead-in of the male stand-up clip; the action plays from
+    // the first keyed rise instead of holding the seated pose for 4 seconds.
+    if (start > 0) action.time = start;
     if (isIdle) {
       action.setLoop(THREE.LoopRepeat, Infinity);
       action.clampWhenFinished = false;
