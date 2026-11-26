@@ -1365,3 +1365,62 @@ test('GameApp: standing up scoots out of the chair gradually instead of teleport
   assert.match(loop, /Math\.pow\(1 - this\.standScootApplied, 3\)/, 'ease-out keeps the first frame slow');
   assert.match(loop, /this\.charCtrl\.position\.addScaledVector\(this\.standScootTotal, easedAfter - easedBefore\)/);
 });
+
+test('OpenWorldMap: the whole GP circuit is labelled GP_CIRCUIT, not Touge or Harbor', () => {
+  const scene = new THREE.Scene();
+  const track = new TrackEnvironment(scene);
+  const map = new OpenWorldMap(scene);
+  const wrong = track.trackPoints.filter((p) => map.getDistrictAt(p.x, p.z) !== 'GP_CIRCUIT');
+  assert.equal(wrong.length, 0, `GP waypoints mislabelled: ${wrong.length}/${track.trackPoints.length}`);
+  assert.equal(map.getDistrictAt(-190, -300), 'GP_CIRCUIT', 'southern sweeper');
+  assert.equal(map.getDistrictAt(-110, 222), 'GP_CIRCUIT', 'hairpin apex');
+  assert.equal(map.getDistrictAt(155, -296), 'MOUNTAIN_TOUGE');
+  assert.equal(map.getDistrictAt(84, 90), 'STUNT_ARENA');
+  assert.equal(map.getDistrictAt(84, -100), 'NEON_CORE');
+  assert.equal(map.getDistrictAt(176, 250), 'HARBOR_COAST');
+});
+
+test('OpenWorldMap: an actor at a collider centre is ejected through the nearest face', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const box = map.colliders.find((b) => b.maxX - b.minX > 30 && b.height > 40)!;
+  assert.ok(box, 'expected a large building collider');
+  const cx = (box.minX + box.maxX) * 0.5;
+  const cz = (box.minZ + box.maxZ) * 0.5;
+  const pos = new THREE.Vector3(cx, 0, cz);
+  const vel = new THREE.Vector3(0, 0, 0);
+  assert.equal(map.resolveCollision(pos, vel, 1.2), true);
+  const inside = pos.x > box.minX && pos.x < box.maxX && pos.z > box.minZ && pos.z < box.maxZ;
+  assert.equal(inside, false, 'actor must not remain buried inside the building');
+  const nearestFace = Math.min(pos.x - box.minX, box.maxX - pos.x, pos.z - box.minZ, box.maxZ - pos.z);
+  assert.ok(nearestFace <= -1.19, `ejection should clear the face, got ${nearestFace}`);
+});
+
+test('GameApp: stunt boost pads launch along their authored direction', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  const loop = main.slice(main.indexOf('for (const pad of this.openWorld.boostPads)'), main.indexOf('if (this.physics.gear !== prevGear)'));
+  assert.match(loop, /this\.boostDirScratch\.set\(pad\.dirX, 0, pad\.dirZ\)/);
+  assert.match(loop, /launch\.normalize\(\)/);
+  assert.match(loop, /velocity\.addScaledVector\(launch, 18\)/);
+  assert.doesNotMatch(loop, /velocity\.addScaledVector\(fwd, 18\)/, 'car yaw must not override the pad direction');
+});
+
+test('OpenWorldMap: drifting off the pier funnels sideways instead of snapping back to the seawall', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const radius = 1.5;
+  const pos = new THREE.Vector3(139, 0, 290);
+  const vel = new THREE.Vector3(-4, 0, 0);
+  map.resolveCollision(pos, vel, radius);
+  assert.equal(pos.x, 140 + radius, 'actor should be nudged into the pier lane');
+  assert.equal(pos.z, 290, 'z must not jump back to the seawall');
+  assert.ok(vel.x > 0, 'lateral velocity should bounce off the invisible lane edge');
+
+  const deepEast = new THREE.Vector3(197, 0, 295);
+  map.resolveCollision(deepEast, new THREE.Vector3(4, 0, 0), radius);
+  assert.equal(deepEast.x, 196 - radius);
+  assert.equal(deepEast.z, 295);
+
+  // Entering from dry land right next to the wall still clamps normally.
+  const nearWall = new THREE.Vector3(139, 0, 269);
+  map.resolveCollision(nearWall, new THREE.Vector3(0, 0, 5), radius);
+  assert.equal(nearWall.z, 268 - radius);
+});

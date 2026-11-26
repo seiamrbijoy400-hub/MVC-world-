@@ -159,6 +159,7 @@ class GameApp {
   private syncAccumulator = 0;
   private boostCooldown = 0;
   private peerScratch = new THREE.Vector3();
+  private boostDirScratch = new THREE.Vector3();
   // Per-frame HUD lookups are cached; getElementById walks the DOM each call.
   private interactPromptEl = document.getElementById('interact-prompt');
   private garagePromptEl = document.getElementById('garage-prompt');
@@ -2091,7 +2092,12 @@ class GameApp {
           for (const pad of this.openWorld.boostPads) {
             if (Math.hypot(this.physics.position.x - pad.x, this.physics.position.z - pad.z) < pad.radius) {
               const fwd = this.physics.getForwardVector();
-              this.physics.velocity.addScaledVector(fwd, 18);
+              // Launch along the pad's own direction so a stunt pad always
+              // feeds its ramp, even if the car arrives sideways or backwards.
+              const launch = this.boostDirScratch.set(pad.dirX, 0, pad.dirZ);
+              if (launch.lengthSq() > 0.0001) launch.normalize();
+              else launch.copy(fwd);
+              this.physics.velocity.addScaledVector(launch, 18);
               this.boostCooldown = 1.0;
               this.sound.playExhaustPop();
               this.particles.triggerBackfire(this.physics.position, fwd, this.physics.getRightVector());

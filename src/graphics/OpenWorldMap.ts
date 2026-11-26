@@ -152,7 +152,10 @@ export class OpenWorldMap {
   }
 
   public getDistrictAt(x: number, z: number): DistrictId {
-    if (x < 14 && z > -245) return 'GP_CIRCUIT';
+    // The GP circuit owns the whole western half of the map, including its
+    // southern sweeper (z ≈ -300) and hairpin (z ≈ +222). Checking only the
+    // northern part here mislabelled 89 of 481 circuit samples as Touge/Harbor.
+    if (x < 14) return 'GP_CIRCUIT';
     if (z <= -225) return 'MOUNTAIN_TOUGE';
     if (z >= 158) return 'HARBOR_COAST';
     if (x >= 48 && x <= 228 && z >= 42 && z <= 145) return 'STUNT_ARENA';
@@ -1414,7 +1417,25 @@ export class OpenWorldMap {
         vel.z -= 1.35 * vDot * nz;
       }
     } else {
-      pos.x += radius;
+      // Exactly on the centre of a box: shoving +X unconditionally can leave
+      // an actor buried inside a wide building (or push it into a neighbour).
+      // Eject through the nearest face instead, carrying momentum with us.
+      const left = pos.x - minX;
+      const right = maxX - pos.x;
+      const back = pos.z - minZ;
+      const front = maxZ - pos.z;
+      const nearest = Math.min(left, right, back, front);
+      let nx = 0;
+      let nz = 0;
+      if (nearest === left) { pos.x = minX - radius; nx = -1; }
+      else if (nearest === right) { pos.x = maxX + radius; nx = 1; }
+      else if (nearest === back) { pos.z = minZ - radius; nz = -1; }
+      else { pos.z = maxZ + radius; nz = 1; }
+      const vDot = vel.x * nx + vel.z * nz;
+      if (vDot < 0) {
+        vel.x -= 1.35 * vDot * nx;
+        vel.z -= 1.35 * vDot * nz;
+      }
     }
     return true;
   }
@@ -1463,8 +1484,28 @@ export class OpenWorldMap {
     if (pos.z > 268 - radius) {
       const onPierLane = pos.x >= 140 && pos.x <= 196;
       const pierEnd = 296 - radius;
-      if (onPierLane ? pos.z > pierEnd : true) {
-        pos.z = onPierLane ? pierEnd : 268 - radius;
+      if (onPierLane) {
+        if (pos.z > pierEnd) {
+          pos.z = pierEnd;
+          if (vel.z > 0) vel.z *= -0.35;
+          hit = true;
+        }
+      } else if (pos.z > 268 + radius && pos.x >= 134 && pos.x <= 202) {
+        // Just slipped off the edge of the pier deck: steer sideways back
+        // into the lane instead of snapping 15-30m backwards through the
+        // seawall. Actors far out at sea still hit the seawall as before.
+        const laneMin = 140 + radius;
+        const laneMax = 196 - radius;
+        if (pos.x < (laneMin + laneMax) * 0.5) {
+          pos.x = laneMin;
+          if (vel.x < 0) vel.x *= -0.35;
+        } else {
+          pos.x = laneMax;
+          if (vel.x > 0) vel.x *= -0.35;
+        }
+        hit = true;
+      } else {
+        pos.z = 268 - radius;
         if (vel.z > 0) vel.z *= -0.35;
         hit = true;
       }

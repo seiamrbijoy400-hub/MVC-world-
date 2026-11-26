@@ -14,10 +14,18 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (44/44)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`44` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (48/48)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`48` pass, `0` fail, `0` skipped):
 
-### Sprint 11 — stand-up responsiveness (2026-11-26, current)
+### Sprint 13 — map subsystem repair (2026-11-26, current)
+| Issue | Status | Evidence |
+| :--- | :---: | :--- |
+| GP circuit mislabelled as Mountain Touge / Harbor Coast | **FIXED** | `getDistrictAt()` checked `x < 14 && z > -245`, so the southern sweeper and hairpin fell through to the Touge/Harbor branches. Measured 89/481 circuit spline samples mislabelled; after the fix 0/481. West half (`x < 14`) is now always GP_CIRCUIT. |
+| Stunt boost pads ignored their authored launch direction | **FIXED** | `BoostPad.dirX/dirZ` were stored but never read: `main.ts` boosted along the car's yaw, so a backwards/sideways approach fired the car away from its ramp. Boost now uses the pad's normalized direction with a car-forward fallback. |
+| Actor exactly at a collider centre was shoved +X forever | **FIXED** | `resolveCircleVsAABB()` degenerate branch did `pos.x += radius` unconditionally. Deep spawn/teleport inside a 38m-wide building left the actor buried and drifting into neighbours. Now ejects through the nearest face with momentum reflection; probe: building centre (84,-200) ejects to z=-218.6 instead of x=85.2. |
+| Leaving the stunt pier sideways teleported the actor 13-28m back to the seawall | **FIXED** | Pier-lane check only covered `x=140..196`; stepping to x=139 at z=290 snapped z to 266.5. Lateral drift now funnels back into the lane (x=141.5) with velocity bounce; actors far out at sea still hit the seawall. |
+
+## Sprint 11 — stand-up responsiveness (2026-11-26, current)
 | Issue | Status | Evidence |
 | :--- | :---: | :--- |
 | Male rig stand-up froze locomotion for 6.17s; first ~4.2s of `Rig|sitting_end` kept the hips in the seated pose | **FIXED** | Measured GLB keyframes: hips.position.y constant at 0.217 until t=4.2, rises to 0.010 by t=5.0, clip duration 6.167s. `SIT_EXIT_WINDOW` now starts the action at t=4.2 and returns to locomotion after 1.05s. Headless rig probe: before = seated hip 0.586 still at t=3.0, stood at t≈5.0; after = standing hip 0.872 at t=1.0. Female unchanged (1.567s native clip). |
