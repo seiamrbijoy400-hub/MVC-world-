@@ -1095,3 +1095,45 @@ test('Gameplay simulation: walk the restaurant staircase to the mezzanine withou
   assert.equal(step(char.position.y - 2.0), 0, 'mid-stair height must not select the mezzanine');
   assert.equal(step(char.position.y), 4.2);
 });
+
+test('GLTFCharacterMesh: sitting stays seated past the native idle clip duration', async () => {
+  for (const [url, id] of [['/assets/models/male.glb', 'kaito'], ['/assets/models/female.glb', 'mika']] as const) {
+    const actor = new GLTFCharacterMesh(url, id, '', null, 0, false);
+    const deadline = Date.now() + 4000;
+    while (!actor.isRealistic && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    const seat = new THREE.Vector3(84, 0.58, -100);
+    const yaw = 0.8;
+    actor.root.position.copy(actor.sitRootPosition({ pos: seat, yaw }));
+    actor.root.rotation.y = yaw;
+    actor.setSitting(true);
+    // 13s is longer than the female (2.17 + 4.0s) and male (1.13 + 9.5s)
+    // enter+idle clips; the old finite LoopRepeat stood up at the end.
+    for (let i = 0; i < 780; i++) actor.updateAnimation(1 / 60, 'IDLE');
+    const inst = (actor as unknown as { instance: { group: THREE.Group; bones: Map<string, THREE.Bone> } }).instance;
+    actor.root.updateMatrixWorld(true);
+    const hips = inst.bones.get('hips');
+    const head = inst.bones.get('head');
+    assert.ok(hips && head);
+    const hipY = hips.getWorldPosition(new THREE.Vector3()).y;
+    const headY = head.getWorldPosition(new THREE.Vector3()).y;
+    assert.equal(actor.isSitting, true, `${id} must still report seated`);
+    assert.ok(Math.abs(hipY - seat.y) < 0.12, `${id} hips must stay on the seat, got ${hipY.toFixed(2)}`);
+    assert.ok(headY < seat.y + 1.05, `${id} must not stand back up, head y=${headY.toFixed(2)}`);
+    actor.dispose();
+  }
+});
+
+test('GLTFCharacterCache: opaque female materials are not left in the transparent pass', async () => {
+  const { loadCharacterTemplate, instantiateCharacter, disposeCharacterInstance } = await import('../src/graphics/GLTFCharacterCache');
+  for (const model of ['female', 'male'] as const) {
+    const template = await loadCharacterTemplate(model);
+    const instance = instantiateCharacter(template);
+    for (const mat of instance.materials) {
+      if (mat.opacity >= 0.999) {
+        assert.equal(mat.transparent, false, `${model} opaque material ${mat.name || '(unnamed)'} must not be transparent`);
+        assert.equal(mat.depthWrite, true, `${model} opaque material must write depth`);
+      }
+    }
+    disposeCharacterInstance(instance);
+  }
+});

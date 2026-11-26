@@ -1,5 +1,5 @@
 # APEX ZERO: NEON VELO — Implementation Roadmap
-**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 72 modules, `1.10s`) | **Automated Tests:** 28/28 Pass (`tests/gameplay.test.ts`)
+**Date:** 2026-11-26 | **Build:** Clean (`tsc && vite build`, 72 modules, `1.10s`) | **Automated Tests:** 30/30 Pass (`tests/gameplay.test.ts`)
 
 ---
 
@@ -42,4 +42,5 @@
 - **Gameplay state:** KO players can no longer start a GP race or stay trapped in it; opening OPEN_WORLD or launching from the lobby always restores the owned Zenvo instead of adopting a stolen cruiser/civic; lobby resprays target only the owned car; `SEMI` gearbox survives saves; seat state clears on race/spawn/bust; punch/jump edge trackers stay synced through KO; mid-air resets no longer award phantom airtime; paused modals swallow one-shot hotkeys.
 - **World & camera:** pier end clamps at `z≈296` instead of snapping to the seawall; chase/orbit cameras pass through `clampCameraToWorld()`; restaurant front storefront is split around the doorway, counter and ground tables are solid, and mezzanine height selection requires actually being upstairs.
 - **Mobile/safety:** `E` no longer latches an upshift while on foot; Character Studio pauses simulation/input; rig swaps dispose per-instance materials and name/bubble textures; studio randomizer only changes visible knobs; LAN chat names are inserted as text (XSS-safe); service worker revalidates cached assets (`apex-zero-v2`); relative `base: './'` + `assetUrl()` support subpath hosting; pinch zoom re-enabled; CC BY credits state the runtime modifications.
-- **Verification:** `pnpm run build` clean; `tests/gameplay.test.ts` **28/28** pass; static subpath server at `/game/` returned JS + GLB successfully. Live WebGL/touch/device FPS still NOT TESTED (no browser or Android device attached).
+- **Post-audit character fix:** native sit idle now loops with `Infinity` + cross-fades (no bind-pose stand-up after 4s/9.5s); female GLB opaque materials are forced out of the transparent pass; female sit root lowered 7cm so feet rest on the floor.
+- **Verification:** `pnpm run build` clean; `tests/gameplay.test.ts` **30/30** pass; static subpath server at `/game/` returned JS + GLB successfully. Live WebGL/touch/device FPS still NOT TESTED (no browser or Android device attached).

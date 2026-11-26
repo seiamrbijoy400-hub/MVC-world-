@@ -122,6 +122,17 @@ export class GLTFCharacterMesh {
     female: { y: 0.498, z: 0.290 }
   };
 
+  /**
+   * Small root-Y correction so the native sit poses rest naturally on the
+   * shared 0.58m chair: the male clip's feet already touch the floor, while
+   * the female clip leaves them ~8cm in the air (the dress hides the extra
+   * pelvis/seat overlap).
+   */
+  private static readonly SIT_ROOT_Y_FIX: Record<CharacterModelId, number> = {
+    male: 0.006,
+    female: -0.07
+  };
+
   constructor(
     modelUrlOrId: string = MODEL_URLS.male,
     charId = 'kaito',
@@ -262,7 +273,7 @@ export class GLTFCharacterMesh {
     this.currentClipName = '';
   }
 
-  private playState(state: CharAnimState): void {
+  private playState(state: CharAnimState, fromAction: THREE.AnimationAction | null = null): void {
     if (!this.instance?.mixer) return;
     let clipName: string | null = null;
     if (this.stairsActive && (state === 'WALK' || state === 'RUN' || state === 'FLEE')) {
@@ -273,8 +284,13 @@ export class GLTFCharacterMesh {
     if (!clipName || clipName === this.currentClipName) return;
     const action = this.actions.get(clipName);
     if (!action) return;
-    if (this.currentAction) this.currentAction.fadeOut(0.12);
-    action.reset().fadeIn(0.12).play();
+    if (fromAction && fromAction !== action) {
+      action.reset().play();
+      action.crossFadeFrom(fromAction, 0.18, false);
+    } else {
+      if (this.currentAction) this.currentAction.fadeOut(0.12);
+      action.reset().fadeIn(0.12).play();
+    }
     this.currentAction = action;
     this.currentClipName = clipName;
   }
@@ -351,7 +367,7 @@ export class GLTFCharacterMesh {
     const offset = GLTFCharacterMesh.SIT_HIPS_OFFSET[this.model];
     return new THREE.Vector3(
       spot.pos.x - Math.sin(spot.yaw) * offset.z,
-      spot.pos.y - offset.y,
+      spot.pos.y - offset.y + GLTFCharacterMesh.SIT_ROOT_Y_FIX[this.model],
       spot.pos.z - Math.cos(spot.yaw) * offset.z
     );
   }
@@ -364,18 +380,35 @@ export class GLTFCharacterMesh {
     if (!action) {
       // Rig without sitting clips (or failed action) must not get stuck.
       this.sitPhase = null;
+      this.sitAction = null;
       return;
     }
-    if (this.currentAction) {
-      this.currentAction.stop();
-      this.currentAction = null;
-    }
+    // Cross-fade from whatever is currently playing (walk/idle or the previous
+    // sit phase). Stopping the old action first exposed the rig's bind pose
+    // for a few frames, which read as the character "standing up".
+    const previous = this.sitAction ?? this.currentAction;
+    this.currentAction = null;
     this.currentClipName = '';
     const clip = this.template?.animations.find((a) => a.name === clipName);
-    this.sitTimer = clip?.duration ?? (this.sitPhase === 'idle' ? 4 : 1.2);
-    action.reset().setLoop(this.sitPhase === 'idle' ? THREE.LoopRepeat : THREE.LoopOnce, 1);
-    if (this.sitPhase !== 'idle') action.clampWhenFinished = true;
-    action.fadeIn(0.12).play();
+    const isIdle = this.sitPhase === 'idle';
+    // Idle must loop forever. A finite LoopRepeat stopped after ~4s (female) /
+    // ~9.5s (male), after which no action owned the bones and the rig snapped
+    // back to its standing bind pose while the game still thought it was seated.
+    this.sitTimer = isIdle ? Infinity : (clip?.duration ?? 1.2);
+    action.reset();
+    if (isIdle) {
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+    } else {
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+    }
+    if (previous && previous !== action) {
+      action.play();
+      action.crossFadeFrom(previous, 0.16, false);
+    } else {
+      action.fadeIn(0.12).play();
+    }
     this.sitAction = action;
   }
 
@@ -388,16 +421,22 @@ export class GLTFCharacterMesh {
     }
     if (!this.loaded || !this.instance?.mixer) return;
     if (this.sitPhase) {
-      this.sitTimer -= dt;
       this.instance.mixer.update(dt);
-      if (this.sitTimer <= 0) {
-        if (this.sitPhase === 'enter') this.sitPhase = 'idle';
-        else if (this.sitPhase === 'exit') this.sitPhase = null;
-        else return; // looping sit idle
-        this.sitAction?.stop();
-        this.sitAction = null;
-        this.startSitPhase();
-        if (!this.sitPhase) this.playState(this.desiredState);
+      if (this.sitPhase !== 'idle') {
+        this.sitTimer -= dt;
+        if (this.sitTimer <= 0) {
+          if (this.sitPhase === 'enter') {
+            this.sitPhase = 'idle';
+            this.startSitPhase();
+          } else {
+            // Exit finished: cross-fade back into the requested locomotion
+            // state instead of leaving the clamped stand clip blended in.
+            const previous = this.sitAction;
+            this.sitPhase = null;
+            this.sitAction = null;
+            this.playState(this.desiredState, previous);
+          }
+        }
       }
       return;
     }

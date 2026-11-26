@@ -173,6 +173,13 @@ export function instantiateCharacter(template: CharacterTemplate): CharacterInst
     clonedMeshes.push(mesh);
     const cloneMaterial = (source: THREE.Material): THREE.MeshStandardMaterial => {
       const mat = source.clone() as THREE.MeshStandardMaterial;
+      // The female GLB ships fully opaque materials marked transparent with
+      // depthWrite=false. That makes skin and the dress render see-through on
+      // mobile. Opaque sources must go back to the opaque pass.
+      if (mat.transparent && mat.opacity >= 0.999) {
+        mat.transparent = false;
+        mat.depthWrite = true;
+      }
       mat.userData.characterInstanceOwned = true;
       mat.userData.baseColor = mat.color ? mat.color.clone() : new THREE.Color(0xffffff);
       materials.push(mat);
