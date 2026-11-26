@@ -3,7 +3,7 @@
 
 All runtime assets are stored locally under `public/assets/` with no runtime network dependency on external CDN model/texture URLs.
 
-Character GLBs were copied into this repository as new files; the originally attached upload files were not modified. Both rigs keep their original base-color textures, and per-character outfit/hair/skin variety is produced at runtime by softly tinting cloned materials. Punch/hit/KO poses are authored in code (`src/graphics/GLTFCharacterMesh.ts`) because the source GLBs contain locomotion, jump and talking clips but no combat clips.
+Character GLBs were copied into this repository as new files; the originally attached upload files were not modified. Both rigs keep their original base-color textures, and per-character outfit/hair/skin variety is produced at runtime by softly tinting cloned materials. Punch/hit/KO poses are authored in code (`src/graphics/GLTFCharacterMesh.ts`) because the source GLBs contain locomotion, jump and talking clips but no combat clips. Runtime modifications (CC BY 4.0 §3(b)): per-instance material tinting, 180° instance rotation to align source `+Z` facing with world `-Z`, code-authored combat poses, and native sitting/stair clips with the female stair root-motion track frozen. This notice is also shown in the in-game Settings credits.
 
 | Asset Path | Type | Size | Provenance / License Status |
 | :--- | :--- | :--- | :--- |

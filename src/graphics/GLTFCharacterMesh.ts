@@ -221,7 +221,6 @@ export class GLTFCharacterMesh {
     this.loadGeneration++;
     this.loaded = false;
     this.template = null;
-    this.instance = null;
     this.actions.clear();
     this.currentAction = null;
     this.currentClipName = '';
@@ -231,6 +230,22 @@ export class GLTFCharacterMesh {
     this.touchedBones.clear();
     this.fallback?.dispose();
     this.fallback = null;
+    if (this.instance) {
+      disposeCharacterInstance(this.instance);
+      this.instance = null;
+    }
+    // Per-character cloned materials and the name/bubble textures are owned
+    // here; repeated lobby rig swaps must not leak them on mobile GPUs.
+    const spriteMat = this.nameSprite?.material as THREE.SpriteMaterial | undefined;
+    spriteMat?.map?.dispose();
+    spriteMat?.dispose();
+    if (this.bubble) {
+      this.bubble.material.map?.dispose();
+      this.bubble.material.dispose();
+      this.bubble = null;
+    }
+    if (this.bubbleTimer !== null) clearTimeout(this.bubbleTimer);
+    this.bubbleTimer = null;
     this.root.clear();
     this.nameSprite = null;
     void this.load();

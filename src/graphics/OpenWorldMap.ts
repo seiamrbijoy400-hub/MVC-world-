@@ -527,7 +527,7 @@ export class OpenWorldMap {
     addBox(b.w - 1.2, towerH, b.d - 1.2, b.x, upperY + 4.6 + towerH * 0.5, b.z, facadeMat);
 
     // Counter + tables + chairs on both floors
-    addBox(12, 1.1, 1.6, b.x, 0.55, minZ + 3.2, woodMat);
+    addBox(12, 1.1, 1.6, b.x, 0.55, minZ + 3.2, woodMat, true, 1.1);
     addBox(12.2, 0.14, 0.22, b.x, 1.16, minZ + 4.05, glowMat);
 
     const tables: Array<{ x: number; z: number; y: number }> = [
@@ -549,6 +549,15 @@ export class OpenWorldMap {
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
       tableTop.setMatrixAt(i, dummy.matrix);
+      // Ground tables are solid; upper-floor ones share XZ space with ground
+      // tables, so they are omitted from this single-height collider list.
+      if (t.y < 1) {
+        this.colliders.push({
+          minX: t.x - 1.2, maxX: t.x + 1.2,
+          minZ: t.z - 1.2, maxZ: t.z + 1.2,
+          height: 0.95
+        });
+      }
       dummy.position.set(t.x, t.y + 0.45, t.z);
       dummy.updateMatrix();
       tablePole.setMatrixAt(i, dummy.matrix);
@@ -622,7 +631,10 @@ export class OpenWorldMap {
         else t = (s.maxZ - z) / Math.max(0.01, s.maxZ - s.minZ);
         return THREE.MathUtils.lerp(zone.groundY, zone.upperY, THREE.MathUtils.clamp(t, 0, 1));
       }
-      return currentY >= zone.switchY ? zone.upperY : zone.groundY;
+      // Only pick the mezzanine once the actor is actually up there. Using
+      // switchY alone teleports anyone standing halfway up the stairs into
+      // the upper floor the moment they step sideways out of the stairwell.
+      return currentY >= zone.upperY - 0.45 ? zone.upperY : zone.groundY;
     }
     return null;
   }
@@ -725,18 +737,32 @@ export class OpenWorldMap {
           const canopy = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.78, 0.34, 2.3), canopyMat);
           canopy.position.set(b.x, 4.3, b.z + faceZ * (b.d * 0.5 + 1.05));
           canopy.castShadow = true;
-          const shopBand = new THREE.Mesh(
-            new THREE.BoxGeometry(b.w * 0.68, 3.1, 0.28),
-            new THREE.MeshStandardMaterial({
-              color: 0x0f172a,
-              emissive: accent,
-              emissiveIntensity: 0.32,
-              roughness: 0.2,
-              metalness: 0.55
-            })
-          );
-          shopBand.position.set(b.x, 1.85, b.z + faceZ * (b.d * 0.5 + 0.08));
-          this.group.add(canopy, shopBand);
+          const bandMat = new THREE.MeshStandardMaterial({
+            color: 0x0f172a,
+            emissive: accent,
+            emissiveIntensity: 0.32,
+            roughness: 0.2,
+            metalness: 0.55
+          });
+          const bandZ = b.z + faceZ * (b.d * 0.5 + 0.08);
+          const bandW = b.w * 0.68;
+          // The restaurant has a real door gap; a full-width storefront panel
+          // would visually seal it, so split the front band around the door.
+          const doorSide = b.interior === 'restaurant' && faceZ === 1 ? 1.45 : 0;
+          const segments = doorSide > 0
+            ? [
+                { w: b.x - doorSide - (b.x - bandW * 0.5), x: b.x - bandW * 0.5 + (b.x - doorSide - (b.x - bandW * 0.5)) * 0.5 },
+                { w: b.x + bandW * 0.5 - (b.x + doorSide), x: b.x + doorSide + (b.x + bandW * 0.5 - (b.x + doorSide)) * 0.5 }
+              ]
+            : [{ w: bandW, x: b.x }];
+          for (const seg of segments) {
+            if (seg.w <= 0) continue;
+            const shopBand = new THREE.Mesh(new THREE.BoxGeometry(seg.w, 3.1, 0.28), bandMat);
+            shopBand.name = 'shop-band';
+            shopBand.position.set(seg.x, 1.85, bandZ);
+            this.group.add(shopBand);
+          }
+          this.group.add(canopy);
         }
       }
 
@@ -1426,11 +1452,17 @@ export class OpenWorldMap {
     if (pos.z < WORLD_BOUNDS.minZ + radius) { pos.z = WORLD_BOUNDS.minZ + radius; if (vel.z < 0) vel.z *= -0.4; hit = true; }
     if (pos.z > WORLD_BOUNDS.maxZ - radius) { pos.z = WORLD_BOUNDS.maxZ - radius; if (vel.z > 0) vel.z *= -0.4; hit = true; }
 
-    // Harbor seawall at z = 268 (open across pier x = 140..196 up to z = 296)
-    if (pos.z > 268 - radius && !(pos.x >= 140 && pos.x <= 196 && pos.z <= 296)) {
-      pos.z = 268 - radius;
-      if (vel.z > 0) vel.z *= -0.35;
-      hit = true;
+    // Harbor seawall at z = 268. The South Stunt Pier opens a lane at
+    // x = 140..196, but that lane still ends at z = 296: clamp there instead
+    // of snapping the actor ~30m back to the seawall line.
+    if (pos.z > 268 - radius) {
+      const onPierLane = pos.x >= 140 && pos.x <= 196;
+      const pierEnd = 296 - radius;
+      if (onPierLane ? pos.z > pierEnd : true) {
+        pos.z = onPierLane ? pierEnd : 268 - radius;
+        if (vel.z > 0) vel.z *= -0.35;
+        hit = true;
+      }
     }
 
     for (const b of this.colliders) {

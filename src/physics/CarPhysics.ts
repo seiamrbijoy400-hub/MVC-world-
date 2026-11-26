@@ -220,6 +220,10 @@ export class CarPhysics {
     this.gear = 1;
     this.driftAngle = 0;
     this.isDrifting = false;
+    // Clearing airborne state prevents a mid-air reset from firing a phantom
+    // landing (and awarding airtime) on the next grounded sub-step.
+    this.isAirborne = false;
+    this.airTime = 0;
 
     for (const w of this.wheels) {
       w.angularVelocity = 0;

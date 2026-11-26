@@ -1,11 +1,12 @@
 import type { CharAnimState, CharacterId } from '../network/LobbyProtocol';
+import { assetUrl } from './assetUrl';
 
 /** Rigged GLB character variants bundled with the game. */
 export type CharacterModelId = 'male' | 'female';
 
 export const MODEL_URLS: Record<CharacterModelId, string> = {
-  male: '/assets/models/male.glb',
-  female: '/assets/models/female.glb'
+  male: assetUrl('assets/models/male.glb'),
+  female: assetUrl('assets/models/female.glb')
 };
 
 /** Kaito/Ren use the business-man rig; Mika/Sora use the girl rig. */

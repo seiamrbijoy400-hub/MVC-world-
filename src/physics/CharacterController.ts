@@ -151,6 +151,11 @@ export class CharacterController {
       if (this.koTimer <= 0) {
         this.revive();
       }
+      // Keep edge trackers in sync while down. Otherwise a button held at KO
+      // and released during the countdown leaves wasPunch/wasJump stale, so
+      // the first real press after revive is swallowed.
+      this.wasPunch = Boolean(inputs.punch);
+      this.wasJump = Boolean(inputs.jump);
       return;
     }
 

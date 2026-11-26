@@ -35,5 +35,3 @@ The "Download APK" button will automatically appear in the lobby.
 Notes:
 - Bluetooth/Nearby multiplayer in a real APK needs a native plugin (e.g. `@capacitor-community/bluetooth-le` or the Android Nearby Connections API) wired into `LobbyClient` instead of the WebSocket path.
 - The web (PWA) build remains the primary, always-available install path via "Install App".
-EOF
-echo done

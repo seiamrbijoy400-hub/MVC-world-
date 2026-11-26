@@ -1,3 +1,5 @@
+import { assetUrl } from '../graphics/assetUrl';
+
 export class SoundManager {
   private ctx: AudioContext | null = null;
   private isMuted = false;
@@ -143,7 +145,7 @@ export class SoundManager {
       this.sirenLfo.start();
 
       // Background Eurobeat Music
-      this.musicAudio = new Audio('/assets/sounds/step-inside-your-mind-instrumental-eurobeat-royalty-free-music.mp3');
+      this.musicAudio = new Audio(assetUrl('assets/sounds/step-inside-your-mind-instrumental-eurobeat-royalty-free-music.mp3'));
       this.musicAudio.loop = true;
       this.musicAudio.volume = 0.22;
       if (this.isMusicEnabled && !this.isMuted) {
@@ -173,10 +175,10 @@ export class SoundManager {
     };
 
     const [lowBuf, highAccBuf, highDecelBuf, crashBuf] = await Promise.all([
-      loadBuf('/assets/sounds/low.wav'),
-      loadBuf('/assets/sounds/high ACC.wav'),
-      loadBuf('/assets/sounds/high Deacc.wav'),
-      loadBuf('/assets/sounds/TrackColision.wav')
+      loadBuf(assetUrl('assets/sounds/low.wav')),
+      loadBuf(assetUrl('assets/sounds/high ACC.wav')),
+      loadBuf(assetUrl('assets/sounds/high Deacc.wav')),
+      loadBuf(assetUrl('assets/sounds/TrackColision.wav'))
     ]);
 
     this.crashBuffer = crashBuf;

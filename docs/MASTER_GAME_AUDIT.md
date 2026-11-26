@@ -1,5 +1,5 @@
 # APEX ZERO: NEON VELO — Master Game Audit
-**Date:** 2026-11-26 | **Inspector:** Game Director AI | **Verified Build:** Clean (`tsc && vite build`, 64 modules) | **Automated Tests:** 10/10 Pass
+**Date:** 2026-11-26 | **Inspector:** Game Director AI | **Verified Build:** Clean (`tsc && vite build`, 72 modules) | **Automated Tests:** 28/28 Pass
 
 ---
 
@@ -19,7 +19,7 @@
 - **World, Vehicles, Characters & AI:**
   - `OpenWorldMap.ts` (5 districts via `getDistrictAt()`, AABB `colliders`, Touge ramps/summit, Harbor quay/pier + corrugated containers, Stunt Arena + Rocket-Soccer, architectural curtain-wall buildings with deduplicated textures/materials, multi-cluster foliage trees, instanced streetlamps & benches).
   - `CarMesh.ts` (static cached async FBX loading for `car 1203.fbx` + front/back wheel meshes, rear license plate texture, gunmetal grilles, toggleable seated driver cabin silhouette `setDriverVisible()`, shared underglow/shadow/headlight resources, leak-safe `dispose()`).
-  - `HumanCharacterMesh.ts` (articulated PBR character rig, jacket lapel collar, adult facial proportions, cached dynamic textures).
+  - `HumanCharacterMesh.ts` (articulated PBR fallback rig) + `GLTFCharacterCache.ts` / `GLTFCharacterMesh.ts` / `CharacterAnimationMap.ts` (shared male/female CC BY GLB templates, per-instance skeleton/materials/mixer, native clips for locomotion/sitting/stairs, procedural combat poses layered on top).
   - `RoadGraph.ts`, `PedestrianSystem.ts`, `PoliceSystem.ts`, `RaceBotAI.ts`, `WorldActivities.ts` (4 speed traps, 3 drift zones, 12 shards, 4 1v1 Rival Sprints, 3 repeatable Street Courier Time-Trials).
 - **Garage & Persistence (`SaveManager.ts`, `GarageController.ts`):** `localStorage` (`apex_zero_save_v1`) + Drift Garage UI for Stage 0–3 Engine/Nitro upgrades, underglows, heat resprays, and Courier/Sprint telemetry.
 - **LAN Multiplayer (`server/lanLobbyPlugin.ts`, `src/network/LobbyClient.ts`):** HTTP `/api/lan-info` hotspot IP discovery + `ws` `/ws` room management, `WORLD_STATE` broadcasting with disconnect state pruning, chat, combat hits, and soccer ball sync.

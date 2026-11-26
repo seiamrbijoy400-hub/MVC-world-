@@ -961,3 +961,137 @@ test('GLTFCharacterMesh: KO topples the body forward, not backward', async () =>
     actor.dispose();
   }
 });
+
+test('OpenWorldMap: pier end stops the actor instead of snapping back to the seawall', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const car = new THREE.Vector3(168, 0, 297);
+  const vel = new THREE.Vector3(0, 0, 12);
+  map.resolveCollision(car, vel, 1.55);
+  assert.ok(car.z > 293, `pier-end car must stop near z=294.5, got ${car.z.toFixed(1)}`);
+  assert.ok(car.z < 296, 'pier-end car must not drive past the deck');
+
+  const foot = new THREE.Vector3(168, 0, 298);
+  const footVel = new THREE.Vector3(0, 0, 5);
+  map.resolveCollision(foot, footVel, 0.45);
+  assert.ok(foot.z > 295, `pier-end walker must stop near z=295.5, got ${foot.z.toFixed(1)}`);
+
+  const shore = new THREE.Vector3(90, 0, 300);
+  map.resolveCollision(shore, new THREE.Vector3(0, 0, 4), 0.45);
+  assert.ok(shore.z <= 268, 'seawall must still stop actors outside the pier lane');
+});
+
+test('OpenWorldMap: camera clamp avoids building colliders and keeps the focus visible', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const building = map.colliders.find((c) => c.minX === 64 && c.maxX === 104);
+  assert.ok(building, 'restaurant building collider must exist');
+  const focus = new THREE.Vector3(building.minX - 2, 1.2, -100);
+  const inside = new THREE.Vector3((building.minX + building.maxX) * 0.5, 1.2, -100);
+  const safe = map.clampCameraToWorld(focus, inside);
+  const intersects = safe.x > building.minX && safe.x < building.maxX
+    && safe.z > building.minZ && safe.z < building.maxZ && safe.y < building.height;
+  assert.equal(intersects, false, 'clamped camera must stay outside opaque building boxes');
+  assert.ok(safe.distanceTo(focus) > 0.5, 'clamp must keep a usable follow distance');
+});
+
+test('OpenWorldMap: restaurant door band is split and mezzanine floor switch needs real height', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  map.group.updateMatrixWorld(true);
+  const bands: THREE.Mesh[] = [];
+  map.group.traverse((obj) => {
+    if ((obj as THREE.Mesh).isMesh && obj.name === 'shop-band') bands.push(obj as THREE.Mesh);
+  });
+  assert.ok(bands.length >= 3, 'storefront bands must exist on labelled buildings');
+  for (const band of bands) {
+    const box = new THREE.Box3().setFromObject(band);
+    if (Math.abs(band.position.z - (-73.92)) < 0.01) {
+      assert.ok(box.max.x < 82.9 || box.min.x > 85.1, 'restaurant front band must not cover the door gap');
+    }
+  }
+  // Halfway up the stairs, stepping sideways must not teleport to the mezzanine.
+  assert.equal(map.sampleInteriorHeight(90, -100, 2.2), 0);
+  assert.equal(map.sampleInteriorHeight(90, -100, 4.2), 4.2);
+  const counter = map.colliders.some((c) => c.minX < 84 && c.maxX > 84 && c.minZ < -122.8 && c.maxZ > -122.8);
+  assert.ok(counter, 'restaurant counter must be solid');
+});
+
+test('SaveManager: SEMI gearbox survives a save/load round trip', () => {
+  localStorage.clear();
+  const first = new SaveManager();
+  first.data.gearbox = GearboxType.SEMI;
+  first.saveNow();
+  const second = new SaveManager();
+  assert.equal(second.data.gearbox, GearboxType.SEMI);
+  localStorage.clear();
+});
+
+test('CharacterController: first punch after respawn is not swallowed by KO input edges', () => {
+  const char = new CharacterController();
+  char.groundHeightSampler = () => 0;
+  char.resetAt(new THREE.Vector3(0, 0, 0));
+  char.knockOut();
+  const idle = { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false, interact: false };
+  char.update(1 / 60, { ...idle, punch: true }, 0);
+  for (let i = 0; i < 300; i++) char.update(1 / 60, idle, 0);
+  assert.equal(char.isDead, false, 'KO timer must revive the character');
+  let strikes = 0;
+  char.onPunchStrike = () => { strikes++; };
+  char.update(1 / 60, { ...idle, punch: true }, 0);
+  assert.equal(strikes, 1, 'first punch after revive must register');
+});
+
+test('CarPhysics: mid-air reset cannot award phantom airtime', () => {
+  const car = new CarPhysics();
+  car.enforceTrackWalls = false;
+  car.resetToTrack(new THREE.Vector3(0, 0, 0), 0);
+  car.isAirborne = true;
+  car.airTime = 1.4;
+  let landings = 0;
+  car.onAirLanding = () => { landings++; };
+  car.resetToTrack(new THREE.Vector3(0, 0, 0), 0);
+  car.update(1 / 60, {
+    throttle: 0, brake: 0, steer: 0, handbrake: false,
+    clutch: false, shiftUp: false, shiftDown: false, reset: false, nitro: false
+  }, true);
+  assert.equal(landings, 0);
+});
+
+test('GameApp state guards stay in place (KO race, stolen car, seat, gear latch, pause)', () => {
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  const hud = fs.readFileSync(path.join(process.cwd(), 'src/ui/HUD.ts'), 'utf8');
+  const save = fs.readFileSync(path.join(process.cwd(), 'src/game/SaveManager.ts'), 'utf8');
+  assert.match(main, /startTimedCircuitRace\(laps = 3\): void \{\s*if \(this\.charCtrl\.isDead\)/);
+  assert.match(main, /this\.carMesh === this\.ownZenvo\.mesh/);
+  assert.match(main, /if \(this\.physics !== this\.ownZenvo\.physics\) \{[\s\S]{0,300}parkActiveCar\(\)/);
+  assert.ok(main.includes('this.exitSeat(false);'), 'seat state must be cleared on state transitions');
+  assert.match(hud, /e\.code === 'KeyE' && !this\.isOnFoot/);
+  assert.match(save, /\['AUTO', 'SEMI', 'MANUAL'\]\.includes\(parsed\.gearbox\)/);
+});
+
+test('Asset URLs and chat rows are safe for subpath hosting and untrusted peer names', () => {
+  const hud = fs.readFileSync(path.join(process.cwd(), 'src/ui/HUD.ts'), 'utf8');
+  const lobby = fs.readFileSync(path.join(process.cwd(), 'src/ui/LobbyUI.ts'), 'utf8');
+  const sw = fs.readFileSync(path.join(process.cwd(), 'public/sw.js'), 'utf8');
+  assert.match(hud, /who\.textContent = `\$\{sender\}: `/);
+  assert.match(lobby, /who\.textContent = `\$\{sender\}: `/);
+  assert.doesNotMatch(hud, /innerHTML = `<strong[^>]*>\$\{sender\}/);
+  assert.ok(sw.includes('stale-while-revalidate'), 'SW must refresh cached assets');
+  assert.equal(modelUrlFor('sora'), '/assets/models/female.glb', 'Node fallback keeps root-absolute asset URLs');
+});
+
+test('Gameplay simulation: walk the restaurant staircase to the mezzanine without teleporting', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const zone = map.interiorFloors[0];
+  const char = new CharacterController();
+  char.groundHeightSampler = (x, z, y) => map.sampleInteriorHeight(x, z, y) ?? 0;
+  char.worldCollider = (pos, vel, radius) => map.resolveCollision(pos, vel, radius);
+  const x = (zone.stairs.minX + zone.stairs.maxX) * 0.5;
+  char.resetAt(new THREE.Vector3(x, 0, zone.stairs.minZ + 0.2));
+  // Foot camera yaw π means the forward input walks toward +Z (stair top).
+  const move = { moveX: 0, moveY: 1, sprint: false, jump: false, punch: false, interact: false };
+  for (let i = 0; i < 560; i++) char.update(1 / 60, move, Math.PI);
+  assert.ok(char.position.z > zone.stairs.maxZ - 1.5, `actor must reach the stair top, got z=${char.position.z.toFixed(1)}`);
+  assert.ok(char.position.y > 4.0, `actor must stand on the mezzanine, got y=${char.position.y.toFixed(2)}`);
+  const step = (toY: number): number => map.sampleInteriorHeight(90, -100, toY) ?? 0;
+  assert.equal(step(char.position.y - 2.0), 0, 'mid-stair height must not select the mezzanine');
+  assert.equal(step(char.position.y), 4.2);
+});

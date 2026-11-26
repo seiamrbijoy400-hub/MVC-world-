@@ -345,7 +345,11 @@ export class LobbyUI {
         line.style.color = '#38bdf8';
         line.textContent = `* ${text}`;
       } else {
-        line.innerHTML = `<strong style="color:#facc15;">${sender}:</strong> ${text.replace(/</g, '&lt;')}`;
+        // Peer names arrive over the LAN and must stay literal text.
+        const who = document.createElement('strong');
+        who.style.color = '#facc15';
+        who.textContent = `${sender}: `;
+        line.append(who, document.createTextNode(text));
       }
       this.chatBox.appendChild(line);
       this.chatBox.scrollTop = this.chatBox.scrollHeight;

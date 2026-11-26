@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import { lanLobbyPlugin } from './server/lanLobbyPlugin.ts';
 
 export default defineConfig({
+  // Relative build URLs make the offline PWA work from a project subpath too.
+  base: './',
   plugins: [lanLobbyPlugin()],
   server: {
     host: '0.0.0.0',

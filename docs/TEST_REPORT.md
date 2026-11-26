@@ -7,14 +7,29 @@
 Command executed after final edits:
 `pnpm run build` (`tsc && vite build`)
 - **Result:** Exit code `0`
-- **Modules:** `71 modules transformed`
-- **Bundle Output:** `dist/index.html` (`52.34 kB` / `12.06 kB` gzip), `dist/assets/index-kOfAdnqP.js` (`1,033.85 kB` / `278.25 kB` gzip) in `2.34s`
+- **Modules:** `72 modules transformed`
+- **Bundle Output:** `dist/index.html` (`52.91 kB` / `12.24 kB` gzip), `dist/assets/index-sa94nyxn.js` (`1,045.74 kB` / `281.85 kB` gzip) in `1.10s`
+- **Subpath hosting:** built `index.html` references `./assets/...`; a static server at `/game/` returned HTTP 200 for the built JS and `male.glb` (6,264,280 bytes) — verified 2026-11-26.
 - **TypeScript Errors:** `0`
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (14/14)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`14` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (28/28)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`28` pass, `0` fail, `0` skipped):
+
+### Sprint 9 regression coverage (added 2026-11-26)
+| Test Case | Outcome | What Was Verified |
+| :--- | :---: | :--- |
+| Pier-end collision | **PASS** | Car stops at `z≈294.5` and walker at `z≈295.5` instead of snapping ~30m back to the seawall; non-pier shoreline still blocks at `z≈268`. |
+| Follow-camera clamp | **PASS** | Chase/orbit desired points sampled through `clampCameraToWorld()` stay outside restaurant AABB while keeping a usable focus distance. |
+| Restaurant door & mezzanine | **PASS** | Front storefront band is split around the `x=84` doorway; halfway up the stairs, stepping sideways does not teleport to `y=4.2`; counter is solid. |
+| `SaveManager` SEMI | **PASS** | `SEMI` survives a `saveNow()` / new `SaveManager()` round trip. |
+| KO input edges | **PASS** | Punch held into KO then released revives cleanly and the first new punch registers. |
+| Phantom airtime | **PASS** | A mid-air reset clears `isAirborne`/`airTime` and fires no `onAirLanding`. |
+| GameApp state guards | **PASS** | Source-level guards confirm KO race block, owned-car restore, seat clearing, `E` gear latch fix and `SEMI` validation remain in place. |
+| Subpath assets & LAN chat | **PASS** | Node asset URLs remain root-absolute while built HTML uses relative paths; untrusted peer names are appended as text, never parsed as HTML; SW uses stale-while-revalidate (`apex-zero-v2`). |
+| Rig sitting & stairs | **PASS** | Both rigs' hips land on the seat anchor including yaw; female stair clips no longer drift horizontally/float after per-template root-motion cleanup. |
+| Full stair traversal simulation | **PASS** | `CharacterController` walks from the stair foot to `y≈4.2` mezzanine through real `OpenWorldMap` height sampling and AABB collision; mid-stair sideways exit resolves to ground, not an upward teleport. |
 
 | Test Case | Outcome | What Was Verified |
 | :--- | :---: | :--- |
@@ -57,5 +72,5 @@ Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests"
 
 ## Sprint 8 — Character Visibility & Punch Fix (2026-11-26)
 - `SkeletonUtils.clone()` now remaps skeleton bones per instance. Plain `Object3D.clone()` had shared the template skeleton, leaving rigged meshes frozen/invisible — the cause of “character not showing” and broken-looking fights.
-- Corrected the additive punch swing sign: both rigs face `-Z` (eye bones sit at `-Z`), so the right arm now swings forward into the hit direction instead of backward. Hit recoil signs were flipped consistently.
+- The source GLB rigs face `+Z` (eye bones at `+Z`); instances are rotated 180° so world forward is `-Z`. Additive punch/hit/KO pose signs were corrected for that world-space facing (later commits completed the fix).
 - New regressions assert every skinned clone owns its skeleton bones and that punching moves the right hand toward `-Z`.

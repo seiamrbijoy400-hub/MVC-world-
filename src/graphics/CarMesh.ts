@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { CarPhysics } from '../physics/CarPhysics';
+import { assetUrl } from './assetUrl';
 
 export class CarMesh {
   private static fbxCache = new Map<string, Promise<THREE.Group>>();
@@ -292,7 +293,7 @@ export class CarMesh {
 
   private loadHQModels(): void {
     // 1. Load Car 1203 Body (cached once across all vehicles)
-    CarMesh.loadCachedFBX('/assets/models/car 1203.fbx').then((fbx) => {
+    CarMesh.loadCachedFBX(assetUrl('assets/models/car 1203.fbx')).then((fbx) => {
       const container = new THREE.Group();
       fbx.scale.setScalar(0.01);
       // Car 1203 faces +Z in FBX -> rotate 180 deg so front faces -Z
@@ -417,7 +418,7 @@ export class CarMesh {
       });
     };
 
-    CarMesh.loadCachedFBX('/assets/models/wheel_front_right.fbx').then((frontFbx) => {
+    CarMesh.loadCachedFBX(assetUrl('assets/models/wheel_front_right.fbx')).then((frontFbx) => {
       frontFbx.scale.setScalar(0.01);
       assignWheelMaterials(frontFbx);
 
@@ -432,7 +433,7 @@ export class CarMesh {
       }
     }).catch(() => {});
 
-    CarMesh.loadCachedFBX('/assets/models/wheel_back_right.fbx').then((rearFbx) => {
+    CarMesh.loadCachedFBX(assetUrl('assets/models/wheel_back_right.fbx')).then((rearFbx) => {
       rearFbx.scale.setScalar(0.01);
       assignWheelMaterials(rearFbx);
 

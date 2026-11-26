@@ -95,15 +95,20 @@ export class CharacterStudio {
     document.getElementById('studio-done-btn')?.addEventListener('click', () => this.open(false));
     document.getElementById('studio-random-btn')?.addEventListener('click', () => {
       const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
+      // Rigged GLBs bake hair shape and accessories; only randomize the knobs
+      // the player can actually see and change in this mode.
       this.appearance = {
-        hairStyle: pick(HAIR_STYLES).id,
+        ...this.appearance,
+        ...(this.rigged ? {} : {
+          hairStyle: pick(HAIR_STYLES).id,
+          accessory: pick(ACCESSORIES).id
+        }),
         hairColor: pick(HAIR_COLORS),
         eyeColor: pick(EYE_COLORS),
         jacketColor: pick(JACKET_COLORS),
         accentColor: pick(['#f8fafc', '#22d3ee', '#facc15', '#f43f5e']),
         pantsColor: pick(['#0f172a', '#18181b', '#1e293b']),
-        skinColor: pick(SKIN_COLORS),
-        accessory: pick(ACCESSORIES).id
+        skinColor: pick(SKIN_COLORS)
       };
       this.save();
       this.renderControls();

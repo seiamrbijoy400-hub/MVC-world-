@@ -303,6 +303,13 @@ class GameApp {
       if (open && this.inCar) {
         this.toggleEnterExitCar();
       }
+      // Character Studio is a modal showcase: freeze simulation and on-foot
+      // input so the avatar cannot wander into traffic behind the drawer.
+      const settingsOpen = document.getElementById('settings-modal')?.classList.contains('open') ?? false;
+      this.isPaused = open || settingsOpen;
+      this.hud.setPaused(this.isPaused);
+      if (open) this.sound.pauseAudio();
+      else if (!settingsOpen) this.sound.resumeAudio();
     };
 
     this.particles = new ParticleSystem(this.scene);
@@ -484,7 +491,9 @@ class GameApp {
     };
     this.lobbyUI.onColorPreview = (color) => {
       this.ownZenvo.mesh.setColor(color);
-      this.carMesh.setColor(color);
+      // Only repaint the active mesh when it is actually the owned Zenvo;
+      // a stolen cruiser/civic must keep its original livery.
+      if (this.carMesh === this.ownZenvo.mesh) this.carMesh.setColor(color);
       this.save.data.carColor = color;
       this.save.scheduleSave();
     };
@@ -587,11 +596,27 @@ class GameApp {
   private spawnInOpenWorld(): void {
     this.gameState = GameState.OPEN_WORLD;
     this.inCar = false;
+    this.exitSeat(false);
     this.activities.cancelSprint();
     this.activities.cancelCourier();
     this.setRivalPrompt(null);
     this.setCourierPrompt(null);
     this.ghost.updatePlayback(false, 0);
+
+    // Always restore the owned Zenvo here. A lobby relaunch while driving a
+    // stolen car must not reset/park that stolen car as the player's home car.
+    if (this.physics !== this.ownZenvo.physics) {
+      this.parkActiveCar();
+      this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
+      this.physics = this.ownZenvo.physics;
+      this.carMesh = this.ownZenvo.mesh;
+      this.activeCarName = this.ownZenvo.name;
+      this.activePoliceLights = undefined;
+      this.configureActiveCar();
+    } else {
+      this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
+    }
+
     // Park car at South Track-City Boulevard Junction facing the GP Track Gate
     this.physics.enforceTrackWalls = false;
     this.physics.resetToTrack(new THREE.Vector3(16, 0, 26), Math.PI * 0.42);
@@ -620,9 +645,14 @@ class GameApp {
   }
 
   private startTimedCircuitRace(laps = 3): void {
+    if (this.charCtrl.isDead) {
+      this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
+      return;
+    }
     this.sound.init();
     this.hud.setRacePrompt(false);
     this.setRivalPrompt(null);
+    this.exitSeat(false);
     this.hud.setStealPrompt(null);
     this.hud.hideKoOverlay();
     this.police.clearHeat();
@@ -667,7 +697,7 @@ class GameApp {
   private applyLobbyLaunch(cfg: LobbyConfig): void {
     this.sound.init();
     this.physics.gearboxType = cfg.gearbox;
-    this.carMesh.setColor(cfg.carColor);
+    this.ownZenvo.mesh.setColor(cfg.carColor);
     if (this.avatarMesh instanceof GLTFCharacterMesh) {
       this.avatarMesh.setModel(modelUrlFor(cfg.characterId));
     }
@@ -1152,6 +1182,7 @@ class GameApp {
     this.save.scheduleSave();
     this.koReason = 'BUSTED';
     this.inCar = false;
+    this.exitSeat(false);
     this.avatarMesh.root.visible = true;
     this.avatarMesh.root.rotation.x = 0;
 
@@ -1718,7 +1749,7 @@ class GameApp {
 
     const modal = document.getElementById('settings-modal')!;
     const openModal = () => {
-      this.hud.clearAllInputs();
+      this.hud.setPaused(true);
       modal.classList.add('open');
       this.isPaused = true;
       this.sound.pauseAudio();
@@ -1726,6 +1757,7 @@ class GameApp {
     const closeModal = () => {
       modal.classList.remove('open');
       this.isPaused = false;
+      this.hud.setPaused(false);
       this.sound.resumeAudio();
     };
 
@@ -1742,7 +1774,9 @@ class GameApp {
       if (e.code === 'Escape') {
         if (modal.classList.contains('open')) closeModal();
         else openModal();
+        return;
       }
+      if (this.isPaused) return;
       if (e.code === 'KeyV') cycleCam();
       if (e.code === 'KeyM') soundBtn.click();
       if (e.code === 'KeyY') this.startNearbyRival();
@@ -2081,7 +2115,9 @@ class GameApp {
         this.avatarMesh.updateAnimation(dt, 'IDLE');
       } else {
         // ON-FOOT CHARACTER
-        const charInputs = this.hud.pollCharacterInputs();
+        const charInputs = this.studio.isOpen
+          ? { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false, interact: false }
+          : this.hud.pollCharacterInputs();
         const interactPressed = Boolean(charInputs.interact);
         const interactEdge = interactPressed && !this.wasInteract;
         this.wasInteract = interactPressed;
@@ -2246,6 +2282,7 @@ class GameApp {
       );
 
       const nearStartGate = this.gameState === GameState.OPEN_WORLD
+        && !this.charCtrl.isDead
         && !this.activities.activeSprint
         && !this.activities.activeCourier
         && Math.hypot(activePos.x - 0, activePos.z - (-4)) < 14;
@@ -2580,7 +2617,10 @@ class GameApp {
         camDir.lerp(velDir, 0.28).normalize();
       }
 
-      const targetCamPos = carPos.clone().addScaledVector(camDir, -6.2).addScaledVector(up, 2.25);
+      const wantedCam = carPos.clone().addScaledVector(camDir, -6.2).addScaledVector(up, 2.25);
+      const targetCamPos = this.openWorld.clampCameraToWorld(
+        carPos.clone().addScaledVector(up, 0.8), wantedCam
+      );
       this.chaseCamPos.lerp(targetCamPos, posAlpha);
       this.camera.position.copy(this.chaseCamPos);
 
@@ -2606,11 +2646,13 @@ class GameApp {
 
       this.orbitAngle += dt * 0.3;
       const dist = 7.0;
-      const ox = carPos.x + Math.sin(this.orbitAngle) * dist;
-      const oz = carPos.z + Math.cos(this.orbitAngle) * dist;
-      const oy = carPos.y + 2.1;
-
-      this.camera.position.set(ox, oy, oz);
+      const wanted = new THREE.Vector3(
+        carPos.x + Math.sin(this.orbitAngle) * dist,
+        carPos.y + 2.1,
+        carPos.z + Math.cos(this.orbitAngle) * dist
+      );
+      const safe = this.openWorld.clampCameraToWorld(carPos.clone().addScaledVector(up, 0.8), wanted);
+      this.camera.position.copy(safe);
       this.camera.lookAt(carPos.x, carPos.y + 0.75, carPos.z);
     }
   }

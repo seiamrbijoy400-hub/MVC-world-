@@ -119,6 +119,7 @@ export class HUD {
   public touchMode: TouchMode = 'AUTO';
   private isTouchDevice: boolean;
   private isOnFoot = false;
+  private isPaused = false;
   private lastCanEnter = false;
   private lastHpShown = -1;
   private lastGearboxShown: GearboxType = GearboxType.AUTO;
@@ -208,6 +209,12 @@ export class HUD {
     this.setupKeyboardListeners();
     this.setupTouchListeners();
     this.setupSocialListeners();
+  }
+
+  public setPaused(paused: boolean): void {
+    if (this.isPaused === paused) return;
+    this.isPaused = paused;
+    if (paused) this.clearAllInputs();
   }
 
   public clearAllInputs(): void {
@@ -390,7 +397,11 @@ export class HUD {
       row.style.color = '#38bdf8';
       row.textContent = `* ${text}`;
     } else {
-      row.innerHTML = `<strong style="color:#facc15;">${sender}:</strong> ${text.replace(/</g, '&lt;')}`;
+      // Network sender names are untrusted: build nodes, never parse HTML.
+      const who = document.createElement('strong');
+      who.style.color = '#facc15';
+      who.textContent = `${sender}: `;
+      row.append(who, document.createTextNode(text));
     }
     this.chatLog.appendChild(row);
     this.chatLog.scrollTop = this.chatLog.scrollHeight;
@@ -452,7 +463,7 @@ export class HUD {
   private setupKeyboardListeners(): void {
     const emojis = ['🔥', '😂', '💨', '❤️', '👊', '👑'];
     window.addEventListener('keydown', (e) => {
-      if (this.isTypingChat()) return;
+      if (this.isTypingChat() || this.isPaused) return;
 
       this.keysDown.add(e.code);
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
@@ -460,7 +471,8 @@ export class HUD {
       }
       // Key repeat must not re-trigger one-shot actions like enter/exit or theft.
       if (e.repeat) return;
-      if (e.code === 'KeyE') this.keyShiftUp = true;
+      // E is the on-foot interact key; do not latch a gearbox upshift from it.
+      if (e.code === 'KeyE' && !this.isOnFoot) this.keyShiftUp = true;
       if (e.code === 'KeyQ') this.keyShiftDown = true;
       if (e.code === 'KeyR') this.keyReset = true;
       if (e.code === 'KeyF' && !this.hudOverlay.classList.contains('hidden')) {

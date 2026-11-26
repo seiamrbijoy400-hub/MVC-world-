@@ -140,7 +140,7 @@ export class SaveManager {
           assistMode: (parsed.assistMode === 'PRO' ? 'PRO' : 'ARCADE'),
           carArchetype: (['HYPER', 'DRIFT', 'TOUGE'].includes(parsed.carArchetype) ? parsed.carArchetype : 'HYPER'),
           atmospherePref: (['DAY', 'SUNSET', 'NIGHT', 'AUTO'].includes(parsed.atmospherePref) ? parsed.atmospherePref : 'SUNSET'),
-          gearbox: (parsed.gearbox === GearboxType.MANUAL ? GearboxType.MANUAL : GearboxType.AUTO),
+          gearbox: (['AUTO', 'SEMI', 'MANUAL'].includes(parsed.gearbox) ? parsed.gearbox as GearboxType : GearboxType.AUTO),
           unlockedUnderglows: Array.isArray(parsed.unlockedUnderglows) && parsed.unlockedUnderglows.length > 0
             ? parsed.unlockedUnderglows
             : ['#22d3ee', 'OFF'],
