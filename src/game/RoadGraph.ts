@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { AABBCollider } from '../graphics/OpenWorldMap';
 
+const NO_OCCLUDERS: readonly AABBCollider[] = [];
+
 export interface RoadNode {
   id: number;
   x: number;
@@ -152,6 +154,61 @@ export class RoadGraph {
     }
     return out.set(startNode.x, startNode.y, startNode.z);
   }
+
+  /**
+   * Steer around an obstacle when both endpoints fall into the same road cell.
+   * `findNextWaypoint()` returns the raw goal there, which is exactly wrong
+   * when the direct segment is known to be blocked. Prefer a neighbouring
+   * intersection with a clear run from both ends.
+   */
+  public findBlockedWaypoint(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    colliders: readonly AABBCollider[],
+    out = new THREE.Vector3()
+  ): THREE.Vector3 {
+    const startId = this.nearestNodeId(from.x, from.z);
+    if (startId !== this.nearestNodeId(to.x, to.z)) return this.findNextWaypoint(from, to, out);
+
+    const node = this.nodes[startId];
+    let bestId = -1;
+    let bestCost = Infinity;
+    for (const v of node.neighbors) {
+      const n = this.nodes[v];
+      if (!hasLineOfSight(from.x, from.z, n.x, n.z, colliders, 1.6)) continue;
+      if (!hasLineOfSight(n.x, n.z, to.x, to.z, colliders, 1.6)) continue;
+      const cost = Math.hypot(from.x - n.x, from.z - n.z) + Math.hypot(n.x - to.x, n.z - to.z);
+      if (cost < bestCost) { bestCost = cost; bestId = v; }
+    }
+    if (bestId < 0) {
+      // Narrow alleys can hide every adjacent intersection behind a corner.
+      // Widen the search to any road node we can actually see, preferring the
+      // one closest to the target; this is still far safer than the raw goal.
+      for (const padding of [1.6, 0.3]) {
+        for (const n of this.nodes) {
+          if (!hasLineOfSight(from.x, from.z, n.x, n.z, colliders, padding)) continue;
+          const cost = Math.hypot(n.x - to.x, n.z - to.z)
+            + 0.15 * Math.hypot(from.x - n.x, from.z - n.z);
+          if (cost < bestCost) { bestCost = cost; bestId = n.id; }
+        }
+        if (bestId >= 0) break;
+      }
+    }
+    if (bestId < 0) {
+      // No visible node at all — still leave the shared cell rather than
+      // pointing straight into the obstacle that broke line-of-sight.
+      for (const v of node.neighbors) {
+        const n = this.nodes[v];
+        const cost = Math.hypot(from.x - n.x, from.z - n.z) + Math.hypot(n.x - to.x, n.z - to.z);
+        if (cost < bestCost) { bestCost = cost; bestId = v; }
+      }
+    }
+    if (bestId >= 0) {
+      const n = this.nodes[bestId];
+      return out.set(n.x, n.y, n.z);
+    }
+    return out.copy(to);
+  }
 }
 
 /**
@@ -164,11 +221,18 @@ export function hasLineOfSight(
   bx: number,
   bz: number,
   colliders: readonly AABBCollider[],
-  padding = 0.2
+  padding = 0.2,
+  ay = 0,
+  by = 0,
+  extraOccluders: readonly AABBCollider[] = NO_OCCLUDERS
 ): boolean {
   const dx = bx - ax;
   const dz = bz - az;
-  for (const c of colliders) {
+  const total = colliders.length + extraOccluders.length;
+  for (let i = 0; i < total; i++) {
+    // Elevated decks/ramps are supplied separately; no array allocation here
+    // because this runs for every police unit on every frame.
+    const c = i < colliders.length ? colliders[i] : extraOccluders[i - colliders.length];
     if (c.height < 2.2) continue;
     const minX = c.minX - padding;
     const maxX = c.maxX + padding;
@@ -201,6 +265,13 @@ export function hasLineOfSight(
       tMax = Math.min(tMax, t2);
       if (tMin > tMax) continue;
     }
+
+    // A segment passing above a short block (or over the 6m Touge deck) is a
+    // clear shot. Sample both ends of the overlap so a line that clips the
+    // top of a rising ramp still counts as blocked.
+    const enterY = ay + (by - ay) * THREE.MathUtils.clamp(tMin, 0, 1);
+    const exitY = ay + (by - ay) * THREE.MathUtils.clamp(tMax, 0, 1);
+    if (Math.min(enterY, exitY) > c.height - 0.1) continue;
 
     return false;
   }

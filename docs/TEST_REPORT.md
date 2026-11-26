@@ -14,10 +14,17 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (48/48)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`48` pass, `0` fail, `0` skipped):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (51/51)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`51` pass, `0` fail, `0` skipped):
 
-### Sprint 13 — map subsystem repair (2026-11-26, current)
+### Sprint 14 — map navigation & height-aware occlusion (2026-11-26, current)
+| Issue | Status | Evidence |
+| :--- | :---: | :--- |
+| Police steered into a building when start and goal shared a road-graph cell | **FIXED** | `findNextWaypoint()` returned the raw goal when `startId === goalId`, even though patrol steering only calls it when LOS is blocked. Repro (180,-120) → (215,-120): old waypoint was the blocked target itself; new `findBlockedWaypoint()` returns a reachable road node. Added a same-cell regression test. |
+| Seawall teleported airborne actors and used centre-only pier bounds | **FIXED** | Clamp now ignores actors above the 0.7m rail (y=8 at z=280 stays put), clamps the whole body to x=141.55..194.45 on the pier, and still funnels lateral slips instead of snapping backwards. Far-off-sea actors still hit the seawall. |
+| Police saw through the 6m Touge deck and rising ramps | **FIXED** | `hasLineOfSight()` now accepts endpoint heights plus height-aware extra occluders; `OpenWorldMap.getElevatedOccluders()` exposes the deck + ramp AABBs. Probe: ground→deck LOS now false, y=8 overflight true, legacy 2D calls unchanged. |
+
+## Sprint 13 — map subsystem repair (2026-11-26, current)
 | Issue | Status | Evidence |
 | :--- | :---: | :--- |
 | GP circuit mislabelled as Mountain Touge / Harbor Coast | **FIXED** | `getDistrictAt()` checked `x < 14 && z > -245`, so the southern sweeper and hairpin fell through to the Touge/Harbor branches. Measured 89/481 circuit spline samples mislabelled; after the fix 0/481. West half (`x < 14`) is now always GP_CIRCUIT. |

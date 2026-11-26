@@ -132,6 +132,7 @@ export class OpenWorldMap {
 
   private buildingMats: THREE.MeshStandardMaterial[] = [];
   private roadMats: THREE.MeshStandardMaterial[] = [];
+  private elevatedOccluders: AABBCollider[] = [];
   private oceanUniforms: AnimeWaterUniforms | null = null;
   private smashProps: SmashProp[] = [];
   private tougeDeckZone = { minX: 60, maxX: 250, minZ: -340, maxZ: -252, height: 6.0 };
@@ -149,6 +150,24 @@ export class OpenWorldMap {
     this.createStuntPlayground();
     this.ballMesh = this.createSoccerPlayground();
     this.createSmashableProps();
+
+    // The Touge deck is a mesh and ramps live in `this.ramps`, so neither is
+    // in `colliders`. Share them with line-of-sight checks as height-aware
+    // occluders; police must not "see" through a solid 6m platform.
+    const td = this.tougeDeckZone;
+    this.elevatedOccluders.push({
+      minX: td.minX, maxX: td.maxX, minZ: td.minZ, maxZ: td.maxZ, height: td.height
+    });
+    for (const r of this.ramps) {
+      this.elevatedOccluders.push({
+        minX: r.minX, maxX: r.maxX, minZ: r.minZ, maxZ: r.maxZ, height: r.height
+      });
+    }
+  }
+
+  /** Height-aware occluders for police/city line-of-sight checks. */
+  public getElevatedOccluders(): readonly AABBCollider[] {
+    return this.elevatedOccluders;
   }
 
   public getDistrictAt(x: number, z: number): DistrictId {
@@ -1481,16 +1500,28 @@ export class OpenWorldMap {
     // Harbor seawall at z = 268. The South Stunt Pier opens a lane at
     // x = 140..196, but that lane still ends at z = 296: clamp there instead
     // of snapping the actor ~30m back to the seawall line.
-    if (pos.z > 268 - radius) {
+    // The seawall rail is only 0.7m tall: an airborne car should be able to
+    // clear it on a stunt jump instead of being yanked back to the quay.
+    if (pos.y <= 1.3 && pos.z > 268 - radius) {
       const onPierLane = pos.x >= 140 && pos.x <= 196;
       const pierEnd = 296 - radius;
       if (onPierLane) {
+        // Keep the whole body on the 56m-wide deck, not just its centre.
+        if (pos.x < 140 + radius) {
+          pos.x = 140 + radius;
+          if (vel.x < 0) vel.x *= -0.35;
+          hit = true;
+        } else if (pos.x > 196 - radius) {
+          pos.x = 196 - radius;
+          if (vel.x > 0) vel.x *= -0.35;
+          hit = true;
+        }
         if (pos.z > pierEnd) {
           pos.z = pierEnd;
           if (vel.z > 0) vel.z *= -0.35;
           hit = true;
         }
-      } else if (pos.z > 268 + radius && pos.x >= 134 && pos.x <= 202) {
+      } else if (pos.z > 268 + radius && pos.x >= 140 - radius && pos.x <= 196 + radius) {
         // Just slipped off the edge of the pier deck: steer sideways back
         // into the lane instead of snapping 15-30m backwards through the
         // seawall. Actors far out at sea still hit the seawall as before.

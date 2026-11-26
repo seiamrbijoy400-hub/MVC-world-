@@ -180,7 +180,11 @@ export class PoliceSystem {
         unit.physics.position.z,
         playerPos.x,
         playerPos.z,
-        this.openWorld.colliders
+        this.openWorld.colliders,
+        0.2,
+        unit.physics.position.y,
+        playerPos.y,
+        this.openWorld.getElevatedOccluders()
       );
       if (d < 95 && los) {
         spottedNow = true;
@@ -340,8 +344,10 @@ export class PoliceSystem {
     if (this.lastKnownPos.lengthSq() < 1) {
       this.lastKnownPos.copy(playerPos);
     }
-    const spawnLOS = hasLineOfSight(spawn.x, spawn.z, playerPos.x, playerPos.z, this.openWorld.colliders)
-      && Math.hypot(spawn.x - playerPos.x, spawn.z - playerPos.z) < 95;
+    const spawnLOS = hasLineOfSight(
+      spawn.x, spawn.z, playerPos.x, playerPos.z, this.openWorld.colliders,
+      0.2, spawn.y, playerPos.y, this.openWorld.getElevatedOccluders()
+    ) && Math.hypot(spawn.x - playerPos.x, spawn.z - playerPos.z) < 95;
     this.units.push({
       physics,
       mesh,
@@ -374,12 +380,15 @@ export class PoliceSystem {
       goalPos.x,
       goalPos.z,
       this.openWorld.colliders,
-      1.6
+      1.6,
+      unit.physics.position.y,
+      goalPos.y,
+      this.openWorld.getElevatedOccluders()
     );
 
     const steerTarget = hasLOS || goalDist < 18
       ? goalPos
-      : this.roadGraph.findNextWaypoint(unit.physics.position, goalPos, this.navScratch);
+      : this.roadGraph.findBlockedWaypoint(unit.physics.position, goalPos, this.openWorld.colliders, this.navScratch);
 
     const toTarget = this.scratch.set(
       steerTarget.x - unit.physics.position.x,

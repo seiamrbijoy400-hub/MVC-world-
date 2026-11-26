@@ -1424,3 +1424,55 @@ test('OpenWorldMap: drifting off the pier funnels sideways instead of snapping b
   map.resolveCollision(nearWall, new THREE.Vector3(0, 0, 5), radius);
   assert.equal(nearWall.z, 268 - radius);
 });
+
+test('RoadGraph: blocked same-cell pursuit detours instead of aiming into the building', () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  const graph = new RoadGraph();
+  const from = new THREE.Vector3(180, 0, -120);
+  const to = new THREE.Vector3(215, 0, -120);
+  assert.equal(graph.nearestNodeId(from.x, from.z), graph.nearestNodeId(to.x, to.z));
+  assert.equal(hasLineOfSight(from.x, from.z, to.x, to.z, map.colliders, 1.6), false);
+  // The legacy path returns the blocked target verbatim.
+  assert.deepEqual(graph.findNextWaypoint(from, to).toArray(), [215, 0, -120]);
+  const detour = graph.findBlockedWaypoint(from, to, map.colliders);
+  assert.notDeepEqual(detour.toArray(), [215, 0, -120]);
+  const nodeIds = new Set(graph.nodes.map((n) => n.id));
+  assert.ok(graph.nodes.some((n) => n.x === detour.x && n.z === detour.z && nodeIds.has(n.id)));
+  assert.equal(hasLineOfSight(from.x, from.z, detour.x, detour.z, map.colliders, 0.3), true,
+    'detour must at least be reachable without cutting through a wall');
+});
+
+test('OpenWorldMap: seawall ignores airborne actors and keeps the whole car body on the pier', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const airborne = new THREE.Vector3(100, 8, 280);
+  map.resolveCollision(airborne, new THREE.Vector3(0, 0, 12), 1.55);
+  assert.equal(airborne.z, 280, 'a stunt jump above the 0.7m rail must not be teleported back');
+
+  const left = new THREE.Vector3(139, 0, 280);
+  map.resolveCollision(left, new THREE.Vector3(0, 0, 12), 1.55);
+  assert.equal(left.x, 141.55, 'body overlapping the pier must be nudged fully onto the deck');
+  assert.equal(left.z, 280);
+
+  const right = new THREE.Vector3(196, 0, 294);
+  map.resolveCollision(right, new THREE.Vector3(0, 0, 12), 1.55);
+  assert.equal(right.x, 194.45, 'centre on the pier edge must not leave half the body over water');
+  assert.equal(right.z, 294);
+});
+
+test('RoadGraph: Touge deck and ramps block low sight lines but not an overflight', () => {
+  const map = new OpenWorldMap(new THREE.Scene());
+  const occ = map.getElevatedOccluders();
+  assert.ok(occ.length >= 7);
+  assert.equal(
+    hasLineOfSight(34, -296, 62, -296, map.colliders, 0.2, 0, 6, occ),
+    false,
+    'a car at ground level must not see a target on the 6m deck through the ramp'
+  );
+  assert.equal(
+    hasLineOfSight(34, -296, 62, -296, map.colliders, 0.2, 8, 8, occ),
+    true,
+    'a drone above the deck has a clear line'
+  );
+  assert.equal(hasLineOfSight(172, -230, 172, -170, map.colliders), false, 'legacy 2D calls unchanged');
+});
