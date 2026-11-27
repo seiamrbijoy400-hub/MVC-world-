@@ -1,5 +1,6 @@
 node_modules/
 dist/
 dist-server/
+.apex-data/
 .DS_Store
 *.log

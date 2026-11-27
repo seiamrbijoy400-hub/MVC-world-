@@ -30,6 +30,7 @@ export class LobbyUI {
   private nameInput: HTMLInputElement;
   private codeInput: HTMLInputElement;
   private roomListBox: HTMLElement;
+  private globalBoard: HTMLElement;
 
   private qrCanvas: HTMLCanvasElement;
   private roomTitleText: HTMLElement;
@@ -82,6 +83,7 @@ export class LobbyUI {
     this.nameInput = document.getElementById('input-player-name') as HTMLInputElement;
     this.codeInput = document.getElementById('input-room-code') as HTMLInputElement;
     this.roomListBox = document.getElementById('room-list-box')!;
+    this.globalBoard = document.getElementById('global-leaderboard')!;
 
     this.qrCanvas = document.getElementById('lobby-qr-canvas') as HTMLCanvasElement;
     this.roomTitleText = document.getElementById('room-title-text')!;
@@ -183,8 +185,45 @@ export class LobbyUI {
 
   public setVisible(visible: boolean): void {
     this.overlay.classList.toggle('hidden', !visible);
-    if (visible) this.overlay.querySelector<HTMLElement>('button, input')?.focus();
+    if (visible) {
+      this.overlay.querySelector<HTMLElement>('button, input')?.focus();
+      void this.refreshGlobalBoard();
+    }
     this.onVisibilityChange(visible);
+  }
+
+  private async refreshGlobalBoard(): Promise<void> {
+    this.globalBoard.replaceChildren();
+    try {
+      const res = await fetch(`${location.origin}/api/leaderboard`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('unavailable');
+      const data = (await res.json()) as { entries?: { name: string; score: number }[] };
+      const entries = Array.isArray(data?.entries) ? data.entries.slice(0, 5) : [];
+      if (entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'color:#64748b;';
+        empty.textContent = 'No scores yet. Finish a race to set a record.';
+        this.globalBoard.appendChild(empty);
+        return;
+      }
+      entries.forEach((entry, index) => {
+        const row = document.createElement('div');
+        row.className = 'board-row';
+        const who = document.createElement('span');
+        who.className = 'board-rank';
+        who.textContent = `#${index + 1} ${entry.name}`;
+        const score = document.createElement('span');
+        score.className = 'board-score';
+        score.textContent = String(entry.score);
+        row.append(who, score);
+        this.globalBoard.appendChild(row);
+      });
+    } catch {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:#64748b;';
+      empty.textContent = 'Leaderboard unavailable offline.';
+      this.globalBoard.replaceChildren(empty);
+    }
   }
 
   private checkUrlRoomParam(): void {

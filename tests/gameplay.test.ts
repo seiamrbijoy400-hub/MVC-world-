@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import os from 'node:os';
 import * as THREE from 'three';
 import { WebSocket } from 'ws';
 
@@ -2381,5 +2382,83 @@ test('LAN file sharing: room-scoped upload, broadcast, download, sanitization & 
   } finally {
     host.ws.close();
     await srv.stop();
+  }
+});
+
+test('Durable leaderboard: best scores survive a server restart when a data dir is configured', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'apex-lb-'));
+  let first: ReturnType<typeof startOnlineServer> | null = null;
+  let second: ReturnType<typeof startOnlineServer> | null = null;
+
+  const getJson = (port: number, urlPath: string) =>
+    new Promise<{ status: number; body: Record<string, unknown> }>((resolve, reject) => {
+      http
+        .get(`http://127.0.0.1:${port}${urlPath}`, (res) => {
+          let raw = '';
+          res.on('data', (c) => (raw += c));
+          res.on('end', () => {
+            try {
+              resolve({ status: res.statusCode || 0, body: JSON.parse(raw) });
+            } catch (err) {
+              reject(err);
+            }
+          });
+        })
+        .on('error', reject);
+    });
+
+  try {
+    first = startOnlineServer({ port: 0, host: '127.0.0.1', distDir: 'dist', quiet: true, dataDir });
+    const { port } = await first.listening;
+
+    const host = await new Promise<{ ws: WebSocket; msgs: Record<string, unknown>[] }>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const msgs: Record<string, unknown>[] = [];
+      ws.on('message', (d) => msgs.push(JSON.parse(d.toString())));
+      ws.once('open', () => resolve({ ws, msgs }));
+      ws.once('error', reject);
+    });
+
+    const waitFor = async (pred: (m: Record<string, unknown>) => boolean, label: string) => {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        const hit = host.msgs.find(pred);
+        if (hit) return hit;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`Timed out waiting for ${label}`);
+    };
+
+    await waitFor((m) => m.type === 'WELCOME', 'WELCOME');
+    host.ws.send(JSON.stringify({ type: 'CREATE_ROOM', payload: { playerName: 'PersistentAce', characterId: 'ren', carColor: '#ff5500' } }));
+    await waitFor((m) => m.type === 'ROOM_STATE', 'ROOM_STATE');
+    host.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { score: 12345, bestTimeMs: 91234, combo: 7 } }));
+    await waitFor((m) => m.type === 'LEADERBOARD_UPDATE', 'LEADERBOARD_UPDATE');
+
+    host.ws.close();
+    await first.stop();
+    first = null;
+
+    const file = path.join(dataDir, 'leaderboard.json');
+    assert.ok(fs.existsSync(file), 'leaderboard.json must be written on shutdown');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as { entries: { name: string; score: number }[] };
+    assert.equal(saved.entries.length, 1);
+    assert.equal(saved.entries[0].name, 'PersistentAce');
+    assert.equal(saved.entries[0].score, 12345);
+
+    second = startOnlineServer({ port: 0, host: '127.0.0.1', distDir: 'dist', quiet: true, dataDir });
+    const restarted = await second.listening;
+    const board = await getJson(restarted.port, '/api/leaderboard');
+    assert.equal(board.status, 200);
+    assert.equal(board.body.persistent, true);
+    const entries = board.body.entries as { name: string; score: number; bestTimeMs: number }[];
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].name, 'PersistentAce');
+    assert.equal(entries[0].score, 12345);
+    assert.equal(entries[0].bestTimeMs, 91234);
+  } finally {
+    if (first) await first.stop();
+    if (second) await second.stop();
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });

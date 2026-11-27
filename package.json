@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:server": "tsc server/onlineServer.ts --outDir dist-server --module CommonJS --moduleResolution node --esModuleInterop --target ES2022 --skipLibCheck && node -e \"require('fs').writeFileSync('dist-server/package.json', JSON.stringify({type:'commonjs'}))\"",
-    "start": "pnpm run build:server && node dist-server/server/onlineServer.js",
+    "start": "pnpm run build:server && APEX_DATA_DIR=.apex-data node dist-server/server/onlineServer.js",
     "preview": "vite preview",
     "test": "node -e \"const fs=require('fs'),os=require('os'),path=require('path'),cp=require('child_process');const out=fs.mkdtempSync(path.join(os.tmpdir(),'apex-test-'));fs.writeFileSync(path.join(out,'package.json'),JSON.stringify({type:'commonjs'}));cp.execFileSync(path.resolve('node_modules/.bin/tsc'),['tests/gameplay.test.ts','server/onlineServer.ts','--outDir',out,'--module','CommonJS','--moduleResolution','node','--esModuleInterop','--target','ES2022','--skipLibCheck'],{stdio:'inherit'});cp.execFileSync('node',['--test',path.join(out,'tests/gameplay.test.js')],{stdio:'inherit',env:{...process.env,NODE_PATH:path.resolve('node_modules')}});fs.rmSync(out,{recursive:true,force:true});\""
   },

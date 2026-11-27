@@ -27,12 +27,18 @@ const MIME_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2'
 };
 
-export function startOnlineServer(options?: { port?: number; host?: string; distDir?: string; quiet?: boolean }) {
+export function startOnlineServer(options?: {
+  port?: number;
+  host?: string;
+  distDir?: string;
+  quiet?: boolean;
+  dataDir?: string;
+}) {
   const port = options?.port ?? PORT;
   const host = options?.host ?? HOST;
   const distDir = path.resolve(options?.distDir ?? DIST_DIR);
   const quiet = options?.quiet ?? false;
-  const backend = createLobbyBackend();
+  const backend = createLobbyBackend({ dataDir: options?.dataDir ?? process.env.APEX_DATA_DIR ?? undefined });
 
   const server = http.createServer((req, res) => {
     const rawUrl = (req.url || '/').split('?')[0];
@@ -49,6 +55,15 @@ export function startOnlineServer(options?: { port?: number; host?: string; dist
       const info = backend.getNetworkInfo(req, boundPort);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(info));
+      return;
+    }
+
+    if (rawUrl === '/api/leaderboard') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({
+        entries: backend.getGlobalLeaderboard(20),
+        persistent: Boolean(options?.dataDir ?? process.env.APEX_DATA_DIR)
+      }));
       return;
     }
 

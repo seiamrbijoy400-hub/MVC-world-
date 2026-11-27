@@ -1,5 +1,7 @@
 import crypto from 'crypto';
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import type {
@@ -232,6 +234,15 @@ export interface LanLobbyServerLike {
   };
 }
 
+/** A durable best score kept on the host server across restarts. */
+export interface GlobalScore {
+  name: string;
+  score: number;
+  bestTimeMs?: number;
+  mode: GameModeId;
+  updatedAt: number;
+}
+
 export interface LobbyBackend {
   attachWebSocket(httpServer: any): void;
   attachMiddlewares(middlewares: NonNullable<LanLobbyServerLike['middlewares']>, getPort: () => number): void;
@@ -242,12 +253,15 @@ export interface LobbyBackend {
     searchParams: URLSearchParams
   ): void;
   getNetworkInfo(req: IncomingMessage | undefined, port: number): LanNetworkInfo;
+  getGlobalLeaderboard(limit?: number): GlobalScore[];
   getStats(): { rooms: number; clients: number; recoverable: number; files: number; uptimeSec: number };
   shutdown(): void;
 }
 
 export interface LobbyBackendOptions {
   sessionGraceMs?: number;
+  /** Directory for durable leaderboard storage. Omit for memory-only. */
+  dataDir?: string;
 }
 
 export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBackend {
@@ -293,6 +307,64 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
     }
     return undefined;
   };
+
+  const scoresFile = options.dataDir ? path.join(path.resolve(options.dataDir), 'leaderboard.json') : '';
+  const globalScores = new Map<string, GlobalScore>();
+  let scoreSaveTimer: NodeJS.Timeout | null = null;
+
+  const loadGlobalScores = () => {
+    if (!scoresFile) return;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(scoresFile, 'utf8')) as { entries?: unknown };
+      if (!Array.isArray(parsed?.entries)) return;
+      for (const raw of parsed.entries) {
+        if (!raw || typeof raw !== 'object') continue;
+        const e = raw as Record<string, unknown>;
+        if (typeof e.name !== 'string') continue;
+        const score = Number(e.score);
+        if (!Number.isFinite(score)) continue;
+        const name = sanitizeName(e.name, 'Player', 16);
+        const mode = VALID_MODES.has(e.mode as GameModeId) ? (e.mode as GameModeId) : 'OPEN_WORLD';
+        globalScores.set(name.toLowerCase(), {
+          name,
+          score: Math.max(0, Math.round(score)),
+          bestTimeMs: Number.isFinite(e.bestTimeMs) ? Math.max(0, Math.round(Number(e.bestTimeMs))) : undefined,
+          mode,
+          updatedAt: Number.isFinite(e.updatedAt) ? Number(e.updatedAt) : Date.now()
+        });
+      }
+    } catch {}
+  };
+
+  const getGlobalLeaderboard = (limit = 20): GlobalScore[] =>
+    Array.from(globalScores.values())
+      .sort((a, b) => b.score - a.score || a.updatedAt - b.updatedAt)
+      .slice(0, Math.max(1, Math.min(200, limit)));
+
+  const flushGlobalScores = () => {
+    if (!scoresFile) return;
+    if (scoreSaveTimer) {
+      clearTimeout(scoreSaveTimer);
+      scoreSaveTimer = null;
+    }
+    try {
+      fs.mkdirSync(path.dirname(scoresFile), { recursive: true });
+      const tmp = `${scoresFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ version: 1, updatedAt: Date.now(), entries: getGlobalLeaderboard(200) }, null, 2));
+      fs.renameSync(tmp, scoresFile);
+    } catch {}
+  };
+
+  const scheduleScoreSave = () => {
+    if (!scoresFile || scoreSaveTimer) return;
+    scoreSaveTimer = setTimeout(() => {
+      scoreSaveTimer = null;
+      flushGlobalScores();
+    }, 300);
+    scoreSaveTimer.unref?.();
+  };
+
+  loadGlobalScores();
 
   const send = (ws: WebSocket, type: string, payload: unknown) => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -907,6 +979,20 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
             mode: room.mode,
             entries: getLeaderboardEntries(room)
           });
+          if (scoresFile) {
+            const key = slot.name.toLowerCase();
+            const prev = globalScores.get(key);
+            if (!prev || score > prev.score) {
+              globalScores.set(key, {
+                name: slot.name,
+                score,
+                bestTimeMs,
+                mode: room.mode,
+                updatedAt: ts
+              });
+              scheduleScoreSave();
+            }
+          }
           return;
         }
 
@@ -1119,6 +1205,11 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
       const url = new URL(req.url || '/', 'http://localhost');
       handleFileRequest(req, res, url.pathname, url.searchParams);
     });
+    middlewares.use('/api/leaderboard', (_req: IncomingMessage, res: ServerResponse) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(JSON.stringify({ entries: getGlobalLeaderboard(20), persistent: Boolean(scoresFile) }));
+    });
     middlewares.use('/api/health', (_req: IncomingMessage, res: ServerResponse) => {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({
@@ -1133,6 +1224,7 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
   };
 
   const shutdown = () => {
+    flushGlobalScores();
     for (const timer of intervals) clearInterval(timer);
     intervals.clear();
     for (const rec of recoverable.values()) clearTimeout(rec.timer);
@@ -1146,6 +1238,7 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
     attachMiddlewares,
     getNetworkInfo: resolveNetworkInfo,
     handleFileRequest,
+    getGlobalLeaderboard,
     getStats: () => ({
       rooms: rooms.size,
       clients: clients.size,
@@ -1162,7 +1255,7 @@ export function lanLobbyPlugin(): {
   configureServer(server: LanLobbyServerLike): void;
   configurePreviewServer(server: LanLobbyServerLike): void;
 } {
-  const backend = createLobbyBackend();
+  const backend = createLobbyBackend({ dataDir: process.env.APEX_DATA_DIR || undefined });
 
   return {
     name: 'vite-plugin-lan-lobby',

@@ -14,8 +14,17 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (73/73)
-Run with `pnpm test` (compiles the suite + `server/onlineServer.ts` to a temp dir and executes `node --test`) — `73` pass, `0` fail, `0` skipped, `~21.3s`:
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (74/74)
+Run with `pnpm test` (compiles the suite + `server/onlineServer.ts` to a temp dir and executes `node --test`) — `74` pass, `0` fail, `0` skipped, `~20.0s`:
+
+### Sprint 20 — durable host storage (2026-11-27)
+| Item | Status | Evidence |
+| :--- | :---: | :--- |
+| "Central server" lost all data on restart | **FIXED (self-hosted)** | `APEX_DATA_DIR` enables atomic `leaderboard.json` writes (debounced + on shutdown). Test submits a score, stops the server, restarts with the same dir and reads the score back via `/api/leaderboard`. |
+| Stored data had no visibility | **FIXED** | `GET /api/leaderboard` returns top 20 + `persistent` flag; lobby home renders a top-5 board with `textContent`-safe rows. |
+| Cloud hosts would falsely claim durability | **FIXED** | `persistent` is `false` unless a data dir is configured. Render free tier has an ephemeral disk, so this is honest rather than misleading. |
+
+**Limits:** shared file bytes stay in RAM with a 30-minute TTL; room state is still ephemeral. Real two-device transfer and Android QA remain **NOT TESTED**.
 
 ### Sprint 19 — room file sharing (2026-11-27)
 | Item | Status | Evidence |
