@@ -69,10 +69,16 @@ export function pushCharacterOutOfVehicles(
     const dx = charCtrl.position.x - hull.position.x;
     const dz = charCtrl.position.z - hull.position.z;
     const dSq = dx * dx + dz * dz;
-    if (dSq < carRad * carRad && dSq > 0.0001) {
+    if (dSq < carRad * carRad) {
       const d = Math.sqrt(dSq);
-      charCtrl.position.x = hull.position.x + (dx / d) * carRad;
-      charCtrl.position.z = hull.position.z + (dz / d) * carRad;
+      if (d > 0.01) {
+        charCtrl.position.x = hull.position.x + (dx / d) * carRad;
+        charCtrl.position.z = hull.position.z + (dz / d) * carRad;
+      } else {
+        // Deterministic fallback for an exact center overlap: push toward the car's nose.
+        charCtrl.position.x = hull.position.x - Math.sin(hull.rotation.y) * carRad;
+        charCtrl.position.z = hull.position.z - Math.cos(hull.rotation.y) * carRad;
+      }
       pushed = true;
     }
   }

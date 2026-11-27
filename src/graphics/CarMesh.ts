@@ -10,6 +10,21 @@ export class CarMesh {
   private static sharedBeamTex: THREE.CanvasTexture | null = null;
   private static sharedPlateTex: THREE.CanvasTexture | null = null;
 
+  private static disposeSubtree(root: THREE.Object3D): void {
+    root.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.geometry && !mesh.geometry.userData?.shared) mesh.geometry.dispose();
+      if (!mesh.material) return;
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const mat of mats) {
+        if (mat.userData?.shared) continue;
+        const standard = mat as THREE.MeshStandardMaterial;
+        if (standard.map && !standard.map.userData?.shared) standard.map.dispose();
+        mat.dispose();
+      }
+    });
+  }
+
   private static loadCachedFBX(url: string): Promise<THREE.Group> {
     let cached = CarMesh.fbxCache.get(url);
     if (!cached) {
@@ -54,6 +69,7 @@ export class CarMesh {
   private headlightBulbMat: THREE.MeshStandardMaterial | null = null;
   private driverGroup: THREE.Group | null = null;
   public isGhost = false;
+  private disposed = false;
 
   constructor(withHeadlights = false, isGhost = false) {
     this.isGhost = isGhost;
@@ -242,6 +258,7 @@ export class CarMesh {
   }
 
   public dispose(): void {
+    this.disposed = true;
     this.root.traverse((obj) => {
       const m = obj as THREE.Mesh;
       if (m.geometry && !m.geometry.userData?.shared) m.geometry.dispose();
@@ -303,8 +320,12 @@ export class CarMesh {
   }
 
   private loadHQModels(): void {
+    // A ghost stays as a cheap wireframe and must not fetch/allocate full HQ assets.
+    if (this.isGhost) return;
+
     // 1. Load Car 1203 Body (cached once across all vehicles)
     CarMesh.loadCachedFBX(assetUrl('assets/models/car 1203.fbx')).then((fbx) => {
+      if (this.disposed) return;
       const container = new THREE.Group();
       fbx.scale.setScalar(0.01);
       // Car 1203 faces +Z in FBX -> rotate 180 deg so front faces -Z
@@ -430,12 +451,14 @@ export class CarMesh {
     };
 
     CarMesh.loadCachedFBX(assetUrl('assets/models/wheel_front_right.fbx')).then((frontFbx) => {
+      if (this.disposed) return;
       frontFbx.scale.setScalar(0.01);
       assignWheelMaterials(frontFbx);
 
       // Replace FL (0) and FR (1) spin children
       for (let i = 0; i < 2; i++) {
         const spin = this.wheelSpinGroups[i];
+        CarMesh.disposeSubtree(spin);
         spin.clear();
         const clone = i === 0 ? frontFbx.clone(true) : frontFbx;
         // Front right faces +X; mirror left wheel 180 deg around Y
@@ -445,12 +468,14 @@ export class CarMesh {
     }).catch(() => {});
 
     CarMesh.loadCachedFBX(assetUrl('assets/models/wheel_back_right.fbx')).then((rearFbx) => {
+      if (this.disposed) return;
       rearFbx.scale.setScalar(0.01);
       assignWheelMaterials(rearFbx);
 
       // Replace RL (2) and RR (3) spin children
       for (let i = 2; i < 4; i++) {
         const spin = this.wheelSpinGroups[i];
+        CarMesh.disposeSubtree(spin);
         spin.clear();
         const clone = i === 2 ? rearFbx.clone(true) : rearFbx;
         if (i === 2) clone.rotation.y = Math.PI;

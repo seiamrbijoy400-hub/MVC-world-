@@ -290,6 +290,9 @@ export class GLTFCharacterMesh {
     this.sitAction = null;
     this.stairsActive = false;
     this.touchedBones.clear();
+    this.restQuats.clear();
+    this.animatedQuats.clear();
+    this.combatBaseQuats.clear();
     this.fallback?.dispose();
     this.fallback = null;
     if (this.instance) {

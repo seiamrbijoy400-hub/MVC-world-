@@ -176,3 +176,19 @@ Drives the real standalone server with two WebSocket clients on the host machine
 - `SkeletonUtils.clone()` now remaps skeleton bones per instance. Plain `Object3D.clone()` had shared the template skeleton, leaving rigged meshes frozen/invisible — the cause of “character not showing” and broken-looking fights.
 - The source GLB rigs face `+Z` (eye bones at `+Z`); instances are rotated 180° so world forward is `-Z`. Additive punch/hit/KO pose signs were corrected for that world-space facing (later commits completed the fix).
 - New regressions assert every skinned clone owns its skeleton bones and that punching moves the right hand toward `-Z`.
+
+## Sprint 16 — AAA Audit Batch 1 + 2 (2026-11-27)
+- **Rendering/assets:** sky dome follows the camera; water `depthWrite:false`; wet road and time-of-day material state unified; PMREM env target disposed before regeneration; GPU resources released for detached hair/accessories, wheels and rig caches; ghost cars skip HQ FBX loading; skidmark updates use bounded ranges; helicopter GLB retry + reset on race/spawn/bust.
+- **Gameplay/input:** KO/bust guards, competition-state car-exit lock, gamepad in foot/heli/car modes, coyote time + jump buffer, archetype steering scale, activity mutual exclusion, `e.repeat` hotkey guard, save-import runtime sync, saved runtime settings, save sanitization (`migrateSave`), offline pack now includes the licensed MP3.
+- **Network/security:** room-scoped `x-resume-token` file auth (GET/HEAD/POST), path containment + null-byte/symlink/malformed-percent guards, XSS-safe file names, 4 MB/file / 20 files / 16 MB per room / 64 MB global caps, message type + range validation for `MELEE_HIT`, `START_GAME`-only `RESULT_SUBMIT` (mode matched to room), server-issued session id identity for global scores, rate limits, `apex-zero-v5` SW precache including hashed JS chunks.
+- **Test harness sync:** regressions updated to the new rules — lobby melee/score submissions are rejected until `START_GAME`, melee needs both live `PLAYER_STATE`s within 6.5 m, downloads need a resume token and cross-room access is denied, `collectRuntimeBundleUrls()` tolerates a partial headless `document` stub.
+
+### Gates (host-side, VERIFIED)
+| Gate | Result |
+| :--- | :--- |
+| `pnpm exec tsc --noEmit` | clean |
+| `pnpm run build` | clean — `index-eZtlV1lB.js` 431.10 kB, `vendor-three-CihgsWzn.js` 725.93 kB, SW v5 precaches hashed chunks |
+| `pnpm test` | **74/74 pass** (21.3 s, 0 fail) |
+| `pnpm qa:lan` | **14/14 pass** — 2 real WS clients, chat, file auth, cross-room isolation, lobby-score rejection, durable leaderboard |
+
+**NOT TESTED:** live WebGL visual shading/FPS, touch/gamepad hardware, Web Audio hardware, physical two-device hotspot LAN, and the live Render deployment (deployed SW is still `apex-zero-v4`; these local changes are not live). Mini App Developer MCP and in-app browser were not attached in this session, so no mini app / browser screenshots were produced.

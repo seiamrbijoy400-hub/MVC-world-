@@ -46,3 +46,10 @@
 - **Live WebGL Visual Rendering, Mobile Touch & Web Audio Hardware:** Because no browser binary, Android device, or Browser Automation MCP is active in this environment, live GPU shading, FPS across `HIGH`/`MED`/`LOW`, touchscreen multi-finger feel, and real speaker playback remain **NOT TESTED**.
 - **Large Monolithic Orchestrator (`src/main.ts`, ~2,400 lines):** Further feature growth should extract `MultiplayerSync` from `GameApp`.
 - **Bundle Chunk Size Warning:** `vite build` reports `dist/assets/index-DqIJ4VqU.js` at `1,059.11 kB` (`282.62 kB` gzip) because Three.js + game code sit in a single bundle (`codeSplitting` optional for faster mobile load). Real mobile download/parse time remains **NOT TESTED**.
+
+---
+
+## 4. Sprint 16 Hardening Status (2026-11-27)
+- **VERIFIED (host-side):** graphics/asset and gameplay fixes listed in `docs/TEST_REPORT.md` are present in source; `tsc --noEmit` clean; `pnpm run build` clean (app 431.10 kB + three 725.93 kB); `pnpm test` 74/74; `pnpm qa:lan` 14/14. Server now rejects lobby-only melee/score submits, checks melee range and live states, requires resume tokens for room files, and isolates rooms; SW v5 precaches hashed bundles.
+- **Static reverse-engineering of `https://mvc-world.onrender.com/`:** shipped artifacts are a Vite + TS + Three.js r187 PWA (`index-CA-Inb_J.js` 423,948 B, `vendor-three-CihgsWzn.js` 725,938 B), no APK, no sourcemaps, no hardcoded secrets/analytics SDKs; live `/api/lan-info` is `ONLINE` with `ips:[]`; live leaderboard is memory-only (`persistent:false`); live SW is `apex-zero-v4`, so these local fixes are not deployed. Full Bengali REA report was delivered in chat.
+- **NOT TESTED:** live WebGL shading/FPS, touch/gamepad/audio hardware, physical two-device LAN, PWA install, and any runtime behaviour of the deployed build. Mini App Developer MCP (`miniapp_*`) and in-app browser were unavailable this session; no mini app was created and no screenshots were taken.

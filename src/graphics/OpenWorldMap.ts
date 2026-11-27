@@ -198,6 +198,8 @@ export class OpenWorldMap {
 
   private buildingMats: THREE.MeshStandardMaterial[] = [];
   private roadMats: THREE.MeshStandardMaterial[] = [];
+  private roadWet = false;
+  private roadTimeOfDay: TimeOfDay = 'DAY';
   private lampGlowMat: THREE.MeshBasicMaterial | null = null;
   private lampBulbMat: THREE.MeshBasicMaterial | null = null;
   private neonSignMats: THREE.MeshStandardMaterial[] = [];
@@ -273,19 +275,9 @@ export class OpenWorldMap {
       m.emissiveIntensity = neonEmissive;
     }
 
-    // Wet road reflections react to TOD: night roads are mirror-like
-    if (tod === 'NIGHT') {
-      for (const m of this.roadMats) {
-        if (m.roughness < 0.4) continue; // already wet — don't override
-        m.roughness = Math.min(m.roughness, 0.72);
-        m.envMapIntensity = 0.55;
-      }
-    } else {
-      for (const m of this.roadMats) {
-        if (m.roughness < 0.4) continue;
-        m.envMapIntensity = 0.0;
-      }
-    }
+    // Wet road reflections react to TOD, and remain correct after weather changes.
+    this.roadTimeOfDay = tod;
+    this.refreshRoadMaterials();
 
     if (this.oceanUniforms) {
       if (tod === 'NIGHT') {
@@ -308,9 +300,18 @@ export class OpenWorldMap {
   }
 
   public setWetSurface(wet: boolean): void {
+    this.roadWet = wet;
+    this.refreshRoadMaterials();
+  }
+
+  /** Single source of truth for road finish: weather + time of day. */
+  private refreshRoadMaterials(): void {
+    const wet = this.roadWet;
+    const night = this.roadTimeOfDay === 'NIGHT';
     for (const m of this.roadMats) {
-      m.roughness = wet ? 0.18 : 0.82;
+      m.roughness = wet ? 0.18 : (night ? 0.72 : 0.82);
       m.metalness = wet ? 0.35 : 0.08;
+      m.envMapIntensity = wet ? (night ? 0.85 : 0.4) : (night ? 0.55 : 0.0);
     }
   }
 

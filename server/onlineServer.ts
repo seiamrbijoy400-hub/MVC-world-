@@ -80,23 +80,51 @@ export function startOnlineServer(options?: {
       return;
     }
 
-    let relPath = rawUrl === '/' ? 'index.html' : decodeURIComponent(rawUrl).replace(/^\/+/, '');
+    let relPath: string;
+    try {
+      relPath = rawUrl === '/' ? 'index.html' : decodeURIComponent(rawUrl).replace(/^\/+/, '');
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
+      return;
+    }
+    if (relPath.includes('\0')) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
+      return;
+    }
     const candidate = path.resolve(distDir, relPath);
-    if (!candidate.startsWith(distDir)) {
+    const candidateRel = path.relative(distDir, candidate);
+    if (candidateRel.startsWith('..') || path.isAbsolute(candidateRel)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Forbidden');
       return;
     }
 
     let filePath = candidate;
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-      const indexFallback = path.join(distDir, 'index.html');
-      if (relPath.includes('.') || !fs.existsSync(indexFallback)) {
-        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Not Found');
+    try {
+      if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        const indexFallback = path.join(distDir, 'index.html');
+        if (relPath.includes('.') || !fs.existsSync(indexFallback)) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Not Found');
+          return;
+        }
+        filePath = indexFallback;
+      }
+      // Reject symlinks that resolve outside the served dist directory.
+      const realRoot = fs.realpathSync(distDir);
+      const realFile = fs.realpathSync(filePath);
+      const realRel = path.relative(realRoot, realFile);
+      if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Forbidden');
         return;
       }
-      filePath = indexFallback;
+    } catch {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not Found');
+      return;
     }
 
     const ext = path.extname(filePath).toLowerCase();

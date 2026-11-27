@@ -94,6 +94,32 @@ function safeRecordOfNumbers(val: unknown): Record<string, number> {
   return out;
 }
 
+function safeUnderglow(val: unknown, fallback: string): string {
+  if (val === 'OFF') return 'OFF';
+  return typeof val === 'string' && /^#[0-9a-fA-F]{6}$/.test(val) ? val : fallback;
+}
+
+function safeGhostFrames(val: unknown): GhostFrame[] {
+  if (!Array.isArray(val)) return [];
+  const keys: (keyof GhostFrame)[] = ['t', 'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'steer'];
+  const frames: GhostFrame[] = [];
+  for (const raw of val) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const obj = raw as Record<string, unknown>;
+    if (!keys.every((key) => typeof obj[key] === 'number' && Number.isFinite(obj[key]))) continue;
+    const t = Number(obj.t);
+    if (t < 0 || t > 3_600_000) continue;
+    frames.push({
+      t,
+      x: Number(obj.x), y: Number(obj.y), z: Number(obj.z),
+      yaw: Number(obj.yaw), pitch: Number(obj.pitch), roll: Number(obj.roll), steer: Number(obj.steer)
+    });
+    if (frames.length >= 3600) break;
+  }
+  frames.sort((a, b) => a.t - b.t);
+  return frames;
+}
+
 export function migrateSave(rawObj: unknown): SaveData {
   const defaults = createDefaultSave();
   if (!rawObj || typeof rawObj !== 'object' || Array.isArray(rawObj)) {
@@ -113,7 +139,7 @@ export function migrateSave(rawObj: unknown): SaveData {
       : defaults.playerName,
     characterId: charId,
     carColor: typeof parsed.carColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(parsed.carColor) ? parsed.carColor : defaults.carColor,
-    underglowColor: typeof parsed.underglowColor === 'string' ? parsed.underglowColor : defaults.underglowColor,
+    underglowColor: safeUnderglow(parsed.underglowColor, defaults.underglowColor),
     engineStage: Math.max(0, Math.min(3, Math.round(safeNonNeg(parsed.engineStage, 0)))),
     nitroStage: Math.max(0, Math.min(3, Math.round(safeNonNeg(parsed.nitroStage, 0)))),
     legendXp: Math.round(safeNonNeg(parsed.legendXp, 0)),
@@ -134,7 +160,7 @@ export function migrateSave(rawObj: unknown): SaveData {
     atmospherePref: (['DAY', 'SUNSET', 'NIGHT', 'AUTO'].includes(String(parsed.atmospherePref)) ? parsed.atmospherePref : 'SUNSET') as AtmospherePref,
     gearbox: (['AUTO', 'SEMI', 'MANUAL'].includes(parsed.gearbox) ? parsed.gearbox as GearboxType : GearboxType.AUTO),
     unlockedUnderglows: Array.isArray(parsed.unlockedUnderglows) && parsed.unlockedUnderglows.length > 0
-      ? parsed.unlockedUnderglows.filter((u): u is string => typeof u === 'string')
+      ? parsed.unlockedUnderglows.filter((u): u is string => typeof u === 'string' && (u === 'OFF' || /^#[0-9a-fA-F]{6}$/.test(u)))
       : ['#22d3ee', 'OFF'],
     speedTrapRecords: safeRecordOfNumbers(parsed.speedTrapRecords),
     driftZoneRecords: safeRecordOfNumbers(parsed.driftZoneRecords),
@@ -142,7 +168,8 @@ export function migrateSave(rawObj: unknown): SaveData {
     discoveredShards: Array.isArray(parsed.discoveredShards) ? parsed.discoveredShards.filter((s): s is string => typeof s === 'string') : [],
     discoveredDistricts: Array.isArray(parsed.discoveredDistricts) ? parsed.discoveredDistricts.filter((s): s is string => typeof s === 'string') : [],
     rivalsDefeated: Array.isArray(parsed.rivalsDefeated) ? parsed.rivalsDefeated.filter((s): s is string => typeof s === 'string') : [],
-    bestLapGhost: Array.isArray(parsed.bestLapGhost) ? parsed.bestLapGhost : [],
+    bestLapGhost: safeGhostFrames(parsed.bestLapGhost),
+    musicEnabled: typeof parsed.musicEnabled === 'boolean' ? parsed.musicEnabled : defaults.musicEnabled,
     ghostReplayEnabled: typeof parsed.ghostReplayEnabled === 'boolean' ? parsed.ghostReplayEnabled : true
   };
 }

@@ -1,7 +1,7 @@
 // APEX ZERO: Neon Velo — offline cache service worker.
 // Strategy: network-first for navigations (falling back to cached shell),
 // stale-while-revalidate for /assets/, and safe cache preservation across upgrades.
-const CACHE_NAME = 'apex-zero-v4';
+const CACHE_NAME = 'apex-zero-v5';
 const SHELL = ['./', './index.html', './manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {

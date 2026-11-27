@@ -71,7 +71,11 @@ export class HelicopterMesh {
             scale
           };
         })
-        .catch(() => null);
+        .catch(() => {
+          // A transient fetch/decode failure must not permanently disable the real GLB.
+          HelicopterMesh.templatePromise = null;
+          return null;
+        });
     }
     return HelicopterMesh.templatePromise;
   }

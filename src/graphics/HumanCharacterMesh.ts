@@ -17,6 +17,22 @@ import type {
  * staying fully offline and customizable.
  */
 
+/** Dispose unique resources on a subtree before detach/clear to avoid mobile GPU leaks. */
+function disposeDetachedResources(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.geometry && !mesh.geometry.userData?.shared) mesh.geometry.dispose();
+    if (!mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (mat.userData?.shared) continue;
+      const standard = mat as THREE.MeshStandardMaterial;
+      if (standard.map && !standard.map.userData?.shared) standard.map.dispose();
+      mat.dispose();
+    }
+  });
+}
+
 export type EmoteType = 'GROOVE' | 'WAVE' | 'CHILL' | 'SALUTE' | 'TAUNT' | 'VICTORY';
 
 export function mapReactionToEmote(code: string): EmoteType {
@@ -732,6 +748,7 @@ export class HumanCharacterMesh {
   }
 
   private buildHairStyle(style: HairStyleId): void {
+    disposeDetachedResources(this.hairGroup);
     this.hairGroup.clear();
     this.tailPivotL = null;
     this.tailPivotR = null;
@@ -841,6 +858,7 @@ export class HumanCharacterMesh {
   }
 
   private buildAccessory(accessory: AccessoryId): void {
+    disposeDetachedResources(this.accessoryGroup);
     this.accessoryGroup.clear();
 
     if (accessory === 'visor') {

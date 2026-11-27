@@ -47,28 +47,39 @@ export class SoundManager {
   public isMusicEnabled = false;
 
   private isInitialized = false;
+  private unlockListenersActive = true;
   private lastPopTime = 0;
 
   constructor() {
     const unlock = () => {
-      if (!this.isInitialized) {
-        this.init();
-      } else {
-        this.resumeAudio();
-      }
-      if (this.ctx?.state === 'running') {
-        window.removeEventListener('click', unlock);
-        window.removeEventListener('keydown', unlock);
-        window.removeEventListener('touchstart', unlock);
-        window.removeEventListener('touchend', unlock);
-        window.removeEventListener('pointerdown', unlock);
+      try {
+        if (!this.isInitialized) this.init();
+        else this.resumeAudio();
+      } finally {
+        // One gesture attempt is enough; keeping five listeners attached when
+        // Web Audio is blocked would leak callbacks for the page lifetime.
+        this.detachUnlockListeners();
       }
     };
+    this.unlockHandler = unlock;
     window.addEventListener('click', unlock);
     window.addEventListener('keydown', unlock);
     window.addEventListener('touchstart', unlock, { passive: true });
     window.addEventListener('touchend', unlock, { passive: true });
     window.addEventListener('pointerdown', unlock, { passive: true });
+  }
+
+  private unlockHandler: (() => void) | null = null;
+
+  private detachUnlockListeners(): void {
+    if (!this.unlockListenersActive || !this.unlockHandler) return;
+    this.unlockListenersActive = false;
+    const unlock = this.unlockHandler;
+    window.removeEventListener('click', unlock);
+    window.removeEventListener('keydown', unlock);
+    window.removeEventListener('touchstart', unlock);
+    window.removeEventListener('touchend', unlock);
+    window.removeEventListener('pointerdown', unlock);
   }
 
   public init(): void {

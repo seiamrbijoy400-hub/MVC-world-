@@ -657,6 +657,9 @@ test('LAN server plugin: live HTTP /api/lan-info + 2-client WebSocket sync & dis
     host.ws.send(JSON.stringify({ type: 'BALL_SYNC', payload: { x: 96, y: 0.5, z: -4, vx: 3, vy: 1, vz: 0 } }));
     await waitForMsg(guest.msgs, (m) => m.type === 'BALL_SYNC', 'guest BALL_SYNC');
 
+    // Hits are only relayed when both live player states are inside melee range.
+    host.ws.send(JSON.stringify({ type: 'PLAYER_STATE', payload: { x: 42, y: 0, z: -11, mode: 'ON_FOOT' } }));
+    await new Promise((r) => setTimeout(r, 30));
     host.ws.send(JSON.stringify({ type: 'MELEE_HIT', payload: { targetId: guestId, damage: 20, dirX: 1, dirZ: 0 } }));
     await waitForMsg(guest.msgs, (m) => m.type === 'MELEE_HIT', 'guest MELEE_HIT');
 
@@ -2014,7 +2017,9 @@ test('WebSocket Security: malformed frames, oversize, forged hits, late-join & r
     assert.equal(guestSync.hp, 100);
     assert.equal(guestSync.animState, 'IDLE');
 
-    // 6. Forged MELEE_HIT (>45 damage capped, >6.5m rejected)
+    // 6. Forged MELEE_HIT (>45 damage capped, >6.5m rejected, PLAYING-only)
+    c1.ws.send(JSON.stringify({ type: 'START_GAME', payload: {} }));
+    await new Promise((r) => setTimeout(r, 30));
     c1.ws.send(JSON.stringify({ type: 'PLAYER_STATE', payload: { x: 0, y: 0, z: 0 } }));
     await new Promise((r) => setTimeout(r, 30));
     c2.msgs.length = 0;
@@ -2081,6 +2086,15 @@ test('Multiplayer Recovery, Host Migration, Expired Token & Leaderboard', async 
     const room = (host.msgs.find((m) => m.type === 'ROOM_STATE')!.payload as { room: { code: string } }).room;
 
     guest.ws.send(JSON.stringify({ type: 'JOIN_ROOM', payload: { code: room.code, playerName: 'Beta' } }));
+    await new Promise((r) => setTimeout(r, 35));
+
+    // Scores posted while still in the lobby must be ignored (anti-fake-leaderboard guard).
+    guest.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { mode: 'DRIFT_ARENA', score: 999999, combo: 9 } }));
+    await new Promise((r) => setTimeout(r, 35));
+    assert.equal(guest.msgs.some((m) => m.type === 'LEADERBOARD_UPDATE'), false);
+
+    // Scores are only accepted after the host starts the match.
+    host.ws.send(JSON.stringify({ type: 'START_GAME', payload: {} }));
     await new Promise((r) => setTimeout(r, 35));
 
     // Submit drift score -> verify LEADERBOARD_UPDATE
@@ -2325,16 +2339,20 @@ test('LAN file sharing: room-scoped upload, broadcast, download, sanitization & 
     const share = await waitFor(host.msgs, (m) => m.type === 'FILE_SHARE', 'FILE_SHARE');
     assert.equal((share.payload as { file: { id: string } }).file.id, uploaded.file.id);
 
+    // A bare GET must not disclose room files — the resume token is required.
+    const unauthDownload = await request('GET', `/api/files/${uploaded.file.id}?room=${code}`, {});
+    assert.equal(unauthDownload.status, 403);
+
     // Room-scoped download returns the exact bytes as an attachment.
-    const download = await request('GET', `/api/files/${uploaded.file.id}?room=${code}`, {});
+    const download = await request('GET', `/api/files/${uploaded.file.id}?room=${code}`, { 'x-resume-token': token });
     assert.equal(download.status, 200);
     assert.deepEqual(download.body, payload);
     assert.match(String(download.headers['content-disposition']), /^attachment;/);
     assert.equal(download.headers['x-content-type-options'], 'nosniff');
 
-    // Another room cannot fetch the file by id.
-    const wrongRoom = await request('GET', `/api/files/${uploaded.file.id}?room=ZZZZ`, {});
-    assert.equal(wrongRoom.status, 404);
+    // Another room cannot fetch the file by id, even with a valid session token.
+    const wrongRoom = await request('GET', `/api/files/${uploaded.file.id}?room=ZZZZ`, { 'x-resume-token': token });
+    assert.equal(wrongRoom.status, 403);
 
     // File list is available to room members.
     const list = await request('GET', `/api/files?room=${code}`, { 'x-resume-token': token });
@@ -2377,7 +2395,8 @@ test('LAN file sharing: room-scoped upload, broadcast, download, sanitization & 
     );
     assert.equal(html.status, 201);
     const svgId = (JSON.parse(html.body.toString()) as { file: { id: string } }).file.id;
-    const svgDownload = await request('GET', `/api/files/${svgId}?room=${code}`, {});
+    const svgDownload = await request('GET', `/api/files/${svgId}?room=${code}`, { 'x-resume-token': token });
+    assert.equal(svgDownload.status, 200);
     assert.equal(svgDownload.headers['content-type'], 'application/octet-stream');
   } finally {
     host.ws.close();
@@ -2432,6 +2451,8 @@ test('Durable leaderboard: best scores survive a server restart when a data dir 
     await waitFor((m) => m.type === 'WELCOME', 'WELCOME');
     host.ws.send(JSON.stringify({ type: 'CREATE_ROOM', payload: { playerName: 'PersistentAce', characterId: 'ren', carColor: '#ff5500' } }));
     await waitFor((m) => m.type === 'ROOM_STATE', 'ROOM_STATE');
+    host.ws.send(JSON.stringify({ type: 'START_GAME', payload: {} }));
+    await new Promise((r) => setTimeout(r, 30));
     host.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { score: 12345, bestTimeMs: 91234, combo: 7 } }));
     await waitFor((m) => m.type === 'LEADERBOARD_UPDATE', 'LEADERBOARD_UPDATE');
 

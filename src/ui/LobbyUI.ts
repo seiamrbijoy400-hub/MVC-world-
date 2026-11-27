@@ -575,10 +575,23 @@ export class LobbyUI {
       const row = document.createElement('div');
       row.className = 'room-file-item';
       const link = document.createElement('a');
-      link.href = this.client.fileDownloadUrl(f.id);
-      link.download = f.name;
+      link.href = '#';
       link.textContent = `⬇ ${f.name}`;
       link.title = `Download ${f.name}`;
+      link.addEventListener('click', async (event) => {
+        event.preventDefault();
+        try {
+          const { blob, name } = await this.client.downloadFile(f.id);
+          const url = URL.createObjectURL(blob);
+          const temp = document.createElement('a');
+          temp.href = url;
+          temp.download = name;
+          temp.click();
+          window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        } catch (err) {
+          this.onErrorToast(err instanceof Error ? err.message : 'Download failed.');
+        }
+      });
       const meta = document.createElement('span');
       meta.className = 'file-meta';
       meta.textContent = `${f.ownerName} · ${this.formatFileSize(f.size)}`;

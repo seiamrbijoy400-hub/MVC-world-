@@ -1,4 +1,4 @@
-export const OFFLINE_CACHE_NAME = 'apex-zero-v4';
+export const OFFLINE_CACHE_NAME = 'apex-zero-v5';
 
 export const REQUIRED_OFFLINE_ASSETS: readonly string[] = [
   './index.html',
@@ -15,7 +15,8 @@ export const REQUIRED_OFFLINE_ASSETS: readonly string[] = [
   './assets/sounds/high%20ACC.wav',
   './assets/sounds/high%20Deacc.wav',
   './assets/sounds/CarColision.wav',
-  './assets/sounds/TrackColision.wav'
+  './assets/sounds/TrackColision.wav',
+  './assets/sounds/step-inside-your-mind-instrumental-eurobeat-royalty-free-music.mp3'
 ];
 
 export interface OfflinePackStatus {
@@ -42,7 +43,10 @@ export interface OfflinePackDownloadResult {
 }
 
 function collectRuntimeBundleUrls(): string[] {
-  if (typeof document === 'undefined') return [];
+  // Headless test runners may expose a partial `document` stub without DOM queries.
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') {
+    return [...REQUIRED_OFFLINE_ASSETS];
+  }
   const urls = new Set<string>(REQUIRED_OFFLINE_ASSETS);
   document
     .querySelectorAll('script[src], link[rel="stylesheet"][href], link[rel="modulepreload"][href]')
@@ -60,8 +64,11 @@ function collectRuntimeBundleUrls(): string[] {
 }
 
 export async function checkOfflinePackStatus(
-  assets: readonly string[] = REQUIRED_OFFLINE_ASSETS
+  assets?: readonly string[]
 ): Promise<OfflinePackStatus> {
+  // Default to the same complete list used by downloadOfflinePack, including the
+  // hashed JS/CSS chunks that the initial page load needs.
+  const targets = assets ? [...assets] : collectRuntimeBundleUrls();
   const swActive =
     typeof navigator !== 'undefined' &&
     'serviceWorker' in navigator &&
@@ -73,25 +80,25 @@ export async function checkOfflinePackStatus(
       swActive,
       ready: false,
       cachedCount: 0,
-      totalCount: assets.length,
-      missing: [...assets]
+      totalCount: targets.length,
+      missing: [...targets]
     };
   }
 
   try {
     const cache = await caches.open(OFFLINE_CACHE_NAME);
     const missing: string[] = [];
-    for (const url of assets) {
+    for (const url of targets) {
       const hit = await cache.match(url);
       if (!hit) missing.push(url);
     }
-    const cachedCount = assets.length - missing.length;
+    const cachedCount = targets.length - missing.length;
     return {
       cacheSupported: true,
       swActive,
       ready: swActive && missing.length === 0,
       cachedCount,
-      totalCount: assets.length,
+      totalCount: targets.length,
       missing
     };
   } catch {
@@ -100,8 +107,8 @@ export async function checkOfflinePackStatus(
       swActive,
       ready: false,
       cachedCount: 0,
-      totalCount: assets.length,
-      missing: [...assets]
+      totalCount: targets.length,
+      missing: [...targets]
     };
   }
 }

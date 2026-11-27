@@ -170,6 +170,8 @@ export function createAnimeWaterMaterial(shoreRadius = 82.0): {
   const material = new THREE.ShaderMaterial({
     uniforms,
     transparent: true,
+    // Alpha-blended water must not occlude other transparent FX behind it.
+    depthWrite: false,
     vertexShader: /* glsl */ `
       uniform float uTime;
       varying vec3 vWorldPos;

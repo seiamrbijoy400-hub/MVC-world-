@@ -306,13 +306,15 @@ export class CarPhysics {
     return 350;
   }
 
-  // ZenvoTS1.asset steering curve (km/h -> radians) — capped to prevent snap oversteer
+  // ZenvoTS1.asset steering curve (km/h -> radians), scaled by the configured archetype cap.
   private evaluateMaxSteerAngle(speedKmh: number): number {
-    // 30° at 0 km/h → 12° at 100 km/h → 5.5° at 250+ km/h
-    if (speedKmh < 100) {
-      return THREE.MathUtils.lerp(30.5, 12.0, speedKmh / 100) * (Math.PI / 180);
-    }
-    return THREE.MathUtils.lerp(12.0, 5.5, Math.min(1, (speedKmh - 100) / 150)) * (Math.PI / 180);
+    // 30.5° at 0 km/h → 12° at 100 km/h → 5.5° at 250+ km/h for the HYPER baseline.
+    const curve = speedKmh < 100
+      ? THREE.MathUtils.lerp(30.5, 12.0, speedKmh / 100)
+      : THREE.MathUtils.lerp(12.0, 5.5, Math.min(1, (speedKmh - 100) / 150));
+    const baseline = 30.5;
+    const scale = THREE.MathUtils.clamp(this.maxSteerAngle / (baseline * (Math.PI / 180)), 0.7, 1.5);
+    return curve * scale * (Math.PI / 180);
   }
 
   public update(dt: number, inputs: CarInputs, canDrive = true): void {

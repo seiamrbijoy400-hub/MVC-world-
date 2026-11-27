@@ -54,6 +54,8 @@ export class CharacterController {
   private koTimer = 0;
   private sinceDamage = 0;
   private wasJump = false;
+  private coyoteTimer = 0;
+  private jumpBufferTimer = 0;
   private wasPunch = false;
   private wasDash = false;
   private wasGrounded = true;
@@ -91,6 +93,9 @@ export class CharacterController {
     this.hitStunTimer = 0;
     this.isGrounded = true;
     this.wasGrounded = true;
+    this.wasJump = false;
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
     this.animState = 'IDLE';
   }
 
@@ -159,6 +164,9 @@ export class CharacterController {
     this.punchCooldown = 0;
     this.isGrounded = true;
     this.wasGrounded = true;
+    this.wasJump = false;
+    this.coyoteTimer = 0;
+    this.jumpBufferTimer = 0;
     this.animState = 'IDLE';
     this.onRespawn(this.position.clone());
   }
@@ -212,6 +220,8 @@ export class CharacterController {
       }
       this.wasPunch = Boolean(inputs.punch);
       this.wasJump = Boolean(inputs.jump);
+      this.coyoteTimer = 0;
+      this.jumpBufferTimer = 0;
       this.wasDash = Boolean(inputs.dash);
       return;
     }
@@ -289,15 +299,22 @@ export class CharacterController {
       this.yaw += diff * Math.min(1, 13 * dt);
     }
 
-    // Jump / Shore Vault / Swim Hop
+    // Jump / Shore Vault / Swim Hop — buffered to stay responsive near ledges/landings.
     const jumpTrig = inputs.jump && !this.wasJump;
     this.wasJump = inputs.jump;
-    if (jumpTrig && canSteer) {
-      if (this.isGrounded) {
+    if (this.isGrounded) this.coyoteTimer = 0.12;
+    else this.coyoteTimer = Math.max(0, this.coyoteTimer - dt);
+    if (jumpTrig) this.jumpBufferTimer = 0.13;
+    else this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
+    if (this.jumpBufferTimer > 0 && canSteer) {
+      if (this.isGrounded || this.coyoteTimer > 0) {
         this.velocity.y = 8.9;
         this.isGrounded = false;
+        this.coyoteTimer = 0;
+        this.jumpBufferTimer = 0;
       } else if (this.isSwimming) {
         this.velocity.y = 7.4;
+        this.jumpBufferTimer = 0;
       }
     }
 

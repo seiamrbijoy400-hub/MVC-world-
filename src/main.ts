@@ -585,7 +585,7 @@ class GameApp {
       f.controller.groundHeightSampler = (x, z, y) => this.sampleUnifiedGround(x, z, y).height;
       f.controller.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
       f.controller.onPunchStrike = (origin, fwd) => {
-        if (!this.inCar && origin.distanceTo(this.charCtrl.position) < 2.2 && hasLineOfSight(
+        if (!this.inCar && !this.inHeli && origin.distanceTo(this.charCtrl.position) < 2.2 && hasLineOfSight(
           origin.x, origin.z, this.charCtrl.position.x, this.charCtrl.position.z,
           this.openWorld.colliders, 0.2,
           origin.y, this.charCtrl.position.y,
@@ -657,8 +657,7 @@ class GameApp {
     this.setupCameraDragLook(canvas);
     this.spawnInOpenWorld();
     this.setupUIHandlers();
-    this.syncSavedSettings();
-    this.refreshProfile();
+    this.applySavedRuntimeSettings();
 
     window.addEventListener('resize', () => this.onResize());
     window.addEventListener('orientationchange', () => {
@@ -735,6 +734,7 @@ class GameApp {
 
   private spawnInOpenWorld(): void {
     this.gameState = GameState.OPEN_WORLD;
+    this.resetHelicopterState();
     this.inCar = false;
     this.exitSeat(false);
     this.activities.cancelSprint();
@@ -790,6 +790,7 @@ class GameApp {
       this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
       return;
     }
+    this.resetHelicopterState();
     this.sound.init();
     this.hud.setRacePrompt(false);
     this.setRivalPrompt(null);
@@ -843,6 +844,7 @@ class GameApp {
       this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
       return;
     }
+    this.resetHelicopterState();
     this.sound.init();
     this.hud.setRacePrompt(false);
     this.setRivalPrompt(null);
@@ -979,7 +981,8 @@ class GameApp {
     };
 
     this.lobbyClient.onMeleeHit = (data) => {
-      if (data.targetId === this.lobbyClient.clientId && !this.inCar) {
+      if (data.attackerId === data.targetId) return;
+      if (data.targetId === this.lobbyClient.clientId && !this.inCar && !this.inHeli) {
         this.charCtrl.takeDamage(data.damage, data.dirX, data.dirZ);
         this.sound.playCrash(30);
         this.particles.emitSparks(this.charCtrl.position, 10);
@@ -1185,7 +1188,12 @@ class GameApp {
   }
 
   private toggleEnterExitCar(): void {
-    if (this.gameState === GameState.COUNTDOWN) return;
+    if (
+      this.gameState === GameState.COUNTDOWN ||
+      this.gameState === GameState.TIMED_RACE ||
+      this.gameState === GameState.FINISHED ||
+      this.gameState === GameState.DRIFT_ARENA
+    ) return;
     if (this.charCtrl.isDead) {
       this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
       return;
@@ -1309,11 +1317,17 @@ class GameApp {
     );
   }
 
-  private exitHelicopter(): void {
-    this.sound.playCarDoor();
+  /** Clear helicopter state without moving the player (used by race/bust/spawn transitions). */
+  private resetHelicopterState(): void {
+    if (!this.inHeli) return;
     this.inHeli = false;
     this.sound.updateHelicopterSound(false, 0, 0);
     this.hud.setHelicopterMode(false, this.physics.gearboxType);
+  }
+
+  private exitHelicopter(): void {
+    this.sound.playCarDoor();
+    this.resetHelicopterState();
     const rgt = this.heliPhysics.getRightVector();
     const exitPos = this.heliPhysics.position.clone().addScaledVector(rgt, -2.8);
     this.charCtrl.position.copy(exitPos);
@@ -1523,6 +1537,7 @@ class GameApp {
     this.save.data.timesBusted++;
     this.save.scheduleSave();
     this.koReason = 'BUSTED';
+    this.resetHelicopterState();
     this.inCar = false;
     this.exitSeat(false);
     this.avatarMesh.root.visible = true;
@@ -1876,6 +1891,42 @@ class GameApp {
     this.syncOptionSelection('.cam-options .option-btn', 'data-cam', this.cameraView);
   }
 
+  /** Apply every persisted setting to live systems after startup or a save import. */
+  private applySavedRuntimeSettings(): void {
+    const d = this.save.data;
+    if (this.sound.isMusicEnabled !== d.musicEnabled) this.sound.toggleMusic();
+    this.weather.setMode(d.weatherMode);
+    const wet = d.weatherMode !== 'CLEAR';
+    this.track.setWetSurface(wet);
+    this.openWorld.setWetSurface(wet);
+    this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
+
+    this.ghostReplayEnabled = d.ghostReplayEnabled;
+    this.ghost.loadFrames(d.bestLapGhost);
+
+    this.ownZenvo.physics.gearboxType = d.gearbox;
+    this.physics.gearboxType = d.gearbox;
+    this.ownZenvo.physics.assistMode = d.assistMode;
+    this.physics.assistMode = d.assistMode;
+    this.ownZenvo.physics.applyArchetype(d.carArchetype);
+    this.physics.applyArchetype(d.carArchetype);
+    this.physics.applyTuning(d.engineStage, d.nitroStage);
+    this.hud.updateTouchVisibility(d.gearbox);
+
+    this.setAtmosphere(d.atmospherePref === 'AUTO' ? 'SUNSET' : d.atmospherePref);
+    this.applyGraphicsQuality(d.graphicsQuality);
+    this.ownZenvo.mesh.setColor(d.carColor);
+
+    this.lobbyUI.config.playerName = d.playerName;
+    this.lobbyUI.config.characterId = d.characterId;
+    this.lobbyUI.config.carColor = d.carColor;
+    this.lobbyUI.config.gearbox = d.gearbox;
+    const nameInput = document.getElementById('input-player-name') as HTMLInputElement | null;
+    if (nameInput) nameInput.value = d.playerName;
+    this.refreshProfile();
+    this.syncSavedSettings();
+  }
+
   private applyGraphicsQuality(q: GraphicsQuality): void {
     const dpr = window.devicePixelRatio || 1;
     if (q === 'LOW') {
@@ -2117,7 +2168,7 @@ class GameApp {
 
   private startNearbyRival(): void {
     const rival = this.nearbyRival;
-    if (!rival) return;
+    if (!rival || this.activities.activeCourier) return;
     if (!this.inCar) {
       this.hud.showNotification('GET IN YOUR CAR', 'You need your Zenvo to challenge a rival', 2.0);
       return;
@@ -2129,6 +2180,7 @@ class GameApp {
     }
     if (!this.activities.startRivalSprint(rival, this.physics)) return;
     this.setRivalPrompt(null);
+    this.setCourierPrompt(null);
     this.lapManager.resetRace(0);
     this.hud.showNotification(
       `${rival.rivalName.toUpperCase()} CHALLENGE`,
@@ -2165,6 +2217,7 @@ class GameApp {
     if (!c || !this.inCar || this.gameState !== GameState.OPEN_WORLD) return;
     if (!this.activities.startCourierContract(c)) return;
     this.setCourierPrompt(null);
+    this.setRivalPrompt(null);
     this.sound.playBeep(920, 0.16);
     this.hud.showNotification(
       `${c.title.toUpperCase()}`,
@@ -2377,8 +2430,7 @@ class GameApp {
         if (!res.ok) {
           this.hud.showNotification('IMPORT FAILED', res.error || 'Invalid save file', 2.4);
         } else {
-          this.refreshProfile();
-          this.applyGraphicsQuality(this.save.data.graphicsQuality);
+          this.applySavedRuntimeSettings();
           this.hud.showNotification('SAVE RESTORED', 'Profile & progress imported!', 2.4);
         }
       } catch {
@@ -2395,13 +2447,15 @@ class GameApp {
 
     window.addEventListener('keydown', (e) => {
       if (this.hud.isTypingChat()) return;
+      if (e.repeat && e.key !== 'Tab') return;
       const topModal = Array.from(document.querySelectorAll<HTMLElement>('.modal-backdrop.open')).pop();
       if (e.key === 'Escape') {
         // Escape always closes the topmost surface instead of stacking modals.
         const closers: Record<string, () => void> = {
           'results-modal': closeResults,
           'garage-modal': () => this.garage.close(),
-          'settings-modal': closeModal
+          'settings-modal': closeModal,
+          'studio-modal': () => this.studio.open(false)
         };
         if (topModal) (closers[topModal.id] ?? (() => topModal.classList.remove('open')))();
         else if (this.lobbyOpen) this.lobbyUI.setVisible(false);
@@ -3143,6 +3197,7 @@ class GameApp {
       );
 
       const nearStartGate = this.gameState === GameState.OPEN_WORLD
+        && !this.inHeli
         && !this.charCtrl.isDead
         && !this.activities.activeSprint
         && !this.activities.activeCourier
@@ -3150,6 +3205,7 @@ class GameApp {
       this.hud.setRacePrompt(nearStartGate);
 
       const nearDriftGarage = this.gameState === GameState.OPEN_WORLD
+        && !this.inHeli
         && !this.activities.activeSprint
         && !this.activities.activeCourier
         && Math.hypot(activePos.x - 84, activePos.z - 15) < 12;
@@ -3204,7 +3260,7 @@ class GameApp {
         this.police.update(
           dt,
           activePos,
-          this.inCar || this.charCtrl.isDead,
+          this.inCar || this.inHeli || this.charCtrl.isDead,
           this.inCar ? this.physics : null,
           this.charCtrl.isDead
         );
@@ -3215,7 +3271,7 @@ class GameApp {
 
         // Any fast vehicle (police, traffic, race bot) clipping you on foot hurts.
         if (this.policeHitCooldown > 0) this.policeHitCooldown -= dt;
-        if (!this.inCar && !this.charCtrl.isDead && this.policeHitCooldown <= 0) {
+        if (!this.inCar && !this.inHeli && !this.charCtrl.isDead && this.policeHitCooldown <= 0) {
           const impact = resolveMovingVehicleImpactOnCharacter(
             this.charCtrl,
             [
@@ -3428,6 +3484,9 @@ class GameApp {
       extraMarkers,
       driftHudInfo
     );
+    // Keep the sky dome centered on the camera so world-edge views never clip
+    // through its far side (radius 980 < far plane 1400 + world-corner offset).
+    if (this.track?.skyDomeMesh) this.track.skyDomeMesh.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
     this.updateAdaptiveResolution(rawDt);
   }

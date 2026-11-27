@@ -15,10 +15,17 @@ export class GhostSystem {
     this.ghostMesh.root.visible = false;
     scene.add(this.ghostMesh.root);
 
-    if (savedGhost && savedGhost.length > 4) {
-      this.playback = savedGhost;
-      this.hasGhost = true;
-    }
+    this.loadFrames(savedGhost);
+  }
+
+  /** Replace the replay frames after a save import, with defensive numeric checks. */
+  public loadFrames(frames: GhostFrame[] | undefined): void {
+    this.playback = Array.isArray(frames) ? frames.filter(
+      (f) => f && [f.t, f.x, f.y, f.z, f.yaw, f.pitch, f.roll, f.steer].every((n) => Number.isFinite(n))
+    ).slice() : [];
+    this.playbackIndex = 0;
+    this.hasGhost = this.playback.length > 4;
+    if (!this.hasGhost) this.ghostMesh.root.visible = false;
   }
 
   public startRecording(): void {

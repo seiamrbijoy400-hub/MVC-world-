@@ -230,8 +230,14 @@ export class ParticleSystem {
     }
 
     this.skidIndex += 6;
-    this.skidMesh.geometry.attributes.position.needsUpdate = true;
-    this.skidMesh.geometry.attributes.color.needsUpdate = true;
+    const position = this.skidMesh.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const color = this.skidMesh.geometry.getAttribute('color') as THREE.BufferAttribute;
+    position.clearUpdateRanges();
+    color.clearUpdateRanges();
+    position.addUpdateRange(idx, 6);
+    color.addUpdateRange(idx, 6);
+    position.needsUpdate = true;
+    color.needsUpdate = true;
   }
 
   public update(dt: number, physics: CarPhysics, driftMult = 1): void {

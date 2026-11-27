@@ -112,8 +112,8 @@ try {
   sockets.push(host.ws, guest.ws);
 
   const hostWelcome = (await waitFor(host.msgs, (m) => m.type === 'WELCOME', 'host WELCOME')).payload;
-  await waitFor(guest.msgs, (m) => m.type === 'WELCOME', 'guest WELCOME');
-  check('Two simultaneous WebSocket clients', true, `${hostWelcome.clientId} + guest`);
+  const guestWelcome = (await waitFor(guest.msgs, (m) => m.type === 'WELCOME', 'guest WELCOME')).payload;
+  check('Two simultaneous WebSocket clients', true, `${hostWelcome.clientId} + ${guestWelcome.clientId}`);
 
   host.ws.send(
     JSON.stringify({
@@ -150,13 +150,25 @@ try {
   check('File-share broadcast reaches guest', shared.payload?.file?.name === 'qa-note.txt');
 
   const fileId = shared.payload?.file?.id || upload.json?.file?.id;
-  const download = await get(port, `/api/files/${fileId}?room=${roomCode}`);
+  const unauth = await get(port, `/api/files/${fileId}?room=${roomCode}`);
+  check('Unauthenticated download blocked', unauth.status === 403, `status ${unauth.status}`);
+  const download = await get(port, `/api/files/${fileId}?room=${roomCode}`, {
+    'x-resume-token': guestWelcome.resumeToken
+  });
   check('Guest downloads exact bytes', download.status === 200 && download.body.equals(fileData), `${download.body.length} bytes`);
   check('Download is a safe attachment', /^attachment;/i.test(String(download.headers['content-disposition'])) && download.headers['x-content-type-options'] === 'nosniff');
 
-  const wrongRoom = await get(port, `/api/files/${fileId}?room=ZZZZ`);
-  check('Cross-room download blocked', wrongRoom.status === 404, `status ${wrongRoom.status}`);
+  const wrongRoom = await get(port, `/api/files/${fileId}?room=ZZZZ`, {
+    'x-resume-token': guestWelcome.resumeToken
+  });
+  check('Cross-room download blocked', wrongRoom.status === 403, `status ${wrongRoom.status}`);
 
+  // Scores only count once the host has started the match.
+  guest.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { score: 999999 } }));
+  await new Promise((r) => setTimeout(r, 40));
+  check('Lobby score rejected before match start', !guest.msgs.some((m) => m.type === 'LEADERBOARD_UPDATE'));
+  host.ws.send(JSON.stringify({ type: 'START_GAME', payload: {} }));
+  await waitFor(guest.msgs, (m) => m.type === 'GAME_START', 'GAME_START');
   host.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { score: 4242, bestTimeMs: 65432 } }));
   await waitFor(guest.msgs, (m) => m.type === 'LEADERBOARD_UPDATE', 'leaderboard update');
   const board = await get(port, '/api/leaderboard');

@@ -44,8 +44,10 @@ export class LobbyClient {
   private ws: WebSocket | null = null;
   private reconnectTimer: number | null = null;
   private resumeToken: string | null = null;
+  private pendingResumeToken: string | null = null;
   private wasInRoomCode: string | null = null;
   private intentionalDisconnect = false;
+  private userSelectedOffline = false;
   private manualLanHost: string = '';
 
   public networkMode: NetworkMode = 'LAN';
@@ -71,6 +73,7 @@ export class LobbyClient {
   public onError: (msg: string) => void = () => {};
 
   constructor() {
+    this.installOnlineRecovery();
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       this.networkMode = 'OFFLINE';
       this.setStatus('OFFLINE', 'Device offline — Offline Solo active');
@@ -90,6 +93,22 @@ export class LobbyClient {
     this.onStatusChange(state, detail);
   }
 
+  /** Regain connectivity automatically when the app started while offline. */
+  private installOnlineRecovery(): void {
+    if (typeof window === 'undefined') return;
+    window.addEventListener('online', () => {
+      if (this.userSelectedOffline || this.networkMode !== 'OFFLINE') return;
+      this.networkMode = typeof location !== 'undefined' && isLocalOrLanHostname(location.hostname) ? 'LAN' : 'ONLINE';
+      this.setStatus('CONNECTING', 'Connection restored — reconnecting...');
+      void this.fetchLanInfo().then((info) => {
+        if (info?.mode === 'ONLINE' && this.networkMode !== 'OFFLINE' && !this.manualLanHost) {
+          this.networkMode = 'ONLINE';
+        }
+      });
+      this.connect();
+    });
+  }
+
   private clearReconnectTimer(): void {
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
@@ -99,6 +118,7 @@ export class LobbyClient {
 
   public setNetworkMode(mode: NetworkMode, customHost?: string): void {
     this.networkMode = mode;
+    this.userSelectedOffline = mode === 'OFFLINE';
     this.manualLanHost = (customHost || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
     this.resumeToken = null;
     this.wasInRoomCode = null;
@@ -202,8 +222,10 @@ export class LobbyClient {
         this.isConnected = true;
         this.onConnectionChange(true);
         if (this.wasInRoomCode && this.resumeToken) {
+          const tokenForResume = this.resumeToken;
+          this.pendingResumeToken = tokenForResume;
           this.setStatus('RECONNECTING', `Resuming room #${this.wasInRoomCode}...`);
-          this.send('RESUME_SESSION', { resumeToken: this.resumeToken });
+          this.send('RESUME_SESSION', { resumeToken: tokenForResume });
         } else {
           this.setStatus('CONNECTED', this.networkMode === 'ONLINE' ? 'Online lobby ready' : 'LAN lobby ready');
           this.send('LIST_ROOMS', {});
@@ -225,6 +247,7 @@ export class LobbyClient {
 
       this.ws.onclose = () => {
         this.ws = null;
+        this.pendingResumeToken = null;
         this.isConnected = false;
         this.onConnectionChange(false);
         if (this.intentionalDisconnect || this.networkMode === 'OFFLINE') {
@@ -249,7 +272,12 @@ export class LobbyClient {
     switch (type) {
       case 'WELCOME':
         this.clientId = payload.clientId;
-        if (typeof payload.resumeToken === 'string' && !this.wasInRoomCode) {
+        // Keep a fresh token issued for this socket even while an old-token resume is
+        // in flight; the expired attempt must not poison later reconnects.
+        if (
+          typeof payload.resumeToken === 'string' &&
+          (!this.wasInRoomCode || (this.pendingResumeToken && payload.resumeToken !== this.pendingResumeToken))
+        ) {
           this.resumeToken = payload.resumeToken;
         }
         break;
@@ -258,12 +286,15 @@ export class LobbyClient {
         if (typeof payload.resumeToken === 'string') {
           this.resumeToken = payload.resumeToken;
         }
+        this.pendingResumeToken = null;
         this.currentRoom = payload.room || null;
         this.wasInRoomCode = this.currentRoom?.code || null;
         this.setStatus('CONNECTED', `Rejoined room #${this.currentRoom?.code || ''}`);
         this.onRoomState(this.currentRoom);
         break;
       case 'SESSION_EXPIRED':
+        if (this.resumeToken === this.pendingResumeToken) this.resumeToken = null;
+        this.pendingResumeToken = null;
         this.wasInRoomCode = null;
         this.currentRoom = null;
         this.setStatus('CONNECTED', 'Previous room expired');
@@ -403,9 +434,29 @@ export class LobbyClient {
     this.send('RESULT_SUBMIT', opts);
   }
 
-  public fileDownloadUrl(fileId: string): string {
+  /** Download through an authenticated fetch; room codes are public, resume tokens are not. */
+  public async downloadFile(fileId: string): Promise<{ blob: Blob; name: string }> {
     const room = this.currentRoom?.code || '';
-    return `${this.buildHttpBase()}/api/files/${encodeURIComponent(fileId)}?room=${encodeURIComponent(room)}`;
+    if (!room || this.networkMode === 'OFFLINE' || this.lanMixedContentBlocked()) {
+      throw new Error('Join a room before downloading files.');
+    }
+    const res = await fetch(`${this.buildHttpBase()}/api/files/${encodeURIComponent(fileId)}?room=${encodeURIComponent(room)}`, {
+      headers: { 'x-resume-token': this.resumeToken || '' },
+      cache: 'no-store'
+    });
+    if (!res.ok) {
+      let message = `Download failed (${res.status}).`;
+      try {
+        const data = await res.json();
+        if (typeof data?.error === 'string') message = data.error;
+      } catch {}
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const utf8Name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    const name = utf8Name ? decodeURIComponent(utf8Name) : (/filename="([^"]+)"/i.exec(disposition)?.[1] || fileId);
+    return { blob, name };
   }
 
   public async fetchRoomFiles(): Promise<SharedFileInfo[]> {

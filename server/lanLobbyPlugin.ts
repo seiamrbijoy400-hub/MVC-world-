@@ -17,8 +17,8 @@ import type {
   RoomState,
   RoomSummary,
   SharedFileInfo
-} from '../src/network/LobbyProtocol';
-import { SHARED_FILE_LIMITS } from '../src/network/LobbyProtocol';
+} from '../src/network/LobbyProtocol.js';
+import { SHARED_FILE_LIMITS } from '../src/network/LobbyProtocol.js';
 
 interface ClientSession {
   id: string;
@@ -37,6 +37,7 @@ interface ClientSession {
   joinFailWindowStart: number;
   joinFailCount: number;
   lastMeleeAt: number;
+  lastResultAt: number;
 }
 
 interface RecoverableSession {
@@ -63,6 +64,8 @@ interface StoredFile extends SharedFileInfo {
 
 const MAX_PAYLOAD_BYTES = 8192;
 const MAX_ROOMS = 200;
+const MAX_TOTAL_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_TOTAL_FILES = 200;
 const SESSION_GRACE_MS = 15_000;
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
@@ -174,17 +177,23 @@ function getLocalLanIps(): string[] {
 
 function resolveNetworkInfo(req: IncomingMessage | undefined, port: number): LanNetworkInfo {
   const envPublic = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/+$/, '');
-  const fwdHost = typeof req?.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'].split(',')[0].trim() : '';
-  const fwdProto = typeof req?.headers['x-forwarded-proto'] === 'string' ? req.headers['x-forwarded-proto'].split(',')[0].trim() : 'https';
-  const reqHost = typeof req?.headers.host === 'string' ? req.headers.host.trim() : '';
-  const isCloudEnv = Boolean(
+  const knownCloud = Boolean(
     process.env.RENDER ||
     process.env.RENDER_EXTERNAL_URL ||
     process.env.FLY_APP_NAME ||
-    process.env.RAILWAY_ENVIRONMENT ||
-    envPublic ||
-    fwdHost
+    process.env.RAILWAY_ENVIRONMENT
   );
+  const trustProxy =
+    knownCloud || /^(1|true|yes)$/i.test((process.env.TRUST_PROXY || '').trim());
+  const rawFwdHost = typeof req?.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'].split(',')[0].trim() : '';
+  const rawFwdProto = typeof req?.headers['x-forwarded-proto'] === 'string' ? req.headers['x-forwarded-proto'].split(',')[0].trim() : 'https';
+  // Forwarded headers are only meaningful behind a trusted proxy; a direct client must not
+  // be able to poison the public URL advertised to other players.
+  const validFwdHost = /^[a-z0-9.-]+(:\d{1,5})?$/i.test(rawFwdHost) ? rawFwdHost : '';
+  const fwdHost = trustProxy ? validFwdHost : '';
+  const fwdProto = trustProxy && /^https?$/.test(rawFwdProto) ? rawFwdProto : 'https';
+  const reqHost = typeof req?.headers.host === 'string' ? req.headers.host.trim() : '';
+  const isCloudEnv = Boolean(knownCloud || envPublic || fwdHost);
 
   if (isCloudEnv) {
     const derivedOrigin = envPublic || (fwdHost ? `${fwdProto}://${fwdHost}` : `https://${reqHost}`);
@@ -236,6 +245,7 @@ export interface LanLobbyServerLike {
 
 /** A durable best score kept on the host server across restarts. */
 export interface GlobalScore {
+  playerId?: string;
   name: string;
   score: number;
   bestTimeMs?: number;
@@ -274,6 +284,7 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
   const intervals = new Set<NodeJS.Timeout>();
   const sockets = new Set<WebSocketServer>();
   const files = new Map<string, StoredFile>();
+  const pendingFileBytes = new Map<string, number>();
 
   const getRoomFiles = (roomCode: string): SharedFileInfo[] => {
     const now = Date.now();
@@ -325,7 +336,9 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
         if (!Number.isFinite(score)) continue;
         const name = sanitizeName(e.name, 'Player', 16);
         const mode = VALID_MODES.has(e.mode as GameModeId) ? (e.mode as GameModeId) : 'OPEN_WORLD';
-        globalScores.set(name.toLowerCase(), {
+        const playerId = typeof e.playerId === 'string' && e.playerId.trim() ? e.playerId.trim().slice(0, 48) : undefined;
+        globalScores.set(playerId || name.toLowerCase(), {
+          playerId,
           name,
           score: Math.max(0, Math.round(score)),
           bestTimeMs: Number.isFinite(e.bestTimeMs) ? Math.max(0, Math.round(Number(e.bestTimeMs))) : undefined,
@@ -520,6 +533,8 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
         wss.handleUpgrade(req, socket, head, (ws) => {
           wss.emit('connection', ws, req);
         });
+      } else {
+        socket.destroy();
       }
     });
 
@@ -543,7 +558,8 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
         createCount: 0,
         joinFailWindowStart: now,
         joinFailCount: 0,
-        lastMeleeAt: 0
+        lastMeleeAt: 0,
+        lastResultAt: 0
       };
       clients.set(clientId, session);
 
@@ -933,16 +949,21 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
           if (ts - session.lastMeleeAt < 220) return;
           session.lastMeleeAt = ts;
 
+          // A hit is only credible when both live states exist, the target is a real
+          // room participant, and the match is actually running. Without these guards
+          // a client could damage anyone by omitting PLAYER_STATE or targeting a
+          // reconnecting player whose state is temporarily absent.
+          if (room.status !== 'PLAYING') return;
+          if (!room.players.some((p) => p.id === targetId)) return;
           const attackerState = room.playerStates[session.id];
           const targetState = room.playerStates[targetId];
-          if (attackerState && targetState) {
-            const dist = Math.hypot(
-              attackerState.x - targetState.x,
-              attackerState.y - targetState.y,
-              attackerState.z - targetState.z
-            );
-            if (dist > 6.5) return;
-          }
+          if (!attackerState || !targetState) return;
+          const dist = Math.hypot(
+            attackerState.x - targetState.x,
+            attackerState.y - targetState.y,
+            attackerState.z - targetState.z
+          );
+          if (dist > 6.5) return;
 
           const rawDx = finiteNum(payload.dirX, 0, -1, 1);
           const rawDz = finiteNum(payload.dirZ, -1, -1, 1);
@@ -960,6 +981,14 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
         if (type === 'RESULT_SUBMIT') {
           const slot = room.players.find(p => p.id === session.id);
           if (!slot) return;
+          // Scores only count for a match that actually started, in the mode the room
+          // was created with. Otherwise any lobby member could post a fake global best.
+          if (room.status !== 'PLAYING') return;
+          const mode = VALID_MODES.has(payload.mode as GameModeId) ? payload.mode as GameModeId : room.mode;
+          if (mode !== room.mode) return;
+          if (ts - session.lastResultAt < 1000) return;
+          session.lastResultAt = ts;
+
           const score = Math.round(finiteNum(payload.score, 0, 0, 10_000_000));
           const bestTimeMs = Number.isFinite(payload.bestTimeMs)
             ? Math.round(finiteNum(payload.bestTimeMs, 0, 500, 3_600_000))
@@ -980,10 +1009,16 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
             entries: getLeaderboardEntries(room)
           });
           if (scoresFile) {
-            const key = slot.name.toLowerCase();
-            const prev = globalScores.get(key);
+            // Identity is the server-issued session id, not a client-supplied display name.
+            // Legacy entries without playerId are adopted once by matching name.
+            const key = session.id;
+            const legacyKey = slot.name.toLowerCase();
+            const legacy = globalScores.get(legacyKey);
+            if (legacy && !legacy.playerId) globalScores.delete(legacyKey);
+            const prev = globalScores.get(key) || (legacy && !legacy.playerId ? legacy : undefined);
             if (!prev || score > prev.score) {
               globalScores.set(key, {
+                playerId: session.id,
                 name: slot.name,
                 score,
                 bestTimeMs,
@@ -1063,10 +1098,30 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(body));
     };
+    const totalStoredBytes = () => {
+      let sum = 0;
+      for (const f of files.values()) sum += f.size;
+      for (const n of pendingFileBytes.values()) sum += n;
+      return sum;
+    };
+    const releaseRoomReservation = (code: string, bytes: number) => {
+      const left = (pendingFileBytes.get(code) || 0) - bytes;
+      if (left > 0) pendingFileBytes.set(code, left);
+      else pendingFileBytes.delete(code);
+    };
 
     const downloadMatch = /^\/([a-f0-9]{16})$/.exec(pathname);
+    const tokenHeader = req.headers['x-resume-token'];
+    const requestToken = typeof tokenHeader === 'string' ? tokenHeader.trim() : '';
+    const requestingSession = requestToken ? sessionByResumeToken(requestToken) : undefined;
+    const requestingRoom = requestingSession?.roomCode ? rooms.get(requestingSession.roomCode) : undefined;
+    const isRoomMember = Boolean(requestingSession && requestingRoom && requestingRoom.code === roomCode);
 
     if (req.method === 'GET' || req.method === 'HEAD') {
+      if (!isRoomMember) {
+        sendJson(403, { error: 'Join the room before reading shared files.' });
+        return;
+      }
       if (downloadMatch) {
         const file = files.get(downloadMatch[1]);
         if (!file || file.expiresAt <= Date.now() || !roomCode || file.roomCode !== roomCode) {
@@ -1110,10 +1165,8 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
       return;
     }
 
-    const tokenHeader = req.headers['x-resume-token'];
-    const token = typeof tokenHeader === 'string' ? tokenHeader.trim() : '';
-    const session = token ? sessionByResumeToken(token) : undefined;
-    const room = session?.roomCode ? rooms.get(session.roomCode) : undefined;
+    const session = requestingSession;
+    const room = requestingRoom;
     if (!session || !room || room.code !== roomCode) {
       sendJson(403, { error: 'Join the room before sharing files.' });
       return;
@@ -1127,11 +1180,24 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
     }
 
     const existing = getRoomFiles(room.code);
-    if (existing.length >= SHARED_FILE_LIMITS.maxFilesPerRoom) {
+    if (existing.length >= SHARED_FILE_LIMITS.maxFilesPerRoom || files.size >= MAX_TOTAL_FILES) {
       sendJson(429, { error: `Room file limit reached (${SHARED_FILE_LIMITS.maxFilesPerRoom}). Wait for old files to expire.` });
       return;
     }
-    const usedBytes = existing.reduce((sum, f) => sum + f.size, 0);
+    const reservation = Number.isFinite(declared) && declared > 0 ? Math.floor(declared) : 0;
+    if (totalStoredBytes() + reservation > MAX_TOTAL_FILE_BYTES) {
+      sendJson(413, { error: `Server file storage full (max ${formatBytes(MAX_TOTAL_FILE_BYTES)}).` });
+      req.resume();
+      return;
+    }
+    pendingFileBytes.set(room.code, (pendingFileBytes.get(room.code) || 0) + reservation);
+    let reservationReleased = false;
+    const releaseReservation = () => {
+      if (reservationReleased) return;
+      reservationReleased = true;
+      releaseRoomReservation(room.code, reservation);
+    };
+    const usedBytes = existing.reduce((sum, f) => sum + f.size, 0) + (pendingFileBytes.get(room.code) || 0) - reservation;
 
     const chunks: Buffer[] = [];
     let total = 0;
@@ -1142,6 +1208,7 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
       total += chunk.length;
       if (total > SHARED_FILE_LIMITS.maxFileBytes) {
         aborted = true;
+        releaseReservation();
         sendJson(413, { error: `File too large (max ${formatBytes(SHARED_FILE_LIMITS.maxFileBytes)}).` });
         req.resume();
         return;
@@ -1151,12 +1218,17 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
 
     req.on('end', () => {
       if (aborted) return;
+      releaseReservation();
       if (total === 0) {
         sendJson(400, { error: 'Empty file.' });
         return;
       }
       if (usedBytes + total > SHARED_FILE_LIMITS.maxRoomBytes) {
         sendJson(413, { error: `Room storage full (max ${formatBytes(SHARED_FILE_LIMITS.maxRoomBytes)}).` });
+        return;
+      }
+      if (files.size >= MAX_TOTAL_FILES || totalStoredBytes() + total > MAX_TOTAL_FILE_BYTES) {
+        sendJson(413, { error: 'Server file storage full.' });
         return;
       }
 
@@ -1188,9 +1260,14 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
       sendJson(201, { file: info, url: `/api/files/${info.id}?room=${room.code}` });
     });
 
+    req.on('aborted', () => {
+      aborted = true;
+      releaseReservation();
+    });
     req.on('error', () => {
       if (aborted) return;
       aborted = true;
+      releaseReservation();
       sendJson(400, { error: 'Upload failed.' });
     });
   };

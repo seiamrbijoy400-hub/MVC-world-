@@ -363,7 +363,7 @@ export class WorldActivities {
   }
 
   public startRivalSprint(rival: RivalSprintDef, playerPhysics: CarPhysics): boolean {
-    if (this.activeSprint) return false;
+    if (this.activeSprint || this.activeCourier) return false;
     const myRank = this.save.getRank().level;
     if (myRank < rival.minRank) return false;
 

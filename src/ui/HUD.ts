@@ -106,6 +106,7 @@ export class HUD {
   };
 
   private keysDown: Set<string> = new Set();
+  private gamepadInteractWasPressed = false;
   private touchSteerLeft = false;
   private touchSteerRight = false;
   private touchAnalogSteer = 0;
@@ -829,6 +830,24 @@ export class HUD {
     pad.addEventListener('pointercancel', endSteer);
   }
 
+  private getGamepad(): Gamepad | null {
+    if (typeof navigator === 'undefined' || !navigator.getGamepads) return null;
+    const pads = navigator.getGamepads();
+    return pads?.[0] ?? null;
+  }
+
+  private gamepadAxis(value: number | undefined): number {
+    return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) > 0.12 ? value : 0;
+  }
+
+  /** Y / button 3 is the cross-mode interact / enter-exit binding. */
+  private readGamepadInteractEdge(): boolean {
+    const pressed = Boolean(this.getGamepad()?.buttons[3]?.pressed);
+    const edge = pressed && !this.gamepadInteractWasPressed;
+    this.gamepadInteractWasPressed = pressed;
+    return edge;
+  }
+
   public pollHelicopterInputs(): HelicopterInputs {
     if (this.isTypingChat()) {
       return { pitch: 0, yaw: 0, strafe: 0, ascend: false, descend: false };
@@ -843,11 +862,21 @@ export class HUD {
     if (this.keysDown.has('KeyQ')) strafe -= 1;
     if (this.keysDown.has('KeyE')) strafe += 1;
 
+    const gp = this.getGamepad();
+    if (gp) {
+      pitch -= this.gamepadAxis(gp.axes[1]);
+      yaw += this.gamepadAxis(gp.axes[0]);
+      strafe += this.gamepadAxis(gp.axes[2] ?? gp.axes[0]);
+      if (gp.buttons[4]?.pressed) strafe -= 1;
+      if (gp.buttons[5]?.pressed) strafe += 1;
+    }
+    if (this.readGamepadInteractEdge()) this.onToggleEnterExit();
+
     this.heliInputs.pitch = Math.max(-1, Math.min(1, pitch));
     this.heliInputs.yaw = Math.max(-1, Math.min(1, yaw));
     this.heliInputs.strafe = Math.max(-1, Math.min(1, strafe));
-    this.heliInputs.ascend = this.keysDown.has('Space') || this.heliAscend;
-    this.heliInputs.descend = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.keysDown.has('KeyC') || this.heliDescend;
+    this.heliInputs.ascend = this.keysDown.has('Space') || this.heliAscend || Boolean(gp?.buttons[0]?.pressed);
+    this.heliInputs.descend = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.keysDown.has('KeyC') || this.heliDescend || Boolean(gp?.buttons[1]?.pressed);
     return this.heliInputs;
   }
 
@@ -862,13 +891,19 @@ export class HUD {
     if (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) my += 1;
     if (this.keysDown.has('KeyS') || this.keysDown.has('ArrowDown')) my -= 1;
 
+    const gp = this.getGamepad();
+    if (gp) {
+      mx += this.gamepadAxis(gp.axes[0]);
+      my -= this.gamepadAxis(gp.axes[1]);
+    }
+
     this.charInputs.moveX = Math.max(-1, Math.min(1, mx));
     this.charInputs.moveY = Math.max(-1, Math.min(1, my));
-    this.charInputs.sprint = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.joystick.value.sprint || this.footSprintLocked;
-    this.charInputs.jump = this.keysDown.has('Space') || this.footJump;
-    this.charInputs.punch = this.keysDown.has('KeyJ') || this.keysDown.has('KeyK') || this.footPunch;
-    this.charInputs.dash = this.keysDown.has('KeyQ') || this.keysDown.has('AltLeft') || this.footDash;
-    this.charInputs.interact = this.keysDown.has('KeyE') || this.footInteract;
+    this.charInputs.sprint = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.joystick.value.sprint || this.footSprintLocked || Boolean(gp?.buttons[10]?.pressed);
+    this.charInputs.jump = this.keysDown.has('Space') || this.footJump || Boolean(gp?.buttons[0]?.pressed);
+    this.charInputs.punch = this.keysDown.has('KeyJ') || this.keysDown.has('KeyK') || this.footPunch || Boolean(gp?.buttons[2]?.pressed);
+    this.charInputs.dash = this.keysDown.has('KeyQ') || this.keysDown.has('AltLeft') || this.footDash || Boolean(gp?.buttons[1]?.pressed);
+    this.charInputs.interact = this.keysDown.has('KeyE') || this.footInteract || this.readGamepadInteractEdge();
     return this.charInputs;
   }
 
@@ -886,11 +921,10 @@ export class HUD {
     const kbNitro = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.keysDown.has('KeyN');
     const kbClutch = this.keysDown.has('KeyC');
 
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gp = this.getGamepad();
     let gpThrottle = 0, gpBrake = 0, gpSteer = 0, gpHandbrake = false, gpNitro = false, gpShiftUp = false, gpShiftDown = false;
 
-    if (gamepads && gamepads[0]) {
-      const gp = gamepads[0];
+    if (gp) {
       if (Math.abs(gp.axes[0]) > 0.1) gpSteer = gp.axes[0];
       if (gp.buttons[7]) gpThrottle = gp.buttons[7].value;
       if (gp.buttons[6]) gpBrake = gp.buttons[6].value;
@@ -899,6 +933,7 @@ export class HUD {
       if (gp.buttons[5] && gp.buttons[5].pressed) gpShiftUp = true;
       if (gp.buttons[4] && gp.buttons[4].pressed) gpShiftDown = true;
     }
+    if (this.readGamepadInteractEdge()) this.onToggleEnterExit();
 
     if (this.touchSteerLeft) kbSteer -= 1.0;
     if (this.touchSteerRight) kbSteer += 1.0;
