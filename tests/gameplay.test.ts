@@ -2249,3 +2249,137 @@ test('LobbyClient: HTTPS page blocks private ws:// LAN hosts with an actionable 
   assert.match(src, /const secure = typeof location !== 'undefined' && location\.protocol === 'https:';[\s\S]{0,140}\$\{secure \? 'wss' : 'ws'\}/);
   assert.match(src, /if \(this\.networkMode === 'OFFLINE' \|\| this\.lanMixedContentBlocked\(\)\) return null;/);
 });
+
+test('LAN file sharing: room-scoped upload, broadcast, download, sanitization & limits', async () => {
+  const srv = startOnlineServer({ port: 0, host: '127.0.0.1', distDir: 'dist', quiet: true });
+  const { port } = await srv.listening;
+
+  type Msg = { type: string; payload: Record<string, unknown> };
+  const connect = () =>
+    new Promise<{ ws: WebSocket; msgs: Msg[] }>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const msgs: Msg[] = [];
+      ws.on('message', (data) => msgs.push(JSON.parse(data.toString())));
+      ws.once('open', () => resolve({ ws, msgs }));
+      ws.once('error', reject);
+    });
+
+  const waitFor = async (msgs: Msg[], pred: (m: Msg) => boolean, label: string) => {
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const hit = msgs.find(pred);
+      if (hit) return hit;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`Timed out waiting for ${label}`);
+  };
+
+  const request = (
+    method: string,
+    urlPath: string,
+    headers: Record<string, string>,
+    body?: Buffer
+  ) =>
+    new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port, path: urlPath, method, headers },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c) => chunks.push(c as Buffer));
+          res.on('end', () => resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.concat(chunks) }));
+        }
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+
+  const host = await connect();
+  try {
+    const welcome = (await waitFor(host.msgs, (m) => m.type === 'WELCOME', 'WELCOME'));
+    const token = String((welcome.payload as { resumeToken: string }).resumeToken);
+
+    host.ws.send(JSON.stringify({ type: 'CREATE_ROOM', payload: { playerName: 'FileHost', characterId: 'kaito', carColor: '#ff5500' } }));
+    const state = await waitFor(host.msgs, (m) => m.type === 'ROOM_STATE', 'ROOM_STATE');
+    const code = String((state.payload as { room: { code: string } }).room.code);
+
+    // Upload a small text file as the room host.
+    const payload = Buffer.from('apex-zero lan file sharing payload', 'utf8');
+    const upload = await request(
+      'POST',
+      `/api/files?room=${code}`,
+      {
+        'x-resume-token': token,
+        'x-file-name': encodeURIComponent('../../notes<script>.txt'),
+        'x-file-type': 'text/plain',
+        'content-length': String(payload.length)
+      },
+      payload
+    );
+    assert.equal(upload.status, 201);
+    const uploaded = JSON.parse(upload.body.toString()) as { file: { id: string; name: string; size: number }; url: string };
+    assert.equal(uploaded.file.name, 'notesscript.txt');
+    assert.equal(uploaded.file.size, payload.length);
+
+    // Every room member gets the FILE_SHARE broadcast.
+    const share = await waitFor(host.msgs, (m) => m.type === 'FILE_SHARE', 'FILE_SHARE');
+    assert.equal((share.payload as { file: { id: string } }).file.id, uploaded.file.id);
+
+    // Room-scoped download returns the exact bytes as an attachment.
+    const download = await request('GET', `/api/files/${uploaded.file.id}?room=${code}`, {});
+    assert.equal(download.status, 200);
+    assert.deepEqual(download.body, payload);
+    assert.match(String(download.headers['content-disposition']), /^attachment;/);
+    assert.equal(download.headers['x-content-type-options'], 'nosniff');
+
+    // Another room cannot fetch the file by id.
+    const wrongRoom = await request('GET', `/api/files/${uploaded.file.id}?room=ZZZZ`, {});
+    assert.equal(wrongRoom.status, 404);
+
+    // File list is available to room members.
+    const list = await request('GET', `/api/files?room=${code}`, { 'x-resume-token': token });
+    assert.equal(list.status, 200);
+    const listed = JSON.parse(list.body.toString()) as { files: { id: string }[] };
+    assert.equal(listed.files.length, 1);
+    assert.equal(listed.files[0].id, uploaded.file.id);
+
+    // Uploading without a valid room session is rejected.
+    const noToken = await request(
+      'POST',
+      `/api/files?room=${code}`,
+      { 'x-file-name': 'x.txt', 'content-length': '1' },
+      Buffer.from('x')
+    );
+    assert.equal(noToken.status, 403);
+
+    // Oversize uploads are rejected before storage.
+    const oversize = Buffer.alloc(4 * 1024 * 1024 + 1, 0x41);
+    const tooBig = await request(
+      'POST',
+      `/api/files?room=${code}`,
+      { 'x-resume-token': token, 'x-file-name': 'big.bin', 'content-length': String(oversize.length) },
+      oversize
+    );
+    assert.equal(tooBig.status, 413);
+
+    // HTML/SVG uploads are forced to a non-executable MIME type.
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'utf8');
+    const html = await request(
+      'POST',
+      `/api/files?room=${code}`,
+      {
+        'x-resume-token': token,
+        'x-file-name': 'evil.svg',
+        'x-file-type': 'image/svg+xml',
+        'content-length': String(svg.length)
+      },
+      svg
+    );
+    assert.equal(html.status, 201);
+    const svgId = (JSON.parse(html.body.toString()) as { file: { id: string } }).file.id;
+    const svgDownload = await request('GET', `/api/files/${svgId}?room=${code}`, {});
+    assert.equal(svgDownload.headers['content-type'], 'application/octet-stream');
+  } finally {
+    host.ws.close();
+    await srv.stop();
+  }
+});

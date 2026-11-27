@@ -90,3 +90,21 @@ export interface LanNetworkInfo {
   publicUrl?: string;
   lanWarning?: string;
 }
+
+/** Metadata for a file shared inside a lobby room. Bytes stay on the host server. */
+export interface SharedFileInfo {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  ownerName: string;
+  createdAt: number;
+}
+
+/** Hard limits enforced by both the client and the lobby server. */
+export const SHARED_FILE_LIMITS = {
+  maxFileBytes: 4 * 1024 * 1024,
+  maxFilesPerRoom: 20,
+  maxRoomBytes: 16 * 1024 * 1024,
+  ttlMs: 30 * 60 * 1000
+} as const;

@@ -8,8 +8,10 @@ import type {
   NetworkMode,
   NetworkPlayerSync,
   RoomState,
-  RoomSummary
+  RoomSummary,
+  SharedFileInfo
 } from './LobbyProtocol';
+import { SHARED_FILE_LIMITS } from './LobbyProtocol';
 
 export type ConnectionState = 'OFFLINE' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'ERROR';
 
@@ -64,6 +66,8 @@ export class LobbyClient {
   public onMeleeHit: (data: { attackerId: string; targetId: string; damage: number; dirX: number; dirZ: number }) => void = () => {};
   public onBallSync: (data: { x: number; y: number; z: number; vx: number; vy: number; vz: number }) => void = () => {};
   public onLeaderboardUpdate: (data: { mode: GameModeId; entries: LeaderboardEntry[] }) => void = () => {};
+  public onFileShare: (file: SharedFileInfo) => void = () => {};
+  public onFileList: (files: SharedFileInfo[]) => void = () => {};
   public onError: (msg: string) => void = () => {};
 
   constructor() {
@@ -301,6 +305,9 @@ export class LobbyClient {
           entries: payload.entries || []
         });
         break;
+      case 'FILE_SHARE':
+        if (payload?.file) this.onFileShare(payload.file as SharedFileInfo);
+        break;
       case 'ERROR':
         this.onError(payload.message || 'Unknown server error');
         break;
@@ -394,6 +401,58 @@ export class LobbyClient {
 
   public submitModeResult(opts: { mode: GameModeId; score: number; bestTimeMs?: number; combo?: number }): void {
     this.send('RESULT_SUBMIT', opts);
+  }
+
+  public fileDownloadUrl(fileId: string): string {
+    const room = this.currentRoom?.code || '';
+    return `${this.buildHttpBase()}/api/files/${encodeURIComponent(fileId)}?room=${encodeURIComponent(room)}`;
+  }
+
+  public async fetchRoomFiles(): Promise<SharedFileInfo[]> {
+    const room = this.currentRoom?.code;
+    if (!room || this.networkMode === 'OFFLINE' || this.lanMixedContentBlocked()) return [];
+    try {
+      const res = await fetch(`${this.buildHttpBase()}/api/files?room=${encodeURIComponent(room)}`, {
+        headers: { 'x-resume-token': this.resumeToken || '' },
+        cache: 'no-store'
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      const files = Array.isArray(data?.files) ? (data.files as SharedFileInfo[]) : [];
+      this.onFileList(files);
+      return files;
+    } catch {
+      return [];
+    }
+  }
+
+  public async uploadFile(file: File): Promise<SharedFileInfo> {
+    const room = this.currentRoom?.code;
+    if (!room) throw new Error('Join a room before sharing files.');
+    if (this.networkMode === 'OFFLINE') throw new Error('File sharing needs a LAN or Online room.');
+    if (this.lanMixedContentBlocked()) {
+      throw new Error(`Open http://${this.manualLanHost} directly — HTTPS blocks LAN uploads.`);
+    }
+    if (file.size === 0) throw new Error('File is empty.');
+    if (file.size > SHARED_FILE_LIMITS.maxFileBytes) {
+      const mb = Math.round(SHARED_FILE_LIMITS.maxFileBytes / (1024 * 1024));
+      throw new Error(`File too large (max ${mb} MB).`);
+    }
+    const res = await fetch(`${this.buildHttpBase()}/api/files?room=${encodeURIComponent(room)}`, {
+      method: 'POST',
+      headers: {
+        'x-resume-token': this.resumeToken || '',
+        'x-file-name': encodeURIComponent(file.name),
+        'x-file-type': file.type || 'application/octet-stream'
+      },
+      body: file
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status}).`);
+    const info = data?.file as SharedFileInfo | undefined;
+    if (!info) throw new Error('Upload failed: invalid server response.');
+    this.onFileShare(info);
+    return info;
   }
 
   public async renderHotspotQR(canvas: HTMLCanvasElement, roomCode?: string): Promise<string> {

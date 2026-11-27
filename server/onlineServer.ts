@@ -52,6 +52,13 @@ export function startOnlineServer(options?: { port?: number; host?: string; dist
       return;
     }
 
+    if (rawUrl === '/api/files' || rawUrl.startsWith('/api/files/')) {
+      const parsed = new URL(req.url || '/', 'http://localhost');
+      const filePath = parsed.pathname.replace(/^\/api\/files/, '') || '/';
+      backend.handleFileRequest(req, res, filePath, parsed.searchParams);
+      return;
+    }
+
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Method Not Allowed');

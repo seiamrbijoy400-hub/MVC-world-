@@ -6,7 +6,8 @@ import type {
   GameModeId,
   NetworkMode,
   RoomState,
-  RoomSummary
+  RoomSummary,
+  SharedFileInfo
 } from '../network/LobbyProtocol';
 import { GearboxType } from '../physics/CarPhysics';
 
@@ -39,6 +40,9 @@ export class LobbyUI {
   private rosterList: HTMLElement;
   private chatBox: HTMLElement;
   private chatInput: HTMLInputElement;
+  private fileListBox: HTMLElement;
+  private shareFileBtn: HTMLButtonElement;
+  private shareFileInput: HTMLInputElement;
   private launchBtn: HTMLButtonElement;
 
   public config: LobbyConfig = {
@@ -92,6 +96,9 @@ export class LobbyUI {
     this.rosterList = document.getElementById('roster-list')!;
     this.chatBox = document.getElementById('lobby-chat-box')!;
     this.chatInput = document.getElementById('input-chat') as HTMLInputElement;
+    this.fileListBox = document.getElementById('room-file-list')!;
+    this.shareFileBtn = document.getElementById('btn-share-file') as HTMLButtonElement;
+    this.shareFileInput = document.getElementById('input-share-file') as HTMLInputElement;
     this.launchBtn = document.getElementById('btn-launch-room') as HTMLButtonElement;
     this.apkBtn = document.getElementById('btn-download-apk') as HTMLButtonElement;
     this.offlineStatusBtn = document.getElementById('btn-offline-status') as HTMLButtonElement;
@@ -365,6 +372,13 @@ export class LobbyUI {
       if (e.key === 'Enter') sendChat();
     });
 
+    this.shareFileBtn.addEventListener('click', () => this.shareFileInput.click());
+    this.shareFileInput.addEventListener('change', () => {
+      const file = this.shareFileInput.files?.[0];
+      this.shareFileInput.value = '';
+      if (file) void this.uploadSharedFile(file);
+    });
+
     // Launch / Ready button
     this.launchBtn.addEventListener('click', () => {
       const room = this.client.currentRoom;
@@ -448,11 +462,13 @@ export class LobbyUI {
         this.homeView.style.display = 'flex';
         this.roomView.style.display = 'none';
         this.chatBox.innerHTML = '';
+        this.fileListBox.replaceChildren();
         return;
       }
       this.homeView.style.display = 'none';
       this.roomView.style.display = 'flex';
       this.renderRoomView(room);
+      void this.refreshRoomFiles();
     };
 
     this.client.onChatMessage = (sender, text, isSystem) => {
@@ -482,6 +498,60 @@ export class LobbyUI {
     this.client.onError = (msg) => {
       this.onErrorToast(msg);
     };
+
+    this.client.onFileList = (files) => {
+      this.renderRoomFiles(files);
+    };
+
+    this.client.onFileShare = () => {
+      void this.refreshRoomFiles();
+    };
+  }
+
+  private async uploadSharedFile(file: File): Promise<void> {
+    try {
+      const info = await this.client.uploadFile(file);
+      this.onErrorToast(`Shared "${info.name}" with the room.`);
+    } catch (err) {
+      this.onErrorToast(err instanceof Error ? err.message : 'File sharing failed.');
+    }
+  }
+
+  private async refreshRoomFiles(): Promise<void> {
+    const files = await this.client.fetchRoomFiles();
+    this.renderRoomFiles(files);
+  }
+
+  private renderRoomFiles(files: SharedFileInfo[]): void {
+    this.fileListBox.replaceChildren();
+    if (!this.client.currentRoom) return;
+    if (files.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:10px;color:#64748b;padding:2px;';
+      empty.textContent = 'No shared files yet.';
+      this.fileListBox.appendChild(empty);
+      return;
+    }
+    for (const f of files) {
+      const row = document.createElement('div');
+      row.className = 'room-file-item';
+      const link = document.createElement('a');
+      link.href = this.client.fileDownloadUrl(f.id);
+      link.download = f.name;
+      link.textContent = `⬇ ${f.name}`;
+      link.title = `Download ${f.name}`;
+      const meta = document.createElement('span');
+      meta.className = 'file-meta';
+      meta.textContent = `${f.ownerName} · ${this.formatFileSize(f.size)}`;
+      row.append(link, meta);
+      this.fileListBox.appendChild(row);
+    }
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   private renderRoomList(rooms: RoomSummary[]): void {

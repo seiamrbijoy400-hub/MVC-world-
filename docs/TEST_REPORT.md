@@ -14,8 +14,18 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (72/72)
-Run with `pnpm test` (compiles the suite + `server/onlineServer.ts` to a temp dir and executes `node --test`) — `72` pass, `0` fail, `0` skipped, `~24.1s`:
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (73/73)
+Run with `pnpm test` (compiles the suite + `server/onlineServer.ts` to a temp dir and executes `node --test`) — `73` pass, `0` fail, `0` skipped, `~21.3s`:
+
+### Sprint 19 — room file sharing (2026-11-27)
+| Item | Status | Evidence |
+| :--- | :---: | :--- |
+| "Data sharing" only covered chat/state, no real files | **FIXED** | `POST /api/files?room=CODE` stores bytes on the host; `GET /api/files/:id?room=CODE` returns them as an attachment. Test uploads, downloads and compares bytes. |
+| Files could leak across rooms or via path traversal | **FIXED** | Download requires the matching room code; filename is basename-sanitized (`../../notes<script>.txt` → `notesscript.txt`). Test asserts a wrong room returns `404`. |
+| Upload abuse (size, count, executable types) | **FIXED** | 4 MB/file, 20 files & 16 MB/room, 30-min TTL; HTML/SVG/JS MIME forced to `application/octet-stream` + `nosniff` + `attachment`. Test asserts `413`, MIME rewrite and room isolation. |
+| No UI to share or fetch files | **FIXED** | Room view has "📎 Share File", a member-only file list with download links, and a system chat notice on every share. |
+
+**Limits:** real two-device hotspot/cable transfer and Android download-sheet behavior are **NOT TESTED**.
 
 ### Sprint 18 — LAN/offline server hardening (2026-11-27)
 | Item | Status | Evidence |

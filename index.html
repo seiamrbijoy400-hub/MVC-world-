@@ -373,6 +373,37 @@
       gap: 3px;
     }
 
+    .room-file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 96px;
+      overflow-y: auto;
+      margin-top: 6px;
+    }
+    .room-file-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.72);
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 7px;
+      padding: 4px 7px;
+      font-size: 10px;
+      color: #cbd5e1;
+    }
+    .room-file-item a {
+      color: #38bdf8;
+      font-weight: 800;
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .room-file-item .file-meta { color: #94a3b8; font-size: 9px; flex: 0 0 auto; }
+
     @media (max-width: 720px) {
       #lobby-overlay {
         justify-content: center;
@@ -1224,6 +1255,12 @@
             <input id="input-chat" class="lobby-input" style="padding:7px 10px;font-size:12px;" type="text" placeholder="Chat with hotspot friends...">
             <button id="btn-send-chat" class="option-btn" style="flex:0 0 60px;">Send</button>
           </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+            <button id="btn-share-file" class="option-btn" style="padding:5px 9px;font-size:10px;">📎 Share File</button>
+            <input id="input-share-file" type="file" style="display:none;" />
+            <span style="font-size:9px;color:#94a3b8;">Max 4 MB · room members only · auto-expires in 30 min</span>
+          </div>
+          <div id="room-file-list" class="room-file-list"></div>
         </div>
 
         <button id="btn-launch-room" class="primary-cta">Launch World &amp; Race!</button>

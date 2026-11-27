@@ -13,8 +13,10 @@ import type {
   NetworkPlayerSync,
   PlayerSlot,
   RoomState,
-  RoomSummary
+  RoomSummary,
+  SharedFileInfo
 } from '../src/network/LobbyProtocol';
+import { SHARED_FILE_LIMITS } from '../src/network/LobbyProtocol';
 
 interface ClientSession {
   id: string;
@@ -49,6 +51,12 @@ interface InternalRoom extends RoomState {
   hostId: string;
   playerStates: Record<string, NetworkPlayerSync>;
   leaderboard: Map<string, LeaderboardEntry>;
+}
+
+interface StoredFile extends SharedFileInfo {
+  roomCode: string;
+  data: Buffer;
+  expiresAt: number;
 }
 
 const MAX_PAYLOAD_BYTES = 8192;
@@ -103,6 +111,45 @@ function sanitizeAppearance(raw: unknown): CharacterAppearance | undefined {
     skinColor: sanitizeHexColor(obj.skinColor, '#f1c27d'),
     accessory: (VALID_ACCESSORIES.has(String(obj.accessory)) ? obj.accessory : 'none') as CharacterAppearance['accessory']
   };
+}
+
+function decodeHeaderValue(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function sanitizeFileName(raw: unknown): string {
+  const base = typeof raw === 'string' ? raw : '';
+  const stripped = base.replace(/\\/g, '/').split('/').pop() || '';
+  const cleaned = stripped
+    .replace(/[\u0000-\u001F\u007F<>:"|?*]/g, '')
+    .trim()
+    .slice(0, 80);
+  return cleaned.length > 0 && cleaned !== '.' && cleaned !== '..' ? cleaned : 'shared-file';
+}
+
+const UNSAFE_MIME = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'application/javascript',
+  'text/javascript'
+]);
+
+function sanitizeMime(raw: unknown): string {
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(value)) return 'application/octet-stream';
+  return UNSAFE_MIME.has(value) ? 'application/octet-stream' : value;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getLocalLanIps(): string[] {
@@ -188,8 +235,14 @@ export interface LanLobbyServerLike {
 export interface LobbyBackend {
   attachWebSocket(httpServer: any): void;
   attachMiddlewares(middlewares: NonNullable<LanLobbyServerLike['middlewares']>, getPort: () => number): void;
+  handleFileRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+    searchParams: URLSearchParams
+  ): void;
   getNetworkInfo(req: IncomingMessage | undefined, port: number): LanNetworkInfo;
-  getStats(): { rooms: number; clients: number; recoverable: number; uptimeSec: number };
+  getStats(): { rooms: number; clients: number; recoverable: number; files: number; uptimeSec: number };
   shutdown(): void;
 }
 
@@ -206,6 +259,40 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
   const attachedServers = new WeakSet<object>();
   const intervals = new Set<NodeJS.Timeout>();
   const sockets = new Set<WebSocketServer>();
+  const files = new Map<string, StoredFile>();
+
+  const getRoomFiles = (roomCode: string): SharedFileInfo[] => {
+    const now = Date.now();
+    const list: SharedFileInfo[] = [];
+    for (const f of files.values()) {
+      if (f.roomCode !== roomCode || f.expiresAt <= now) continue;
+      list.push({
+        id: f.id,
+        name: f.name,
+        mime: f.mime,
+        size: f.size,
+        ownerName: f.ownerName,
+        createdAt: f.createdAt
+      });
+    }
+    return list.sort((a, b) => b.createdAt - a.createdAt);
+  };
+
+  const fileCleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [id, f] of files) {
+      if (f.expiresAt <= now) files.delete(id);
+    }
+  }, 60_000);
+  fileCleanup.unref?.();
+  intervals.add(fileCleanup);
+
+  const sessionByResumeToken = (token: string): ClientSession | undefined => {
+    for (const session of clients.values()) {
+      if (session.resumeToken === token) return session;
+    }
+    return undefined;
+  };
 
   const send = (ws: WebSocket, type: string, payload: unknown) => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -878,11 +965,159 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
     });
   };
 
+  const handleFileRequest = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+    searchParams: URLSearchParams
+  ): void => {
+    const roomCode = (searchParams.get('room') || '').trim().toUpperCase().slice(0, 8);
+    const sendJson = (status: number, body: unknown) => {
+      if (res.headersSent) return;
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(body));
+    };
+
+    const downloadMatch = /^\/([a-f0-9]{16})$/.exec(pathname);
+
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      if (downloadMatch) {
+        const file = files.get(downloadMatch[1]);
+        if (!file || file.expiresAt <= Date.now() || !roomCode || file.roomCode !== roomCode) {
+          sendJson(404, { error: 'File not found or expired.' });
+          return;
+        }
+        const asciiName = file.name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '');
+        res.writeHead(200, {
+          'Content-Type': file.mime,
+          'Content-Length': file.size,
+          'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store'
+        });
+        if (req.method === 'HEAD') res.end();
+        else res.end(file.data);
+        return;
+      }
+
+      if (pathname === '/' || pathname === '') {
+        const room = roomCode ? rooms.get(roomCode) : undefined;
+        if (!room) {
+          sendJson(404, { error: 'Room not found.' });
+          return;
+        }
+        sendJson(200, { files: getRoomFiles(room.code) });
+        return;
+      }
+
+      sendJson(404, { error: 'Not found.' });
+      return;
+    }
+
+    if (req.method !== 'POST') {
+      sendJson(405, { error: 'Method not allowed.' });
+      return;
+    }
+
+    if (pathname !== '/' && pathname !== '') {
+      sendJson(404, { error: 'Not found.' });
+      return;
+    }
+
+    const tokenHeader = req.headers['x-resume-token'];
+    const token = typeof tokenHeader === 'string' ? tokenHeader.trim() : '';
+    const session = token ? sessionByResumeToken(token) : undefined;
+    const room = session?.roomCode ? rooms.get(session.roomCode) : undefined;
+    if (!session || !room || room.code !== roomCode) {
+      sendJson(403, { error: 'Join the room before sharing files.' });
+      return;
+    }
+
+    const declared = Number(req.headers['content-length'] || 0);
+    if (Number.isFinite(declared) && declared > SHARED_FILE_LIMITS.maxFileBytes) {
+      sendJson(413, { error: `File too large (max ${formatBytes(SHARED_FILE_LIMITS.maxFileBytes)}).` });
+      req.resume();
+      return;
+    }
+
+    const existing = getRoomFiles(room.code);
+    if (existing.length >= SHARED_FILE_LIMITS.maxFilesPerRoom) {
+      sendJson(429, { error: `Room file limit reached (${SHARED_FILE_LIMITS.maxFilesPerRoom}). Wait for old files to expire.` });
+      return;
+    }
+    const usedBytes = existing.reduce((sum, f) => sum + f.size, 0);
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let aborted = false;
+
+    req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
+      total += chunk.length;
+      if (total > SHARED_FILE_LIMITS.maxFileBytes) {
+        aborted = true;
+        sendJson(413, { error: `File too large (max ${formatBytes(SHARED_FILE_LIMITS.maxFileBytes)}).` });
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      if (aborted) return;
+      if (total === 0) {
+        sendJson(400, { error: 'Empty file.' });
+        return;
+      }
+      if (usedBytes + total > SHARED_FILE_LIMITS.maxRoomBytes) {
+        sendJson(413, { error: `Room storage full (max ${formatBytes(SHARED_FILE_LIMITS.maxRoomBytes)}).` });
+        return;
+      }
+
+      const name = sanitizeFileName(decodeHeaderValue(req.headers['x-file-name']));
+      const mime = sanitizeMime(decodeHeaderValue(req.headers['x-file-type']));
+      const ownerName = room.players.find(p => p.id === session.id)?.name || 'Player';
+      const info: SharedFileInfo = {
+        id: crypto.randomBytes(8).toString('hex'),
+        name,
+        mime,
+        size: total,
+        ownerName,
+        createdAt: Date.now()
+      };
+
+      files.set(info.id, {
+        ...info,
+        roomCode: room.code,
+        data: Buffer.concat(chunks),
+        expiresAt: Date.now() + SHARED_FILE_LIMITS.ttlMs
+      });
+
+      broadcastToRoom(room.code, 'FILE_SHARE', { file: info });
+      broadcastToRoom(room.code, 'CHAT_MSG', {
+        sender: 'System',
+        text: `📎 ${ownerName} shared "${name}" (${formatBytes(total)})`,
+        isSystem: true
+      });
+      sendJson(201, { file: info, url: `/api/files/${info.id}?room=${room.code}` });
+    });
+
+    req.on('error', () => {
+      if (aborted) return;
+      aborted = true;
+      sendJson(400, { error: 'Upload failed.' });
+    });
+  };
+
   const attachMiddlewares = (middlewares: NonNullable<LanLobbyServerLike['middlewares']>, getPort: () => number) => {
     middlewares.use('/api/lan-info', (req: IncomingMessage, res: ServerResponse) => {
       const info = resolveNetworkInfo(req, getPort());
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify(info));
+    });
+    middlewares.use('/api/files', (req: IncomingMessage, res: ServerResponse) => {
+      const url = new URL(req.url || '/', 'http://localhost');
+      handleFileRequest(req, res, url.pathname, url.searchParams);
     });
     middlewares.use('/api/health', (_req: IncomingMessage, res: ServerResponse) => {
       res.setHeader('Content-Type', 'application/json');
@@ -891,6 +1126,7 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
         rooms: rooms.size,
         clients: clients.size,
         recoverable: recoverable.size,
+        files: files.size,
         uptimeSec: Math.round((Date.now() - startedAt) / 1000)
       }));
     });
@@ -909,10 +1145,12 @@ export function createLobbyBackend(options: LobbyBackendOptions = {}): LobbyBack
     attachWebSocket,
     attachMiddlewares,
     getNetworkInfo: resolveNetworkInfo,
+    handleFileRequest,
     getStats: () => ({
       rooms: rooms.size,
       clients: clients.size,
       recoverable: recoverable.size,
+      files: files.size,
       uptimeSec: Math.round((Date.now() - startedAt) / 1000)
     }),
     shutdown
