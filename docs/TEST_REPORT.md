@@ -14,8 +14,18 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (66/66)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`66` pass, `0` fail, `0` skipped, `~19.8s`):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (72/72)
+Run with `pnpm test` (compiles the suite + `server/onlineServer.ts` to a temp dir and executes `node --test`) — `72` pass, `0` fail, `0` skipped, `~24.1s`:
+
+### Sprint 18 — LAN/offline server hardening (2026-11-27)
+| Item | Status | Evidence |
+| :--- | :---: | :--- |
+| Cloud `/api/lan-info` leaked container-private IPs | **FIXED (source)** | `resolveNetworkInfo()` detects `RENDER` / `x-forwarded-host` / `x-forwarded-proto` and returns `mode:'ONLINE'`, `ips:[]`, public URL + warning. Covered by the standalone-server test. |
+| `/api/health` returned the SPA HTML | **FIXED (source)** | Plugin and `onlineServer` now serve JSON `{ ok, rooms, clients, recoverable, uptimeSec }`; test asserts `ok:true`. |
+| HTTPS page silently failed on `ws://` LAN host | **FIXED** | `LobbyClient` blocks private `ws://` targets from HTTPS and emits an actionable "open `http://host:port` directly" error; non-private manual hosts upgrade to `wss://`/`https://`. Source guard test added. |
+| Offline pack + helicopter assets missing from build | **FIXED (source)** | `OfflinePack` (SW `apex-zero-v4`) downloads/caches required GLB/FBX/WAV assets; helicopter GLB + physics/mesh wired into the world. Build includes `helicopter.glb`. |
+
+**Limits:** real two-device hotspot/cable pairing, Chrome mixed-content behavior on physical Android, and offline PWA install are **NOT TESTED**.
 
 ### Sprint 17 — in-game driver switch (2026-11-27)
 | Item | Status | Evidence |

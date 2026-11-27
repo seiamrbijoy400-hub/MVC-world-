@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { CarPhysics, GearboxType, GroundSample } from './physics/CarPhysics';
 import { CharacterController } from './physics/CharacterController';
+import { HelicopterPhysics } from './physics/HelicopterPhysics';
 import { CarMesh } from './graphics/CarMesh';
+import { HelicopterMesh } from './graphics/HelicopterMesh';
 import { HumanCharacterMesh } from './graphics/HumanCharacterMesh';
 import { GLTFCharacterMesh } from './graphics/GLTFCharacterMesh';
 import { modelUrlFor } from './graphics/CharacterAnimationMap';
@@ -42,6 +44,7 @@ enum GameState {
   OPEN_WORLD = 'OPEN_WORLD',
   COUNTDOWN = 'COUNTDOWN',
   TIMED_RACE = 'TIMED_RACE',
+  DRIFT_ARENA = 'DRIFT_ARENA',
   FINISHED = 'FINISHED'
 }
 
@@ -84,7 +87,13 @@ class GameApp {
 
   private physics: CarPhysics;
   private charCtrl: CharacterController;
+  private heliPhysics!: HelicopterPhysics;
+  private heliMesh!: HelicopterMesh;
   private inCar = false; // Spawn on foot right beside car in Open World!
+  private inHeli = false;
+  private heliRotorWashTimer = 0;
+  private skyRingsCleared = 0;
+  private wasAirShadow = false;
 
   private carMesh: CarMesh;
   private avatarMesh: HumanCharacterMesh | GLTFCharacterMesh;
@@ -145,6 +154,10 @@ class GameApp {
   private gameState: GameState = GameState.OPEN_WORLD;
   private countdownTimer = 0;
   private lastCountdownStep = -1;
+  private driftArenaTimer = 0;
+  private driftArenaDuration = 90;
+  private driftArenaBestCombo = 1.0;
+  private pendingRaceMode: 'CIRCUIT_RACE' | 'DRIFT_ARENA' = 'CIRCUIT_RACE';
   private elapsedSec = 0;
 
   private cameraView: CameraView = CameraView.CHASE;
@@ -335,6 +348,30 @@ class GameApp {
     this.carMesh.setUnderglowColor(this.save.data.underglowColor);
     this.scene.add(this.carMesh.root);
     this.ownZenvo = { physics: this.physics, mesh: this.carMesh, name: 'Your Zenvo' };
+
+    // Apex Skyhawk Helicopter parked on Zenith Corp Rooftop Helipad (258, 50.0, -5)
+    this.heliPhysics = new HelicopterPhysics();
+    this.heliPhysics.groundHeightSampler = (x, z, y) => this.openWorld.sampleHeliGroundHeight(x, z, y);
+    this.heliPhysics.waterSurfaceSampler = (x, z) => {
+      if (this.openWorld.isOverOpenWater(x, z)) return -0.8;
+      if (this.track.isOverLakeWater(x, z)) return -1.2;
+      return null;
+    };
+    this.heliPhysics.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
+    this.heliPhysics.onImpact = (spd) => {
+      this.sound.playCrash(spd);
+      this.particles.emitSparks(this.heliPhysics.position, 14);
+      this.cameraShake = Math.min(0.4, spd / 130);
+    };
+    this.heliPhysics.onWaterSplash = () => {
+      this.sound.playCrash(50);
+      this.particles.emitSparks(this.heliPhysics.position, 18);
+      this.hud.showNotification('WATER SPLASH!', 'Recovered helicopter to last safe landing zone.', 2.2);
+    };
+    this.heliPhysics.resetAt(new THREE.Vector3(258, 50.0, -5), 0.35);
+    this.heliMesh = new HelicopterMesh();
+    this.heliMesh.update(this.heliPhysics, 0);
+    this.scene.add(this.heliMesh.root);
 
     this.studio = new CharacterStudio();
     this.studio.applyPreset(this.save.data.characterId);
@@ -649,7 +686,7 @@ class GameApp {
       hadController = !!navigator.serviceWorker.controller;
     });
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
     });
   }
 
@@ -801,6 +838,56 @@ class GameApp {
     }
   }
 
+  private startDriftArenaRun(durationSec = 90): void {
+    if (this.charCtrl.isDead) {
+      this.hud.showNotification('KNOCKED OUT', 'Wait until you are back on your feet.', 1.4);
+      return;
+    }
+    this.sound.init();
+    this.hud.setRacePrompt(false);
+    this.setRivalPrompt(null);
+    this.exitSeat(false);
+    this.hud.setStealPrompt(null);
+    this.hud.hideKoOverlay();
+    this.police.clearHeat();
+    this.hud.setWanted(0);
+    this.activities.cancelSprint();
+    this.activities.cancelCourier();
+    this.activities.resetTransientState();
+    document.getElementById('results-modal')!.classList.remove('open');
+    this.syncPause();
+
+    if (this.physics !== this.ownZenvo.physics) {
+      this.parkActiveCar();
+      this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
+      this.physics = this.ownZenvo.physics;
+      this.carMesh = this.ownZenvo.mesh;
+      this.activeCarName = this.ownZenvo.name;
+      this.activePoliceLights = undefined;
+      this.configureActiveCar();
+    } else {
+      this.parkedCars = this.parkedCars.filter((p) => p.physics !== this.ownZenvo.physics);
+    }
+
+    this.inCar = true;
+    this.carMesh.setDriverVisible(true);
+    this.avatarMesh.root.visible = false;
+    this.physics.enforceTrackWalls = false;
+    this.physics.resetToTrack(new THREE.Vector3(84, 0, 72), 0);
+    this.physics.topSpeedKmh = 0;
+
+    this.lapManager.resetRace(0);
+    this.hud.setOnFootMode(false, true, this.charCtrl.hp, this.physics.gearboxType);
+
+    this.pendingRaceMode = 'DRIFT_ARENA';
+    this.driftArenaDuration = durationSec;
+    this.driftArenaTimer = durationSec;
+    this.driftArenaBestCombo = 1.0;
+    this.gameState = GameState.DRIFT_ARENA;
+    this.sound.playBeep(880, 0.2);
+    this.hud.showNotification('DRIFT ARENA', `${durationSec}s Drift Attack — Chain corners & boost!`, 3.0, { hero: true });
+  }
+
   private applyLobbyLaunch(cfg: LobbyConfig): void {
     this.sound.init();
     this.physics.gearboxType = cfg.gearbox;
@@ -818,7 +905,11 @@ class GameApp {
     this.refreshProfile();
 
     if (cfg.mode === 'CIRCUIT_RACE') {
+      this.pendingRaceMode = 'CIRCUIT_RACE';
       this.startTimedCircuitRace(cfg.laps || 3);
+    } else if (cfg.mode === 'DRIFT_ARENA') {
+      this.pendingRaceMode = 'DRIFT_ARENA';
+      this.startDriftArenaRun(90);
     } else {
       this.spawnInOpenWorld();
     }
@@ -899,6 +990,21 @@ class GameApp {
     this.lobbyClient.onBallSync = (data) => {
       this.openWorld.ballPos.set(data.x, data.y, data.z);
       this.openWorld.ballVel.set(data.vx, data.vy, data.vz);
+    };
+
+    this.lobbyClient.onLeaderboardUpdate = (data) => {
+      const lapListEl = document.getElementById('res-lap-list');
+      const resultsModal = document.getElementById('results-modal');
+      if (!lapListEl || !resultsModal?.classList.contains('open')) return;
+      const rows = data.entries.map((entry, idx) => {
+        const scoreStr = data.mode === 'CIRCUIT_RACE' && entry.bestTimeMs
+          ? this.lapManager.formatTime(entry.bestTimeMs / 1000)
+          : `${entry.score} PTS`;
+        return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);"><span>#${idx + 1} ${entry.name.replace(/[<>&]/g, '')}</span><strong>${scoreStr}</strong></div>`;
+      }).join('');
+      if (rows) {
+        lapListEl.innerHTML = `<div style="font-size:10px;color:#38bdf8;font-weight:800;margin-bottom:4px;text-transform:uppercase;">Live Room Standings</div>${rows}`;
+      }
     };
   }
 
@@ -1089,9 +1195,20 @@ class GameApp {
       return;
     }
 
-    // On foot, F/E acts on the nearby chair first; press again to drive.
+    // Exit / Enter Helicopter first when piloting or standing beside it
+    if (this.inHeli) {
+      this.exitHelicopter();
+      return;
+    }
+
+    // On foot, F/E acts on the nearby chair first; press again to drive/fly.
     if (!this.inCar && this.sittingSpot) {
       this.exitSeat(true);
+      return;
+    }
+
+    if (!this.inCar && this.isNearHelicopter()) {
+      this.enterHelicopter();
       return;
     }
 
@@ -1163,8 +1280,58 @@ class GameApp {
         return;
       }
 
-      this.hud.showNotification('NO CAR IN REACH', 'Walk up to your car, traffic, or a parked ride.', 1.6);
+      this.hud.showNotification('NO VEHICLE IN REACH', 'Walk up to your car, traffic, or the Zenith Helicopter.', 1.6);
     }
+  }
+
+  private isNearHelicopter(): boolean {
+    const p = this.charCtrl.position;
+    const h = this.heliPhysics.position;
+    return Math.hypot(p.x - h.x, p.z - h.z) < 5.8 && Math.abs(p.y - h.y) < 3.6;
+  }
+
+  private enterHelicopter(): void {
+    this.sound.init();
+    this.sound.playCarDoor();
+    this.inHeli = true;
+    this.inCar = false;
+    this.exitSeat(false);
+    this.avatarMesh.root.visible = false;
+    this.carMesh.setDriverVisible(false);
+    this.hud.setStealPrompt(null);
+    this.setRivalPrompt(null);
+    this.setCourierPrompt(null);
+    this.hud.setHelicopterMode(true, this.physics.gearboxType);
+    this.hud.showNotification(
+      'APEX SKYHAWK',
+      'Space/UP: Climb • Shift/DOWN: Descend • WASD: Fly • H: Searchlight',
+      3.4
+    );
+  }
+
+  private exitHelicopter(): void {
+    this.sound.playCarDoor();
+    this.inHeli = false;
+    this.sound.updateHelicopterSound(false, 0, 0);
+    this.hud.setHelicopterMode(false, this.physics.gearboxType);
+    const rgt = this.heliPhysics.getRightVector();
+    const exitPos = this.heliPhysics.position.clone().addScaledVector(rgt, -2.8);
+    this.charCtrl.position.copy(exitPos);
+    this.charCtrl.velocity.set(0, 0, 0);
+    this.charCtrl.yaw = this.heliPhysics.yaw;
+    this.footCamYaw = this.heliPhysics.yaw;
+    const isBailout = this.heliPhysics.agl > 8.0;
+    this.charCtrl.isGrounded = !isBailout;
+    this.charCtrl.isGliding = isBailout;
+    this.charCtrl.animState = isBailout ? 'JUMP' : 'IDLE';
+    this.avatarMesh.root.visible = true;
+    this.avatarMesh.root.position.copy(this.charCtrl.position);
+    this.hud.setOnFootMode(true, false, this.charCtrl.hp, this.physics.gearboxType);
+    this.hud.showNotification(
+      isBailout ? 'SKY BAILOUT!' : 'ON FOOT',
+      isBailout ? 'Parachute glide engaged — steer cleanly!' : 'Landed safely. Press [F] to re-board.',
+      2.2
+    );
   }
 
   /** Keeps a reference to the car you just left so you can re-enter it later. */
@@ -1603,6 +1770,12 @@ class GameApp {
 
   private handleHornPressed(): void {
     this.sound.init();
+    if (this.inHeli) {
+      const on = this.heliMesh.toggleSearchlight();
+      this.sound.playBeep(on ? 880 : 520, 0.12);
+      this.hud.showNotification('SEARCHLIGHT', on ? 'Skyhawk floodlight ON' : 'Skyhawk floodlight OFF', 1.2);
+      return;
+    }
     this.sound.playHorn();
     const origin = this.inCar ? this.physics.position : this.charCtrl.position;
 
@@ -2000,11 +2173,74 @@ class GameApp {
     );
   }
 
+  private finishDriftArenaRun(): void {
+    this.gameState = GameState.FINISHED;
+    this.physics.enforceTrackWalls = false;
+    const stats = this.lapManager.stats;
+    const finalScore = Math.round(stats.driftScore + stats.currentDriftPoints);
+    stats.driftScore = finalScore;
+    stats.currentDriftPoints = 0;
+
+    this.save.data.totalDriftPoints += finalScore;
+    if (finalScore > this.save.data.bestDriftCombo) {
+      this.save.data.bestDriftCombo = finalScore;
+    }
+    this.save.scheduleSave();
+
+    const rewardCredits = Math.max(120, Math.min(2500, Math.round(finalScore / 15)));
+    const rewardXp = Math.max(100, Math.min(1800, Math.round(finalScore / 20)));
+    this.award(rewardXp, rewardCredits);
+    this.sound.playRankUpFanfare();
+
+    if (this.lobbyClient.currentRoom) {
+      this.lobbyClient.submitModeResult({
+        mode: 'DRIFT_ARENA',
+        score: finalScore,
+        combo: Math.round(this.driftArenaBestCombo)
+      });
+    }
+
+    const titleEl = document.getElementById('results-title');
+    const subEl = document.getElementById('results-subtitle');
+    if (titleEl) titleEl.textContent = 'DRIFT ARENA COMPLETE!';
+    if (subEl) subEl.textContent = `Harbor Stunt & Drift Arena • Peak Combo x${this.driftArenaBestCombo.toFixed(1)}`;
+
+    document.getElementById('res-total-time')!.textContent = `${this.driftArenaDuration}s`;
+    document.getElementById('res-best-lap')!.textContent = `x${this.driftArenaBestCombo.toFixed(1)}`;
+    document.getElementById('res-top-speed')!.textContent = `${Math.round(this.physics.topSpeedKmh)} km/h`;
+    document.getElementById('res-drift-score')!.textContent = `${finalScore}`;
+
+    const lapListEl = document.getElementById('res-lap-list')!;
+    lapListEl.innerHTML = `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);"><span>Session Score</span><strong>${finalScore} PTS</strong></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);"><span>Best Recorded Combo</span><strong>${this.save.data.bestDriftCombo} PTS</strong></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Payout</span><strong>+${rewardCredits} CR / +${rewardXp} XP</strong></div>`;
+
+    const resultsModal = document.getElementById('results-modal')!;
+    resultsModal.classList.add('open');
+    (document.getElementById('results-close-btn') as HTMLElement | null)?.focus();
+    this.syncPause();
+  }
+
   private showRaceResults(stats: LapStats): void {
     this.gameState = GameState.FINISHED;
+    this.pendingRaceMode = 'CIRCUIT_RACE';
     this.physics.enforceTrackWalls = false;
     this.ghost.updatePlayback(false, 0);
     this.award(250, 300);
+
+    const titleEl = document.getElementById('results-title');
+    const subEl = document.getElementById('results-subtitle');
+    if (titleEl) titleEl.textContent = 'RACE COMPLETE!';
+    if (subEl) subEl.textContent = 'Zenvo GP Lake Circuit Summary';
+
+    if (this.lobbyClient.currentRoom) {
+      this.lobbyClient.submitModeResult({
+        mode: 'CIRCUIT_RACE',
+        score: Math.max(100, Math.round(100_000 - stats.totalRaceTime * 10)),
+        bestTimeMs: stats.bestLapTime ? Math.round(stats.bestLapTime * 1000) : Math.round(stats.totalRaceTime * 1000)
+      });
+    }
+
     document.getElementById('res-total-time')!.textContent = this.lapManager.formatTime(stats.totalRaceTime);
     document.getElementById('res-best-lap')!.textContent = stats.bestLapTime
       ? this.lapManager.formatTime(stats.bestLapTime)
@@ -2060,6 +2296,11 @@ class GameApp {
     });
 
     document.getElementById('btn-reset')!.addEventListener('click', () => {
+      if (this.inHeli) {
+        this.heliPhysics.resetAt(new THREE.Vector3(258, 50.0, -5), 0.35);
+        this.hud.showNotification('HELIPAD RESET', 'Returned Apex Skyhawk to Zenith Rooftop.', 1.6);
+        return;
+      }
       if (this.inCar) {
         this.physics.resetToTrack();
       } else {
@@ -2079,7 +2320,11 @@ class GameApp {
     });
 
     document.getElementById('res-again-btn')!.addEventListener('click', () => {
-      this.startTimedCircuitRace(3);
+      if (this.pendingRaceMode === 'DRIFT_ARENA') {
+        this.startDriftArenaRun(90);
+      } else {
+        this.startTimedCircuitRace(3);
+      }
     });
     const closeResults = () => {
       document.getElementById('results-modal')!.classList.remove('open');
@@ -2109,6 +2354,40 @@ class GameApp {
     document.getElementById('btn-settings')!.addEventListener('click', openModal);
     document.getElementById('modal-close-btn')!.addEventListener('click', closeModal);
     document.getElementById('modal-resume-btn')!.addEventListener('click', closeModal);
+    document.getElementById('btn-export-save')?.addEventListener('click', () => {
+      const json = this.save.exportJson();
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `apex-zero-save-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      this.hud.showModalStatus('settings-modal', 'Save backup exported.');
+    });
+
+    const importInput = document.getElementById('input-import-save') as HTMLInputElement | null;
+    document.getElementById('btn-import-save')?.addEventListener('click', () => importInput?.click());
+    importInput?.addEventListener('change', async () => {
+      const file = importInput.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const res = this.save.importJson(text);
+        if (!res.ok) {
+          this.hud.showNotification('IMPORT FAILED', res.error || 'Invalid save file', 2.4);
+        } else {
+          this.refreshProfile();
+          this.applyGraphicsQuality(this.save.data.graphicsQuality);
+          this.hud.showNotification('SAVE RESTORED', 'Profile & progress imported!', 2.4);
+        }
+      } catch {
+        this.hud.showNotification('IMPORT FAILED', 'Could not read selected file', 2.4);
+      } finally {
+        importInput.value = '';
+      }
+    });
+
     document.getElementById('modal-lobby-btn')!.addEventListener('click', () => {
       closeModal();
       this.lobbyUI.setVisible(true);
@@ -2369,9 +2648,21 @@ class GameApp {
     }
     this.elapsedSec += dt;
 
-    const focusPos = this.inCar ? this.physics.position : this.charCtrl.position;
+    const focusPos = this.inHeli
+      ? this.heliPhysics.position
+      : (this.inCar ? this.physics.position : this.charCtrl.position);
     this.sunLight.position.copy(focusPos).addScaledVector(this.sunDirection, 150);
     this.sunLight.target.position.copy(focusPos);
+    const needAirShadow = this.inHeli && this.heliPhysics.agl > 10;
+    if (needAirShadow !== this.wasAirShadow) {
+      this.wasAirShadow = needAirShadow;
+      const dist = needAirShadow ? 88 : 52;
+      this.sunLight.shadow.camera.left = -dist;
+      this.sunLight.shadow.camera.right = dist;
+      this.sunLight.shadow.camera.top = dist;
+      this.sunLight.shadow.camera.bottom = -dist;
+      this.sunLight.shadow.camera.updateProjectionMatrix();
+    }
 
     if (!this.isPaused) {
       for (const [id, rem] of this.interactCooldowns.entries()) {
@@ -2383,7 +2674,9 @@ class GameApp {
       }
       const simDt = this.hitStopTimer > 0 ? dt * 0.14 : dt;
 
-      const weatherForward = this.inCar ? this.physics.getForwardVector() : this.charCtrl.getForwardVector();
+      const weatherForward = this.inHeli
+        ? this.heliPhysics.getForwardVector()
+        : (this.inCar ? this.physics.getForwardVector() : this.charCtrl.getForwardVector());
       this.weather.update(simDt, focusPos, weatherForward);
       this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
       const flash = this.weather.lightningFlash;
@@ -2415,10 +2708,83 @@ class GameApp {
         }
       }
 
-      const isTimedRace = this.gameState === GameState.TIMED_RACE;
-      const canDrive = this.gameState === GameState.OPEN_WORLD || this.gameState === GameState.TIMED_RACE;
+      if (this.gameState === GameState.DRIFT_ARENA) {
+        this.driftArenaTimer = Math.max(0, this.driftArenaTimer - dt);
+        this.driftArenaBestCombo = Math.max(this.driftArenaBestCombo, this.lapManager.stats.driftMultiplier);
+        if (this.driftArenaTimer <= 0) {
+          this.finishDriftArenaRun();
+        }
+      }
 
-      if (this.inCar) {
+      const isTimedRace = this.gameState === GameState.TIMED_RACE;
+      const canDrive =
+        this.gameState === GameState.OPEN_WORLD ||
+        this.gameState === GameState.TIMED_RACE ||
+        this.gameState === GameState.DRIFT_ARENA;
+
+      if (this.inHeli) {
+        const heliInputs = this.hud.pollHelicopterInputs();
+        this.heliPhysics.update(simDt, heliInputs, true);
+        this.sound.updateHelicopterSound(true, this.heliPhysics.rotorRpm, this.heliPhysics.speedKmh);
+        this.sound.updateTireSkid(0);
+        this.hud.updateHeliTelemetry(
+          this.heliPhysics.position.y,
+          this.heliPhysics.speedKmh,
+          this.heliPhysics.rotorRpm,
+          this.skyRingsCleared,
+          this.openWorld.skyRings.length
+        );
+
+        // Rotor wash dust/sparks near helipad & streets
+        if (this.heliPhysics.agl < 6.5 && this.heliPhysics.rotorRpm > 0.65) {
+          this.heliRotorWashTimer -= dt;
+          if (this.heliRotorWashTimer <= 0) {
+            this.heliRotorWashTimer = 0.09;
+            this.particles.emitSmoke(
+              this.camScratchD.set(
+                this.heliPhysics.position.x + (Math.random() - 0.5) * 4,
+                this.heliPhysics.position.y - this.heliPhysics.agl + 0.15,
+                this.heliPhysics.position.z + (Math.random() - 0.5) * 4
+              ),
+              this.camScratchE.set((Math.random() - 0.5) * 8, 1.5, (Math.random() - 0.5) * 8),
+              false,
+              1
+            );
+          }
+        }
+
+        // Keep parked car & avatar synced while flying
+        this.physics.update(dt, { throttle: 0, brake: 0, steer: 0, handbrake: true, clutch: false, shiftUp: false, shiftDown: false, reset: false }, false);
+        this.carMesh.update(this.physics, 0, dt);
+        this.avatarMesh.root.position.copy(this.heliPhysics.position);
+
+        // Check aerial Sky Rings!
+        for (const ring of this.openWorld.skyRings) {
+          if (ring.passed) continue;
+          const d = Math.hypot(
+            this.heliPhysics.position.x - ring.x,
+            this.heliPhysics.position.y - ring.y,
+            this.heliPhysics.position.z - ring.z
+          );
+          if (d < ring.radius) {
+            ring.passed = true;
+            ring.mesh.visible = false;
+            this.skyRingsCleared++;
+            this.sound.playRankUpFanfare();
+            this.particles.emitSparks(this.heliPhysics.position, 22);
+            const allDone = this.skyRingsCleared >= this.openWorld.skyRings.length;
+            const bonus = allDone ? 1500 : 200;
+            const xp = allDone ? 500 : 120;
+            this.award(xp, bonus);
+            this.hud.showWorldPopup(allDone ? 'SKY ACE +₡1,500!' : `RING ${this.skyRingsCleared}/8 +₡200`, '#22d3ee');
+            this.hud.showNotification(
+              allDone ? 'APEX SKY ACE!' : `SKY RING: ${ring.label.toUpperCase()}`,
+              allDone ? 'Cleared every aerial gate over Neo Velo! +₡1,500 & +500 XP' : `+₡200 & +120 XP (${this.skyRingsCleared}/${this.openWorld.skyRings.length})`,
+              allDone ? 3.4 : 2.2
+            );
+          }
+        }
+      } else if (this.inCar) {
         const inputs = this.hud.pollInputs(this.physics.gearboxType);
         const prevGear = this.physics.gear;
         this.physics.update(simDt, inputs, canDrive);
@@ -2550,6 +2916,8 @@ class GameApp {
             const worldItem = this.nearbyInteractable();
             if (worldItem) {
               this.handleInteractableUse(worldItem);
+            } else if (this.isNearHelicopter()) {
+              this.enterHelicopter();
             } else {
               const spot = this.nearbySitSpot();
               if (spot) {
@@ -2643,7 +3011,8 @@ class GameApp {
         );
 
         const nearbyItem = !this.charCtrl.isDead && !this.sittingSpot ? this.nearbyInteractable() : null;
-        const promptSpot = this.sittingSpot ?? (nearbyItem ? null : this.nearbySitSpot());
+        const nearHeli = !this.charCtrl.isDead && !this.sittingSpot && !nearbyItem && this.isNearHelicopter();
+        const promptSpot = this.sittingSpot ?? (nearbyItem || nearHeli ? null : this.nearbySitSpot());
         if (nearbyItem) {
           this.hud.setUseLabel(
             nearbyItem.type === 'ELEVATOR_UP' ? 'ROOF'
@@ -2654,14 +3023,16 @@ class GameApp {
               : nearbyItem.type === 'ROOFTOP_GLIDE' ? 'JUMP'
               : 'USE'
           );
+        } else if (nearHeli) {
+          this.hud.setUseLabel('FLY');
         } else {
           this.hud.setUseLabel(this.sittingSpot ? 'STAND' : (promptSpot ? 'SIT' : 'USE'));
         }
         if (this.interactPromptEl) {
-          if (!this.charCtrl.isDead && (this.sittingSpot || nearbyItem || promptSpot)) {
+          if (!this.charCtrl.isDead && (this.sittingSpot || nearbyItem || nearHeli || promptSpot)) {
             const label = this.sittingSpot
               ? 'E / USE — Stand up'
-              : (nearbyItem ? nearbyItem.prompt : `E / USE — Sit (${promptSpot!.label})`);
+              : (nearbyItem ? nearbyItem.prompt : (nearHeli ? 'F / USE — Fly Apex Skyhawk Helicopter' : `E / USE — Sit (${promptSpot!.label})`));
             if (this.interactPromptEl.textContent !== label) this.interactPromptEl.textContent = label;
             this.interactPromptEl.style.display = 'block';
           } else {
@@ -2703,21 +3074,31 @@ class GameApp {
         const stealLabel = nearCop
           ? 'Police Cruiser'
           : (nearTraffic ? `${nearTraffic.name}'s Coupe` : (this.nearbyCivic ? this.nearbyCivic.name : null));
-        const canAct = nearCar || stealLabel !== null;
+        const nearHeliAct = this.isNearHelicopter();
+        const canAct = nearCar || nearHeliAct || stealLabel !== null;
         this.hud.setOnFootMode(true, canAct, this.charCtrl.hp, this.physics.gearboxType);
-        this.hud.setFootAction(canAct, nearCar ? 'Drive Car' : (stealLabel ? 'Steal Car' : 'Walk to Car'));
-        this.hud.setStealPrompt(!nearCar ? stealLabel : null);
+        this.hud.setFootAction(canAct, nearHeliAct ? 'Fly Heli' : (nearCar ? 'Drive Car' : (stealLabel ? 'Steal Car' : 'Walk to Car')));
+        this.hud.setStealPrompt(!nearCar && !nearHeliAct ? stealLabel : null);
       }
 
+      // Spin-down helicopter mesh & audio smoothly even when parked
+      if (!this.inHeli) {
+        if (this.heliPhysics.rotorRpm > 0 || !this.heliPhysics.isGrounded) {
+          this.heliPhysics.update(dt, { pitch: 0, yaw: 0, strafe: 0, ascend: false, descend: false }, false);
+        }
+        this.sound.updateHelicopterSound(false, this.heliPhysics.rotorRpm, 0);
+      }
+      this.heliMesh.update(this.heliPhysics, dt);
+
       // Lap timer ticks even when player is on foot during a timed race
-      if (isTimedRace && !this.inCar) {
+      if (isTimedRace && !this.inCar && !this.inHeli) {
         this.lapManager.update(dt, this.physics.position, false, 0, 0, this.weather.driftScoreMultiplier);
         this.ghost.updatePlayback(false, this.lapManager.stats.currentLapTime);
       }
 
       // Check proximity to In-World GP Race Start Portal (0, 0, -4)
-      const activePos = this.inCar ? this.physics.position : this.charCtrl.position;
-      const activeVel = this.inCar ? this.physics.velocity : this.charCtrl.velocity;
+      const activePos = this.inHeli ? this.heliPhysics.position : (this.inCar ? this.physics.position : this.charCtrl.position);
+      const activeVel = this.inHeli ? this.heliPhysics.velocity : (this.inCar ? this.physics.velocity : this.charCtrl.velocity);
 
       // Update ocean waves & smashable traffic cones + hidden Neon Cash Stash pickups!
       this.openWorld.updateWorldDynamics(dt, this.elapsedSec, activePos, activeVel, this.inCar);
@@ -2956,18 +3337,24 @@ class GameApp {
       if (this.impactFlashEl) this.impactFlashEl.style.opacity = this.impactFlashAlpha.toFixed(3);
     }
     if (this.speedVignetteEl) {
-      const vig = this.inCar
-        ? Math.min(0.65, Math.max(0, (this.physics.speedKmh - 105) / 180))
-        : (this.charCtrl.isDead ? 0.72 : (this.charCtrl.isDashing || this.charCtrl.isGliding ? 0.28 : 0));
+      const vig = this.inHeli
+        ? Math.min(0.45, Math.max(0, (this.heliPhysics.speedKmh - 95) / 180))
+        : (this.inCar
+          ? Math.min(0.65, Math.max(0, (this.physics.speedKmh - 105) / 180))
+          : (this.charCtrl.isDead ? 0.72 : (this.charCtrl.isDashing || this.charCtrl.isGliding ? 0.28 : 0)));
       this.speedVignetteEl.style.opacity = vig.toFixed(2);
     }
     this.updateCamera(dt);
 
-    const playerMarker = this.inCar
-      ? { x: this.physics.position.x, z: this.physics.position.z, yaw: this.physics.rotation.y }
-      : { x: this.charCtrl.position.x, z: this.charCtrl.position.z, yaw: this.charCtrl.yaw };
+    const playerMarker = this.inHeli
+      ? { x: this.heliPhysics.position.x, z: this.heliPhysics.position.z, yaw: this.heliPhysics.yaw }
+      : (this.inCar
+        ? { x: this.physics.position.x, z: this.physics.position.z, yaw: this.physics.rotation.y }
+        : { x: this.charCtrl.position.x, z: this.charCtrl.position.z, yaw: this.charCtrl.yaw });
 
     const extraMarkers: MinimapActor[] = [
+      ...(!this.inHeli ? [{ x: this.heliPhysics.position.x, z: this.heliPhysics.position.z, color: '#22d3ee', shape: 'diamond' as const, size: 3.4 }] : []),
+      ...(this.inHeli ? this.openWorld.skyRings.filter(r => !r.passed).map(r => ({ x: r.x, z: r.z, color: '#22d3ee', shape: 'ring' as const, size: 4.0 })) : []),
       ...this.raceBots.map(b => ({ x: b.physics.position.x, z: b.physics.position.z, color: '#facc15' })),
       ...this.cityCruisers.map(c => ({ x: c.physics.position.x, z: c.physics.position.z, color: '#38bdf8' })),
       ...this.police.units.map(u => ({ x: u.physics.position.x, z: u.physics.position.z, color: '#ef4444' })),
@@ -3022,6 +3409,14 @@ class GameApp {
       ] : [])
     ];
 
+    const driftHudInfo = this.gameState === GameState.DRIFT_ARENA
+      ? {
+          remainingSec: this.driftArenaTimer,
+          totalPoints: Math.round(this.lapManager.stats.driftScore + this.lapManager.stats.currentDriftPoints),
+          mult: this.lapManager.stats.driftMultiplier
+        }
+      : undefined;
+
     this.hud.render(
       this.physics,
       this.lapManager,
@@ -3030,7 +3425,8 @@ class GameApp {
       playerMarker,
       this.gameState === GameState.TIMED_RACE,
       this.computeRacePositionText(),
-      extraMarkers
+      extraMarkers,
+      driftHudInfo
     );
     this.renderer.render(this.scene, this.camera);
     this.updateAdaptiveResolution(rawDt);
@@ -3046,6 +3442,53 @@ class GameApp {
   private updateCamera(dt: number): void {
     if (this.cameraShake > 0) {
       this.cameraShake = Math.max(0, this.cameraShake - dt * 1.6);
+    }
+
+    if (this.inHeli) {
+      const hPos = this.heliPhysics.position;
+      const fwdX = -Math.sin(this.heliPhysics.yaw);
+      const fwdZ = -Math.cos(this.heliPhysics.yaw);
+
+      if (this.cameraView === CameraView.HOOD) {
+        this.setCameraFov(72);
+        this.camScratchC.set(hPos.x + fwdX * 1.4, hPos.y + 1.55, hPos.z + fwdZ * 1.4);
+        this.camera.position.copy(this.camScratchC);
+        this.camScratchE.set(hPos.x + fwdX * 42, hPos.y - 3.5 + this.heliPhysics.pitch * 22, hPos.z + fwdZ * 42);
+        this.camera.lookAt(this.camScratchE);
+        return;
+      }
+
+      if (this.cameraView === CameraView.ORBIT) {
+        this.setCameraFov(56);
+        this.orbitAngle += dt * 0.35;
+        const dist = 12.5;
+        this.camScratchC.set(hPos.x + Math.sin(this.orbitAngle) * dist, hPos.y + 4.2, hPos.z + Math.cos(this.orbitAngle) * dist);
+        this.camScratchD.set(hPos.x, hPos.y + 1.4, hPos.z);
+        const safe = this.openWorld.clampCameraToWorld(this.camScratchD, this.camScratchC);
+        this.camera.position.copy(safe);
+        this.camera.lookAt(hPos.x, hPos.y + 1.4, hPos.z);
+        return;
+      }
+
+      const targetHeliFov = 64 + Math.min(12, (this.heliPhysics.speedKmh / 168) * 12);
+      this.setCameraFov(THREE.MathUtils.damp(this.camera.fov, targetHeliFov, 6, dt));
+      const camDist = 11.2 + Math.min(2.0, (this.heliPhysics.speedKmh / 168) * 2.0);
+      this.camScratchA.set(fwdX, 0, fwdZ);
+      this.camScratchC.set(hPos.x - fwdX * camDist, hPos.y + 4.1, hPos.z - fwdZ * camDist);
+      this.camScratchD.set(hPos.x, hPos.y + 1.5, hPos.z);
+      const safe = this.openWorld.clampCameraToWorld(this.camScratchD, this.camScratchC);
+      this.chaseCamPos.lerp(safe, 1 - Math.exp(-9 * dt));
+      this.camera.position.copy(this.chaseCamPos);
+      if (this.cameraShake > 0) {
+        this.camera.position.x += (Math.random() - 0.5) * this.cameraShake;
+        this.camera.position.y += (Math.random() - 0.5) * this.cameraShake;
+      }
+      this.camScratchE.set(hPos.x + fwdX * 8, hPos.y + 1.1, hPos.z + fwdZ * 8);
+      this.chaseCamLook.lerp(this.camScratchE, 1 - Math.exp(-12 * dt));
+      this.camera.lookAt(this.chaseCamLook);
+      this.camRoll = THREE.MathUtils.damp(this.camRoll, -this.heliPhysics.roll * 0.25, 6.0, dt);
+      this.camera.rotateZ(this.camRoll);
+      return;
     }
 
     if (!this.inCar) {

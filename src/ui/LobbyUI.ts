@@ -1,8 +1,10 @@
 import { LobbyClient } from '../network/LobbyClient';
+import { checkOfflinePackStatus, downloadOfflinePack } from '../game/OfflinePack';
 import type {
   BotDifficulty,
   CharacterId,
   GameModeId,
+  NetworkMode,
   RoomState,
   RoomSummary
 } from '../network/LobbyProtocol';
@@ -59,8 +61,12 @@ export class LobbyUI {
   public onErrorToast: (message: string) => void = () => {};
 
   private hostIpText: HTMLElement;
+  private lanTargetRow: HTMLElement | null;
+  private lanHostInput: HTMLInputElement | null;
+  private lanHelpText: HTMLElement | null;
   private apkBtn: HTMLButtonElement;
   private offlineStatusBtn: HTMLButtonElement;
+  private offlineDownloading = false;
   private installBtn: HTMLButtonElement;
 
   constructor(public client: LobbyClient) {
@@ -78,6 +84,9 @@ export class LobbyUI {
     this.roomCodeBadge = document.getElementById('room-code-badge')!;
     this.hotspotUrlText = document.getElementById('hotspot-url-text')!;
     this.hostIpText = document.getElementById('host-ip-text')!;
+    this.lanTargetRow = document.getElementById('lan-target-row');
+    this.lanHostInput = document.getElementById('input-lan-host') as HTMLInputElement | null;
+    this.lanHelpText = document.getElementById('lan-help-text');
     this.hostControlsBox = document.getElementById('host-controls-box')!;
     this.rosterCountLabel = document.getElementById('roster-count-label')!;
     this.rosterList = document.getElementById('roster-list')!;
@@ -90,6 +99,7 @@ export class LobbyUI {
 
     this.bindEvents();
     this.bindNetworkCallbacks();
+    this.syncNetworkModeUI();
     this.checkUrlRoomParam();
     this.applyCapabilityGates();
     this.updateOfflineStatus();
@@ -117,23 +127,51 @@ export class LobbyUI {
 
   private updateOfflineStatus(): void {
     const el = this.offlineStatusBtn;
-    if (!('serviceWorker' in navigator)) {
-      el.textContent = 'Offline: unsupported';
-      el.style.opacity = '0.5';
+    if (this.offlineDownloading) return;
+    if (!('serviceWorker' in navigator) || typeof caches === 'undefined') {
+      el.textContent = 'Offline Pack: unsupported';
+      el.disabled = true;
+      el.style.opacity = '0.55';
       return;
     }
-    navigator.serviceWorker.getRegistration().then((reg) => {
-      if (reg && reg.active) {
-        el.textContent = 'Offline: ready';
+    el.disabled = false;
+    void checkOfflinePackStatus().then((status) => {
+      if (status.ready) {
+        el.textContent = `Offline Pack Ready (${status.cachedCount}/${status.totalCount})`;
+        el.classList.add('selected');
         el.style.opacity = '1';
+      } else if (!status.swActive) {
+        el.textContent = `Download Offline Pack (${status.cachedCount}/${status.totalCount})`;
+        el.classList.remove('selected');
+        el.style.opacity = '0.9';
       } else {
-        el.textContent = 'Offline: installing…';
-        el.style.opacity = '0.7';
+        el.textContent = `Download Offline Pack (${status.cachedCount}/${status.totalCount})`;
+        el.classList.remove('selected');
+        el.style.opacity = '0.95';
       }
     }).catch(() => {
-      el.textContent = 'Offline: unavailable';
-      el.style.opacity = '0.5';
+      el.textContent = 'Offline Pack: check failed';
+      el.style.opacity = '0.6';
     });
+  }
+
+  private syncNetworkModeUI(): void {
+    const mode = this.client.networkMode;
+    document.querySelectorAll('.netmode-options .option-btn').forEach((b) => {
+      b.classList.toggle('selected', b.getAttribute('data-netmode') === mode);
+    });
+    if (this.lanTargetRow) {
+      this.lanTargetRow.style.display = mode === 'LAN' ? 'flex' : 'none';
+    }
+    if (this.lanHelpText) {
+      if (mode === 'OFFLINE') {
+        this.lanHelpText.textContent = 'Offline Solo mode — zero network connections, full world & AI bots.';
+      } else if (mode === 'ONLINE') {
+        this.lanHelpText.textContent = 'Online public multiplayer — share Room Code or URL with players anywhere.';
+      } else {
+        this.lanHelpText.textContent = 'Local Wi-Fi / Android Hotspot LAN — connect devices on the same network or enter Host IP:Port.';
+      }
+    }
   }
 
   public setVisible(visible: boolean): void {
@@ -153,6 +191,38 @@ export class LobbyUI {
   private bindEvents(): void {
     document.getElementById('btn-close-lobby')?.addEventListener('click', () => {
       this.setVisible(false);
+    });
+
+    // Connection mode tabs (Offline / Local LAN / Online)
+    document.querySelectorAll('.netmode-options .option-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-netmode') as NetworkMode;
+        const customHost = this.lanHostInput?.value.trim() || '';
+        this.client.setNetworkMode(mode, mode === 'LAN' ? customHost : undefined);
+        this.syncNetworkModeUI();
+      });
+    });
+
+    document.getElementById('btn-connect-lan')?.addEventListener('click', () => {
+      const host = this.lanHostInput?.value.trim() || '';
+      this.client.setNetworkMode('LAN', host);
+      this.syncNetworkModeUI();
+    });
+
+    this.offlineStatusBtn.addEventListener('click', async () => {
+      if (this.offlineDownloading) return;
+      this.offlineDownloading = true;
+      this.offlineStatusBtn.disabled = true;
+      const res = await downloadOfflinePack((p) => {
+        const pct = Math.round((p.completed / Math.max(1, p.total)) * 100);
+        this.offlineStatusBtn.textContent = `Caching Offline Pack ${pct}% (${p.completed}/${p.total})`;
+      });
+      this.offlineDownloading = false;
+      this.offlineStatusBtn.disabled = false;
+      if (!res.ok) {
+        this.onErrorToast(res.error || 'Could not cache all offline assets. Check connection or storage space.');
+      }
+      this.updateOfflineStatus();
     });
 
     this.nameInput.addEventListener('input', () => {
@@ -211,16 +281,20 @@ export class LobbyUI {
       });
     });
 
-    // Host Hotspot Room
+    // Host Multiplayer Room
     document.getElementById('btn-host-room')!.addEventListener('click', () => {
       this.config.playerName = this.nameInput.value.trim() || 'Host';
+      if (this.client.networkMode === 'OFFLINE') {
+        this.onErrorToast('Switch Connection Mode to Local LAN or Online to host multiplayer, or use Quick Solo.');
+        return;
+      }
       if (!this.client.isConnected) {
-        alert('Hotspot LAN server is not connected yet. Starting Quick Solo mode or wait 1s and retry.');
+        this.onErrorToast('Server not connected yet. Check your LAN IP:Port / network and retry.');
         return;
       }
       this.client.createRoom({
         playerName: this.config.playerName,
-        roomName: `${this.config.playerName}'s Hotspot`,
+        roomName: `${this.config.playerName}'s Room`,
         characterId: this.config.characterId,
         carColor: this.config.carColor,
         gearbox: this.config.gearbox,
@@ -306,6 +380,14 @@ export class LobbyUI {
   }
 
   private joinByCode(code: string): void {
+    if (this.client.networkMode === 'OFFLINE') {
+      this.onErrorToast('Switch Connection Mode to Local LAN or Online to join a room.');
+      return;
+    }
+    if (!this.client.isConnected) {
+      this.onErrorToast('Not connected to multiplayer host yet. Check connection and retry.');
+      return;
+    }
     this.config.playerName = this.nameInput.value.trim() || 'Racer';
     this.client.joinRoom({
       code,
@@ -317,22 +399,44 @@ export class LobbyUI {
   }
 
   private bindNetworkCallbacks(): void {
-    this.client.onConnectionChange = (connected) => {
-      if (connected) {
-        const ipText = this.client.lanInfo?.ips?.[0] || location.hostname;
-        this.statusBadge.textContent = `HOTSPOT LAN READY (${ipText})`;
+    const refreshBadge = () => {
+      const state = this.client.connectionState;
+      const mode = this.client.networkMode;
+      if (state === 'CONNECTED') {
+        if (mode === 'ONLINE' || this.client.lanInfo?.mode === 'ONLINE') {
+          this.statusBadge.textContent = 'ONLINE LOBBY READY';
+        } else {
+          const ipText = this.client.lanInfo?.ips?.[0] || location.hostname;
+          this.statusBadge.textContent = `LAN READY (${ipText})`;
+        }
         this.statusBadge.classList.remove('offline');
+      } else if (state === 'RECONNECTING') {
+        this.statusBadge.textContent = 'RECONNECTING...';
+        this.statusBadge.classList.add('offline');
+      } else if (state === 'CONNECTING') {
+        this.statusBadge.textContent = 'CONNECTING...';
+        this.statusBadge.classList.add('offline');
+      } else if (state === 'ERROR') {
+        this.statusBadge.textContent = `${mode} UNREACHABLE`;
+        this.statusBadge.classList.add('offline');
+      } else {
+        this.statusBadge.textContent = 'OFFLINE SOLO MODE';
+        this.statusBadge.classList.add('offline');
+      }
+      this.syncNetworkModeUI();
+    };
 
-        // Auto-join if ?room=CODE was passed via QR code!
+    this.client.onStatusChange = () => refreshBadge();
+    this.client.onConnectionChange = (connected) => {
+      refreshBadge();
+      if (connected) {
         const roomParam = new URLSearchParams(location.search).get('room');
         if (roomParam && !this.client.currentRoom) {
           this.joinByCode(roomParam);
         }
-      } else {
-        this.statusBadge.textContent = 'SOLO OFFLINE MODE';
-        this.statusBadge.classList.add('offline');
       }
     };
+    refreshBadge();
 
     this.client.onRoomList = (rooms) => {
       this.renderRoomList(rooms);
@@ -421,8 +525,12 @@ export class LobbyUI {
     this.roomCodeBadge.textContent = `#${room.code}`;
     const shareUrl = await this.client.renderHotspotQR(this.qrCanvas, room.code);
     this.hotspotUrlText.textContent = shareUrl;
-    const ip = this.client.lanInfo?.ips?.[0] || location.hostname;
-    this.hostIpText.textContent = `Host IP: ${ip} • Port ${this.client.lanInfo?.port ?? (location.port || 80)}`;
+    if (this.client.networkMode === 'ONLINE' || this.client.lanInfo?.mode === 'ONLINE') {
+      this.hostIpText.textContent = `Online Public Lobby • Code #${room.code}`;
+    } else {
+      const ip = this.client.lanInfo?.ips?.[0] || location.hostname;
+      this.hostIpText.textContent = `LAN Host: ${ip}:${this.client.lanInfo?.port ?? (location.port || 80)} (Same Wi-Fi / Hotspot required)`;
+    }
 
     const me = room.players.find(p => p.id === this.client.clientId);
     const isHost = !!me?.isHost;

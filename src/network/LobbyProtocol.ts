@@ -71,8 +71,22 @@ export interface NetworkPlayerSync {
   appearance?: CharacterAppearance;
 }
 
+export type NetworkMode = 'OFFLINE' | 'LAN' | 'ONLINE';
+
+export interface LeaderboardEntry {
+  playerId: string;
+  name: string;
+  score: number;
+  bestTimeMs?: number;
+  combo?: number;
+  finishedAt: number;
+}
+
 export interface LanNetworkInfo {
+  mode: 'LAN' | 'ONLINE';
   ips: string[];
   port: number;
   preferredUrl: string;
+  publicUrl?: string;
+  lanWarning?: string;
 }

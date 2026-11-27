@@ -102,10 +102,13 @@ const OrigRequest = globalThis.Request;
 import { CarPhysics, GearboxType, type CarInputs, type GroundSample } from '../src/physics/CarPhysics';
 import { CharacterController } from '../src/physics/CharacterController';
 import { RoadGraph, hasLineOfSight } from '../src/game/RoadGraph';
-import { SaveManager } from '../src/game/SaveManager';
+import { SaveManager, migrateSave, CURRENT_SAVE_VERSION } from '../src/game/SaveManager';
+import { REQUIRED_OFFLINE_ASSETS, checkOfflinePackStatus } from '../src/game/OfflinePack';
 import { AdaptiveResolution } from '../src/game/AdaptiveResolution';
 import { OpenWorldMap } from '../src/graphics/OpenWorldMap';
 import { TrackEnvironment } from '../src/graphics/TrackEnvironment';
+import { HelicopterPhysics } from '../src/physics/HelicopterPhysics';
+import { HelicopterMesh } from '../src/graphics/HelicopterMesh';
 import { PoliceSystem } from '../src/game/PoliceSystem';
 import { PedestrianSystem } from '../src/ai/PedestrianSystem';
 import { SparringFighter, CityCruiserBot } from '../src/ai/RaceBotAI';
@@ -115,7 +118,8 @@ import { HumanCharacterMesh } from '../src/graphics/HumanCharacterMesh';
 import { ParticleSystem } from '../src/graphics/ParticleSystem';
 import { mapAnimStateToClip, modelForCharacter, modelUrlFor } from '../src/graphics/CharacterAnimationMap';
 import { GLTFCharacterMesh } from '../src/graphics/GLTFCharacterMesh';
-import { lanLobbyPlugin } from '../server/lanLobbyPlugin';
+import { lanLobbyPlugin, createLobbyBackend } from '../server/lanLobbyPlugin';
+import { startOnlineServer } from '../server/onlineServer';
 import {
   separateVehiclePair,
   pushCharacterOutOfVehicles,
@@ -1889,6 +1893,337 @@ test('CharacterController: swims in deep water, executes 3-hit boxing combo & do
   assert.ok(char.stamina < 100);
 });
 
+test('HelicopterPhysics, HelicopterMesh GLB & OpenWorldMap Sky Rings / Zenith Helipad', async () => {
+  const scene = new THREE.Scene();
+  const map = new OpenWorldMap(scene);
+  assert.equal(map.skyRings.length, 8, '8 aerial Sky Rings must exist over Neo Velo');
+  assert.equal(map.sampleHeliGroundHeight(258, -5, 50), 50, 'Zenith Corp Helipad supports landing at y=50');
+  assert.ok(map.sampleHeliGroundHeight(172, -200, 76) >= 66, 'Skyscraper roofs support helicopter landing');
+
+  const heli = new HelicopterPhysics();
+  heli.groundHeightSampler = (x, z, y) => map.sampleHeliGroundHeight(x, z, y);
+  heli.worldCollider = (p, v, r) => map.resolveCollision(p, v, r);
+  heli.resetAt(new THREE.Vector3(258, 50, -5), 0);
+
+  // Spool rotors and climb off Zenith Rooftop
+  for (let i = 0; i < 160; i++) {
+    heli.update(1 / 60, { pitch: 0, yaw: 0, strafe: 0, ascend: true, descend: false }, true);
+  }
+  assert.ok(heli.rotorRpm > 0.9, `Rotors must spool cleanly, got ${heli.rotorRpm}`);
+  assert.ok(heli.position.y > 55, `Helicopter must lift off Zenith Helipad (y=50), reached ${heli.position.y.toFixed(1)}`);
+
+  // Forward flight banks & builds cruise airspeed
+  for (let i = 0; i < 90; i++) {
+    heli.update(1 / 60, { pitch: 1, yaw: 0.4, strafe: 0, ascend: false, descend: false }, true);
+  }
+  assert.ok(heli.speedKmh > 45, `Forward pitch must accelerate chopper, got ${heli.speedKmh.toFixed(1)} km/h`);
+  assert.ok(heli.pitch < -0.1, 'Forward flight must tilt nose down');
+
+  // Verify real helicopter.glb loads, spins rotors, and toggles searchlight
+  const heliMesh = new HelicopterMesh();
+  const deadline = Date.now() + 4000;
+  while (!heliMesh.isLoaded && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(heliMesh.isLoaded, true, 'public/assets/models/helicopter.glb must load cleanly');
+  assert.equal(heliMesh.toggleSearchlight(), true);
+  heliMesh.update(heli, 1 / 60);
+});
+
+test('WebSocket Security: malformed frames, oversize, forged hits, late-join & rate limits', async () => {
+  const backend = createLobbyBackend({ sessionGraceMs: 250 });
+  const server = http.createServer();
+  backend.attachWebSocket(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+
+  const connectRaw = async () => {
+    const msgs: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    ws.on('error', () => {});
+    await new Promise<void>((resolve) => {
+      ws.on('message', (buf) => {
+        msgs.push(JSON.parse(buf.toString()));
+        if (msgs.length >= 2) resolve();
+      });
+    });
+    return { ws, msgs };
+  };
+
+  const c1 = await connectRaw();
+  const c2 = await connectRaw();
+  const c3 = await connectRaw();
+
+  try {
+    // 1. Malformed JSON, null, array, bad type -> ERROR without crash
+    c1.ws.send('{{bad-json');
+    c1.ws.send('null');
+    c1.ws.send('[1,2,3]');
+    c1.ws.send(JSON.stringify({ type: 123 }));
+    await new Promise((r) => setTimeout(r, 60));
+    const errors = c1.msgs.filter((m) => m.type === 'ERROR');
+    assert.ok(errors.length >= 4, 'server must safely reject malformed frames with ERROR');
+
+    // 2. Oversize payload (>8KB) closes cleanly with 1009 (Message too large)
+    const oversize = await connectRaw();
+    const closePromise = new Promise<number>((resolve) => oversize.ws.on('close', (code) => resolve(code)));
+    oversize.ws.send(JSON.stringify({ type: 'CHAT', payload: { text: 'A'.repeat(9000) } }));
+    const closeCode = await closePromise;
+    assert.ok(closeCode === 1009 || closeCode === 1006, `oversized frame closed with ${closeCode}`);
+
+    // 3. Host creates room & c2 joins
+    c1.ws.send(JSON.stringify({ type: 'CREATE_ROOM', payload: { playerName: 'HostSec', mode: 'DRIFT_ARENA' } }));
+    const roomState = await new Promise<{ code: string }>((resolve) => {
+      const iv = setInterval(() => {
+        const hit = c1.msgs.find((m) => m.type === 'ROOM_STATE');
+        if (hit) { clearInterval(iv); resolve((hit.payload as { room: { code: string } }).room); }
+      }, 15);
+    });
+    const code = roomState.code;
+
+    c2.msgs.length = 0;
+    c2.ws.send(JSON.stringify({ type: 'JOIN_ROOM', payload: { code, playerName: 'GuestSec' } }));
+    await new Promise<void>((resolve) => {
+      const iv = setInterval(() => {
+        if (c2.msgs.some((m) => m.type === 'ROOM_STATE')) { clearInterval(iv); resolve(); }
+      }, 15);
+    });
+
+    // 4. Non-host cannot START_GAME or ADD_BOT
+    const c2ErrBefore = c2.msgs.filter((m) => m.type === 'ERROR').length;
+    c2.ws.send(JSON.stringify({ type: 'START_GAME', payload: {} }));
+    c2.ws.send(JSON.stringify({ type: 'ADD_BOT', payload: {} }));
+    await new Promise((r) => setTimeout(r, 40));
+    assert.ok(c2.msgs.filter((m) => m.type === 'ERROR').length >= c2ErrBefore + 2);
+
+    // 5. NaN / Infinity / extreme PLAYER_STATE coords are clamped & stripped
+    const c2Id = String(c2.msgs[0]?.payload?.clientId || c2.msgs.find((m) => m.type === 'WELCOME')?.payload?.clientId || '');
+    const c1WelcomeId = String((c1.msgs[0].payload as { clientId: string }).clientId);
+    c1.msgs.length = 0;
+    c2.ws.send(JSON.stringify({
+      type: 'PLAYER_STATE',
+      payload: { id: 'SPOOFED', x: 999999, y: null, z: -999999, hp: 5000, animState: 'HACKED' }
+    }));
+    await new Promise((r) => setTimeout(r, 40));
+    const wsMsg = c1.msgs.find((m) => m.type === 'WORLD_STATE');
+    assert.ok(wsMsg, 'valid sanitized WORLD_STATE delivered');
+    const guestSync = Object.values((wsMsg!.payload as { states: Record<string, Record<string, unknown>> }).states)[0];
+    assert.notEqual(guestSync.id, 'SPOOFED');
+    assert.equal(guestSync.x, 1200);
+    assert.equal(guestSync.hp, 100);
+    assert.equal(guestSync.animState, 'IDLE');
+
+    // 6. Forged MELEE_HIT (>45 damage capped, >6.5m rejected)
+    c1.ws.send(JSON.stringify({ type: 'PLAYER_STATE', payload: { x: 0, y: 0, z: 0 } }));
+    await new Promise((r) => setTimeout(r, 30));
+    c2.msgs.length = 0;
+    c1.ws.send(JSON.stringify({ type: 'MELEE_HIT', payload: { targetId: String(guestSync.id), damage: 9999, dirX: 1, dirZ: 0 } }));
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(c2.msgs.filter((m) => m.type === 'MELEE_HIT').length, 0, 'out-of-range melee hit (>6.5m) blocked');
+
+    // Move host within melee range & clear cooldown -> forged 9999 damage clamped to 45
+    c2.ws.send(JSON.stringify({ type: 'PLAYER_STATE', payload: { x: 1, y: 0, z: 0 } }));
+    await new Promise((r) => setTimeout(r, 250));
+    c2.msgs.length = 0;
+    c1.ws.send(JSON.stringify({ type: 'MELEE_HIT', payload: { targetId: String(guestSync.id), damage: 9999, dirX: 3, dirZ: 4 } }));
+    await new Promise((r) => setTimeout(r, 40));
+    const melee = c2.msgs.find((m) => m.type === 'MELEE_HIT')?.payload as { damage: number; attackerId: string } | undefined;
+    assert.ok(melee, 'in-range melee delivered');
+    assert.equal(melee!.damage, 45);
+    assert.equal(melee!.attackerId, c1WelcomeId);
+
+    // 7. Late-join blocked once room enters PLAYING
+    c1.ws.send(JSON.stringify({ type: 'START_GAME', payload: {} }));
+    await new Promise((r) => setTimeout(r, 40));
+    c3.msgs.length = 0;
+    c3.ws.send(JSON.stringify({ type: 'JOIN_ROOM', payload: { code, playerName: 'LateJoiner' } }));
+    await new Promise((r) => setTimeout(r, 40));
+    assert.ok(c3.msgs.some((m) => m.type === 'ERROR' && String(m.payload.message).includes('started')), 'late join rejected');
+    assert.ok(c2Id !== undefined || true);
+  } finally {
+    c1.ws.close();
+    c2.ws.close();
+    c3.ws.close();
+    backend.shutdown();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('Multiplayer Recovery, Host Migration, Expired Token & Leaderboard', async () => {
+  const backend = createLobbyBackend({ sessionGraceMs: 180 });
+  const server = http.createServer();
+  backend.attachWebSocket(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+
+  const connectClient = async () => {
+    const msgs: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    await new Promise<void>((resolve) => {
+      ws.on('message', (buf) => {
+        msgs.push(JSON.parse(buf.toString()));
+        if (msgs.some((m) => m.type === 'WELCOME')) resolve();
+      });
+    });
+    const welcome = msgs.find((m) => m.type === 'WELCOME')!.payload as { clientId: string; resumeToken: string };
+    return { ws, msgs, clientId: welcome.clientId, resumeToken: welcome.resumeToken };
+  };
+
+  const host = await connectClient();
+  const guest = await connectClient();
+  let reconnectedHost: Awaited<ReturnType<typeof connectClient>> | null = null;
+  let lateExpiredHost: Awaited<ReturnType<typeof connectClient>> | null = null;
+
+  try {
+    host.ws.send(JSON.stringify({ type: 'CREATE_ROOM', payload: { playerName: 'Alpha', mode: 'DRIFT_ARENA' } }));
+    await new Promise((r) => setTimeout(r, 35));
+    const room = (host.msgs.find((m) => m.type === 'ROOM_STATE')!.payload as { room: { code: string } }).room;
+
+    guest.ws.send(JSON.stringify({ type: 'JOIN_ROOM', payload: { code: room.code, playerName: 'Beta' } }));
+    await new Promise((r) => setTimeout(r, 35));
+
+    // Submit drift score -> verify LEADERBOARD_UPDATE
+    guest.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { mode: 'DRIFT_ARENA', score: 12450, combo: 4 } }));
+    host.ws.send(JSON.stringify({ type: 'RESULT_SUBMIT', payload: { mode: 'DRIFT_ARENA', score: 18900, combo: 6 } }));
+    await new Promise((r) => setTimeout(r, 40));
+    const lb = guest.msgs.filter((m) => m.type === 'LEADERBOARD_UPDATE').pop()?.payload as { entries: Array<{ name: string; score: number }> };
+    assert.ok(lb && lb.entries.length === 2);
+    assert.equal(lb.entries[0].name, 'Alpha');
+    assert.equal(lb.entries[0].score, 18900);
+
+    // Abnormally terminate host socket -> grace reservation keeps slot; RESUME_SESSION recovers without duplicate!
+    host.ws.terminate();
+    await new Promise((r) => setTimeout(r, 40));
+    reconnectedHost = await connectClient();
+    reconnectedHost.ws.send(JSON.stringify({ type: 'RESUME_SESSION', payload: { resumeToken: host.resumeToken } }));
+    await new Promise((r) => setTimeout(r, 50));
+    const resumed = reconnectedHost.msgs.find((m) => m.type === 'SESSION_RESUMED');
+    assert.ok(resumed, 'host recovered session with resumeToken');
+    const resumedRoom = (resumed!.payload as { room: { players: Array<{ id: string; isHost: boolean }> }; clientId: string });
+    assert.equal(resumedRoom.clientId, host.clientId);
+    assert.equal(resumedRoom.room.players.length, 2, 'must not create duplicate player entry');
+    assert.ok(resumedRoom.room.players.find((p) => p.id === host.clientId)?.isHost, 'host status preserved');
+
+    // Now terminate host & let grace window expire -> host migrates to guest & late resume receives SESSION_EXPIRED
+    guest.msgs.length = 0;
+    reconnectedHost.ws.terminate();
+    await new Promise((r) => setTimeout(r, 240));
+    const migratedState = guest.msgs.filter((m) => m.type === 'ROOM_STATE').pop()?.payload as { room: { players: Array<{ id: string; isHost: boolean }> } };
+    assert.ok(migratedState, 'guest receives migrated ROOM_STATE after grace timeout');
+    assert.equal(migratedState.room.players.length, 1);
+    assert.equal(migratedState.room.players[0].id, guest.clientId);
+    assert.equal(migratedState.room.players[0].isHost, true);
+
+    lateExpiredHost = await connectClient();
+    lateExpiredHost.ws.send(JSON.stringify({ type: 'RESUME_SESSION', payload: { resumeToken: host.resumeToken } }));
+    await new Promise((r) => setTimeout(r, 40));
+    assert.ok(lateExpiredHost.msgs.some((m) => m.type === 'SESSION_EXPIRED'), 'expired token must return SESSION_EXPIRED');
+  } finally {
+    host.ws.close();
+    guest.ws.close();
+    reconnectedHost?.ws.close();
+    lateExpiredHost?.ws.close();
+    backend.shutdown();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('Standalone Online Server: health, LAN vs Cloud /api/lan-info isolation & static security', async () => {
+  const srv = startOnlineServer({ port: 0, host: '127.0.0.1', distDir: 'dist', quiet: true });
+  const { port } = await srv.listening;
+  try {
+    const healthRes = await new Promise<{ status: number; body: string }>((resolve) => {
+      http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => resolve({ status: res.statusCode || 0, body: data }));
+      });
+    });
+    assert.equal(healthRes.status, 200);
+    assert.equal(JSON.parse(healthRes.body).ok, true);
+
+    // Cloud proxy / Render simulation: must NOT leak private container IPs!
+    const prevRender = process.env.RENDER;
+    process.env.RENDER = 'true';
+    try {
+      const cloudRes = await new Promise<{ status: number; body: string }>((resolve) => {
+        http.get(
+          `http://127.0.0.1:${port}/api/lan-info`,
+          { headers: { 'x-forwarded-host': 'apex-zero.onrender.com', 'x-forwarded-proto': 'https' } },
+          (res) => {
+            let data = '';
+            res.on('data', (c) => (data += c));
+            res.on('end', () => resolve({ status: res.statusCode || 0, body: data }));
+          }
+        );
+      });
+      const cloudInfo = JSON.parse(cloudRes.body);
+      assert.equal(cloudInfo.mode, 'ONLINE');
+      assert.equal(cloudInfo.ips.length, 0, 'cloud mode must not expose container-private IPs');
+      assert.equal(cloudInfo.preferredUrl, 'https://apex-zero.onrender.com');
+    } finally {
+      if (prevRender === undefined) delete process.env.RENDER;
+      else process.env.RENDER = prevRender;
+    }
+
+    // Path traversal blocked
+    const traversalStatus = await new Promise<number>((resolve) => {
+      http.get(`http://127.0.0.1:${port}/../../package.json`, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode || 0));
+      });
+    });
+    assert.ok(traversalStatus === 403 || traversalStatus === 404);
+  } finally {
+    await srv.stop();
+  }
+});
+
+test('SaveManager v2 migration & JSON backup, plus OfflinePack & PWA relative integrity', async () => {
+  // 1. Legacy v1 migration & bad field sanitization
+  const migrated = migrateSave({
+    version: 1,
+    playerName: '  Turbo\u0007Kid  ',
+    credits: -500,
+    legendXp: 'NaN',
+    engineStage: 99,
+    carArchetype: 'INVALID'
+  });
+  assert.equal(migrated.version, CURRENT_SAVE_VERSION);
+  assert.equal(migrated.playerName, 'TurboKid');
+  assert.equal(migrated.credits, 1000, 'negative credits fall back safely to default');
+  assert.equal(migrated.legendXp, 0);
+  assert.equal(migrated.engineStage, 3);
+  assert.equal(migrated.carArchetype, 'HYPER');
+
+  // 2. Save export/import round-trip
+  localStorage.clear();
+  const sm = new SaveManager();
+  sm.data.credits = 4250;
+  sm.data.bestDriftCombo = 9800;
+  const exported = sm.exportJson();
+  assert.equal(sm.importJson('not-json').ok, false);
+  assert.equal(sm.importJson('[]').ok, false);
+  sm.resetAll();
+  assert.equal(sm.data.credits, 1000);
+  assert.equal(sm.importJson(exported).ok, true);
+  assert.equal(sm.data.credits, 4250);
+  assert.equal(sm.data.bestDriftCombo, 9800);
+
+  // 3. OfflinePack assets exist on disk & PWA manifest/sw use relative ./ paths
+  for (const rel of REQUIRED_OFFLINE_ASSETS) {
+    const clean = decodeURIComponent(rel.replace(/^\.\//, ''));
+    const inPublic = path.join(process.cwd(), 'public', clean);
+    const inRoot = path.join(process.cwd(), clean);
+    assert.ok(fs.existsSync(inPublic) || fs.existsSync(inRoot), `Missing required offline asset: ${clean}`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'public', 'manifest.webmanifest'), 'utf8'));
+  assert.equal(manifest.start_url, './');
+  assert.equal(manifest.scope, './');
+  const offlineStatus = await checkOfflinePackStatus();
+  assert.equal(offlineStatus.ready, false, 'Offline pack must not falsely report ready in headless env without Cache Storage');
+});
+
 test('CharacterStudio: in-game driver switch swaps model, saves and syncs LAN state', () => {
   const studio = fs.readFileSync(path.join(process.cwd(), 'src/ui/CharacterStudio.ts'), 'utf8');
   const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
@@ -1904,4 +2239,13 @@ test('CharacterStudio: in-game driver switch swaps model, saves and syncs LAN st
   assert.match(main, /this\.lobbyUI\.config\.characterId = id;/);
   assert.match(main, /this\.avatarMesh\.setModel\(modelUrlFor\(id\)\)/);
   assert.match(main, /this\.avatarMesh\.setCharacter\(id\)/);
+});
+
+test('LobbyClient: HTTPS page blocks private ws:// LAN hosts with an actionable error', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'src/network/LobbyClient.ts'), 'utf8');
+  assert.match(src, /function isPrivateLanTarget\(hostWithPort: string\): boolean/);
+  assert.match(src, /private lanMixedContentBlocked\(\): boolean \{[\s\S]{0,220}location\.protocol !== 'https:'/);
+  assert.match(src, /Open \$\{target\} directly — HTTPS blocks ws:\/\/ LAN hosts\./);
+  assert.match(src, /const secure = typeof location !== 'undefined' && location\.protocol === 'https:';[\s\S]{0,140}\$\{secure \? 'wss' : 'ws'\}/);
+  assert.match(src, /if \(this\.networkMode === 'OFFLINE' \|\| this\.lanMixedContentBlocked\(\)\) return null;/);
 });

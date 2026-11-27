@@ -35,6 +35,13 @@ export class SoundManager {
   private sirenLfo: OscillatorNode | null = null;
   private sirenGain: GainNode | null = null;
 
+  // Helicopter twin-turbine + blade-slap LFO
+  private heliRotorOsc: OscillatorNode | null = null;
+  private heliBladeLfo: OscillatorNode | null = null;
+  private heliTurbineOsc: OscillatorNode | null = null;
+  private heliGain: GainNode | null = null;
+  private heliTurbineGain: GainNode | null = null;
+
   // Music
   private musicAudio: HTMLAudioElement | null = null;
   public isMusicEnabled = false;
@@ -143,6 +150,44 @@ export class SoundManager {
       this.sirenGain.connect(this.masterGain);
       this.sirenOsc.start();
       this.sirenLfo.start();
+
+      // Helicopter blade-slap + turboshaft whine synth
+      this.heliRotorOsc = this.ctx.createOscillator();
+      this.heliRotorOsc.type = 'sawtooth';
+      this.heliRotorOsc.frequency.value = 54;
+      const heliFilter = this.ctx.createBiquadFilter();
+      heliFilter.type = 'lowpass';
+      heliFilter.frequency.value = 195;
+      this.heliGain = this.ctx.createGain();
+      this.heliGain.gain.value = 0;
+
+      // Blade-pass pulse modulates rotor amplitude smoothly
+      const bladeAmp = this.ctx.createGain();
+      bladeAmp.gain.value = 0.55;
+      this.heliBladeLfo = this.ctx.createOscillator();
+      this.heliBladeLfo.type = 'sine';
+      this.heliBladeLfo.frequency.value = 14;
+      const lfoDepth = this.ctx.createGain();
+      lfoDepth.gain.value = 0.45;
+      this.heliBladeLfo.connect(lfoDepth);
+      lfoDepth.connect(bladeAmp.gain);
+
+      this.heliRotorOsc.connect(heliFilter);
+      heliFilter.connect(bladeAmp);
+      bladeAmp.connect(this.heliGain);
+      this.heliGain.connect(this.masterGain);
+
+      this.heliTurbineOsc = this.ctx.createOscillator();
+      this.heliTurbineOsc.type = 'triangle';
+      this.heliTurbineOsc.frequency.value = 390;
+      this.heliTurbineGain = this.ctx.createGain();
+      this.heliTurbineGain.gain.value = 0;
+      this.heliTurbineOsc.connect(this.heliTurbineGain);
+      this.heliTurbineGain.connect(this.masterGain);
+
+      this.heliRotorOsc.start();
+      this.heliBladeLfo.start();
+      this.heliTurbineOsc.start();
 
       // Background Eurobeat Music
       this.musicAudio = new Audio(assetUrl('assets/sounds/step-inside-your-mind-instrumental-eurobeat-royalty-free-music.mp3'));
@@ -412,6 +457,30 @@ export class SoundManager {
         this.curbGain.gain.setTargetAtTime(0, now, 0.04);
       }
     }
+  }
+
+  public updateHelicopterSound(active: boolean, rotorRpm: number, speedKmh: number): void {
+    if (!this.ctx || !this.heliGain || !this.heliRotorOsc || !this.heliBladeLfo || !this.heliTurbineOsc || !this.heliTurbineGain || this.isMuted) {
+      return;
+    }
+    const now = this.ctx.currentTime;
+    if (!active || rotorRpm <= 0.02) {
+      this.heliGain.gain.setTargetAtTime(0, now, 0.08);
+      this.heliTurbineGain.gain.setTargetAtTime(0, now, 0.08);
+      return;
+    }
+    const speedFactor = Math.min(1, speedKmh / 160);
+    this.heliRotorOsc.frequency.setTargetAtTime(42 + rotorRpm * 34 + speedFactor * 10, now, 0.05);
+    this.heliBladeLfo.frequency.setTargetAtTime(6 + rotorRpm * 16 + speedFactor * 5, now, 0.05);
+    this.heliTurbineOsc.frequency.setTargetAtTime(320 + rotorRpm * 240 + speedFactor * 60, now, 0.06);
+    this.heliGain.gain.setTargetAtTime(Math.min(0.24, rotorRpm * 0.20 + speedFactor * 0.04), now, 0.05);
+    this.heliTurbineGain.gain.setTargetAtTime(Math.min(0.055, rotorRpm * 0.045), now, 0.05);
+
+    // Keep car engine audio silenced while piloting the helicopter
+    if (this.lowAccGain) this.lowAccGain.gain.setTargetAtTime(0, now, 0.04);
+    if (this.highAccGain) this.highAccGain.gain.setTargetAtTime(0, now, 0.04);
+    if (this.highDecelGain) this.highDecelGain.gain.setTargetAtTime(0, now, 0.04);
+    if (this.engineGain) this.engineGain.gain.setTargetAtTime(0, now, 0.04);
   }
 
   public updateTireSkid(maxSkid: number): void {

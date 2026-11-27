@@ -75,10 +75,81 @@ export const LEGEND_RANKS: LegendRank[] = [
 ];
 
 const SAVE_KEY = 'apex_zero_save_v1';
+export const CURRENT_SAVE_VERSION = 2;
+
+function safeNonNeg(val: unknown, fallback = 0): number {
+  const n = Number(val);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function safeRecordOfNumbers(val: unknown): Record<string, number> {
+  if (!val || typeof val !== 'object' || Array.isArray(val)) return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+    const n = Number(v);
+    if (typeof k === 'string' && k.length > 0 && k.length <= 64 && Number.isFinite(n)) {
+      out[k] = n;
+    }
+  }
+  return out;
+}
+
+export function migrateSave(rawObj: unknown): SaveData {
+  const defaults = createDefaultSave();
+  if (!rawObj || typeof rawObj !== 'object' || Array.isArray(rawObj)) {
+    return defaults;
+  }
+  const parsed = rawObj as Record<string, any>;
+  const charId = (['kaito', 'mika', 'ren', 'sora'].includes(String(parsed.characterId))
+    ? String(parsed.characterId)
+    : defaults.characterId) as CharacterId;
+
+  return {
+    ...defaults,
+    ...parsed,
+    version: CURRENT_SAVE_VERSION,
+    playerName: typeof parsed.playerName === 'string' && parsed.playerName.trim()
+      ? parsed.playerName.replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 16)
+      : defaults.playerName,
+    characterId: charId,
+    carColor: typeof parsed.carColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(parsed.carColor) ? parsed.carColor : defaults.carColor,
+    underglowColor: typeof parsed.underglowColor === 'string' ? parsed.underglowColor : defaults.underglowColor,
+    engineStage: Math.max(0, Math.min(3, Math.round(safeNonNeg(parsed.engineStage, 0)))),
+    nitroStage: Math.max(0, Math.min(3, Math.round(safeNonNeg(parsed.nitroStage, 0)))),
+    legendXp: Math.round(safeNonNeg(parsed.legendXp, 0)),
+    credits: Math.round(safeNonNeg(parsed.credits, defaults.credits)),
+    bestLapTime: typeof parsed.bestLapTime === 'number' && Number.isFinite(parsed.bestLapTime) && parsed.bestLapTime > 0 ? parsed.bestLapTime : null,
+    bestDriftCombo: Math.round(safeNonNeg(parsed.bestDriftCombo, 0)),
+    totalDriftPoints: Math.round(safeNonNeg(parsed.totalDriftPoints, 0)),
+    maxSpeedKmh: Math.round(safeNonNeg(parsed.maxSpeedKmh, 0)),
+    maxAirTime: safeNonNeg(parsed.maxAirTime, 0),
+    goalsScored: Math.round(safeNonNeg(parsed.goalsScored, 0)),
+    carsStolen: Math.round(safeNonNeg(parsed.carsStolen, 0)),
+    knockouts: Math.round(safeNonNeg(parsed.knockouts, 0)),
+    timesBusted: Math.round(safeNonNeg(parsed.timesBusted, 0)),
+    graphicsQuality: (['HIGH', 'MED', 'LOW'].includes(String(parsed.graphicsQuality)) ? parsed.graphicsQuality : 'HIGH') as GraphicsQuality,
+    weatherMode: (['CLEAR', 'RAIN', 'STORM'].includes(String(parsed.weatherMode)) ? parsed.weatherMode : 'CLEAR') as WeatherMode,
+    assistMode: (parsed.assistMode === 'PRO' ? 'PRO' : 'ARCADE'),
+    carArchetype: (['HYPER', 'DRIFT', 'TOUGE'].includes(String(parsed.carArchetype)) ? parsed.carArchetype : 'HYPER') as CarArchetypeId,
+    atmospherePref: (['DAY', 'SUNSET', 'NIGHT', 'AUTO'].includes(String(parsed.atmospherePref)) ? parsed.atmospherePref : 'SUNSET') as AtmospherePref,
+    gearbox: (['AUTO', 'SEMI', 'MANUAL'].includes(parsed.gearbox) ? parsed.gearbox as GearboxType : GearboxType.AUTO),
+    unlockedUnderglows: Array.isArray(parsed.unlockedUnderglows) && parsed.unlockedUnderglows.length > 0
+      ? parsed.unlockedUnderglows.filter((u): u is string => typeof u === 'string')
+      : ['#22d3ee', 'OFF'],
+    speedTrapRecords: safeRecordOfNumbers(parsed.speedTrapRecords),
+    driftZoneRecords: safeRecordOfNumbers(parsed.driftZoneRecords),
+    courierRecords: safeRecordOfNumbers(parsed.courierRecords),
+    discoveredShards: Array.isArray(parsed.discoveredShards) ? parsed.discoveredShards.filter((s): s is string => typeof s === 'string') : [],
+    discoveredDistricts: Array.isArray(parsed.discoveredDistricts) ? parsed.discoveredDistricts.filter((s): s is string => typeof s === 'string') : [],
+    rivalsDefeated: Array.isArray(parsed.rivalsDefeated) ? parsed.rivalsDefeated.filter((s): s is string => typeof s === 'string') : [],
+    bestLapGhost: Array.isArray(parsed.bestLapGhost) ? parsed.bestLapGhost : [],
+    ghostReplayEnabled: typeof parsed.ghostReplayEnabled === 'boolean' ? parsed.ghostReplayEnabled : true
+  };
+}
 
 export function createDefaultSave(): SaveData {
   return {
-    version: 1,
+    version: CURRENT_SAVE_VERSION,
     playerName: 'Kaito_01',
     characterId: 'kaito',
     carColor: '#ff5500',
@@ -129,32 +200,28 @@ export class SaveManager {
     try {
       const raw = localStorage.getItem(SAVE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw);
-        return {
-          ...createDefaultSave(),
-          ...parsed,
-          engineStage: Math.max(0, Math.min(3, Number(parsed.engineStage) || 0)),
-          nitroStage: Math.max(0, Math.min(3, Number(parsed.nitroStage) || 0)),
-          graphicsQuality: (['HIGH', 'MED', 'LOW'].includes(parsed.graphicsQuality) ? parsed.graphicsQuality : 'HIGH'),
-          weatherMode: (['CLEAR', 'RAIN', 'STORM'].includes(parsed.weatherMode) ? parsed.weatherMode : 'CLEAR'),
-          assistMode: (parsed.assistMode === 'PRO' ? 'PRO' : 'ARCADE'),
-          carArchetype: (['HYPER', 'DRIFT', 'TOUGE'].includes(parsed.carArchetype) ? parsed.carArchetype : 'HYPER'),
-          atmospherePref: (['DAY', 'SUNSET', 'NIGHT', 'AUTO'].includes(parsed.atmospherePref) ? parsed.atmospherePref : 'SUNSET'),
-          gearbox: (['AUTO', 'SEMI', 'MANUAL'].includes(parsed.gearbox) ? parsed.gearbox as GearboxType : GearboxType.AUTO),
-          unlockedUnderglows: Array.isArray(parsed.unlockedUnderglows) && parsed.unlockedUnderglows.length > 0
-            ? parsed.unlockedUnderglows
-            : ['#22d3ee', 'OFF'],
-          speedTrapRecords: { ...(parsed.speedTrapRecords || {}) },
-          driftZoneRecords: { ...(parsed.driftZoneRecords || {}) },
-          courierRecords: { ...(parsed.courierRecords || {}) },
-          discoveredShards: Array.isArray(parsed.discoveredShards) ? parsed.discoveredShards : [],
-          discoveredDistricts: Array.isArray(parsed.discoveredDistricts) ? parsed.discoveredDistricts : [],
-          rivalsDefeated: Array.isArray(parsed.rivalsDefeated) ? parsed.rivalsDefeated : [],
-          bestLapGhost: Array.isArray(parsed.bestLapGhost) ? parsed.bestLapGhost : []
-        };
+        return migrateSave(JSON.parse(raw));
       }
     } catch {}
     return createDefaultSave();
+  }
+
+  public exportJson(): string {
+    return JSON.stringify(this.data, null, 2);
+  }
+
+  public importJson(raw: string): { ok: boolean; error?: string } {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false, error: 'Backup file does not contain a valid APEX ZERO save object.' };
+      }
+      this.data = migrateSave(parsed);
+      this.saveNow();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Malformed JSON in save backup.' };
+    }
   }
 
   public saveNow(): void {

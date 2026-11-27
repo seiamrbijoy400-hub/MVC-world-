@@ -19,7 +19,7 @@
     }
     /* Only the game surfaces suppress selection. Room codes, times and
        credits must remain copyable. */
-    #game-container, #hud-overlay, #mobile-controls, #foot-controls {
+    #game-container, #hud-overlay, #mobile-controls, #foot-controls, #heli-controls {
       user-select: none;
       -webkit-user-select: none;
       -webkit-touch-callout: none;
@@ -657,7 +657,7 @@
     #busted-meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #f97316, #ef4444); transition: width 0.08s linear; }
 
     /* Mobile Touch Controls */
-    #mobile-controls, #foot-controls {
+    #mobile-controls, #foot-controls, #heli-controls {
       position: absolute;
       inset: 0;
       pointer-events: none;
@@ -667,7 +667,7 @@
       padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
       z-index: 15;
     }
-    #mobile-controls.hidden, #foot-controls.hidden { display: none !important; }
+    #mobile-controls.hidden, #foot-controls.hidden, #heli-controls.hidden { display: none !important; }
     .touch-btn {
       pointer-events: auto;
       background: rgba(15, 23, 42, 0.65);
@@ -977,6 +977,12 @@
       #tachometer-canvas { width: 205px; height: 205px; }
       .minimap-container { width: 136px; height: 136px; }
     }
+    @media (min-width: 641px) and (max-width: 1180px) and (pointer: coarse) {
+      .touch-btn { width: 64px; height: 64px; min-width: 56px; min-height: 56px; font-size: 11px; }
+      .touch-btn.gas { width: 82px; height: 82px; }
+      .touch-btn.brake { width: 68px; height: 68px; }
+      .steer-pad { width: 184px; }
+    }
     @media (max-width: 640px) {
       .telemetry-bars { display: none; }
       #tachometer-canvas { width: 136px; height: 136px; }
@@ -1047,7 +1053,7 @@
     .result-card span { display: block; font-size: 11px; color: #cbd5e1; text-transform: uppercase; font-weight: 700; }
     .result-card strong { font-size: 18px; color: #f8fafc; font-variant-numeric: tabular-nums; }
   </style>
-  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="manifest" href="./manifest.webmanifest">
   <meta name="theme-color" content="#ff5500">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1080,6 +1086,20 @@
 
       <!-- VIEW 1: BROWSE / CREATE / SOLO -->
       <div id="lobby-home-view" style="display:flex;flex-direction:column;gap:11px;">
+        <div>
+          <span class="section-label">Connection Mode</span>
+          <div class="options-row netmode-options" style="margin-bottom:4px;">
+            <button type="button" class="option-btn" data-netmode="OFFLINE">Offline Solo</button>
+            <button type="button" class="option-btn selected" data-netmode="LAN">Local LAN</button>
+            <button type="button" class="option-btn" data-netmode="ONLINE">Online</button>
+          </div>
+          <div id="lan-target-row" class="input-row" style="margin-top:5px;">
+            <input id="input-lan-host" class="lobby-input" type="text" maxlength="64" placeholder="Optional Host IP:Port (e.g. 192.168.43.1:3000)">
+            <button type="button" id="btn-connect-lan" class="option-btn" style="flex:0 0 82px;">Connect</button>
+          </div>
+          <div id="lan-help-text" style="font-size:10px;color:#94a3b8;margin-top:3px;line-height:1.35;">Same Wi-Fi or Android Hotspot required for LAN. Switch to Online for internet lobbies.</div>
+        </div>
+
         <div>
           <span class="section-label">Driver Name</span>
           <div class="input-row">
@@ -1135,21 +1155,21 @@
         </div>
 
         <div class="cta-grid">
-          <button id="btn-host-room" class="primary-cta">📡 Host Hotspot Room</button>
-          <button id="btn-solo-play" class="secondary-cta">🏎️ Quick Solo / Bots</button>
+          <button id="btn-host-room" class="primary-cta">Host Room</button>
+          <button id="btn-solo-play" class="secondary-cta">Quick Solo / Bots</button>
         </div>
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          <button id="btn-install-app" class="option-btn" style="display:none;padding:6px 10px;font-size:10px;">⬇️ Install App</button>
-          <button id="btn-download-apk" class="option-btn" style="display:none;padding:6px 10px;font-size:10px;">📦 Download APK</button>
-          <button id="btn-offline-status" class="option-btn" style="padding:6px 10px;font-size:10px;" disabled>Offline: checking…</button>
+          <button id="btn-install-app" class="option-btn" style="display:none;padding:6px 10px;font-size:10px;">Install App</button>
+          <button id="btn-download-apk" class="option-btn" style="display:none;padding:6px 10px;font-size:10px;">Download APK</button>
+          <button id="btn-offline-status" class="option-btn" style="padding:6px 10px;font-size:10px;">Offline Pack: checking…</button>
           <button id="btn-model-status" class="option-btn" style="padding:6px 10px;font-size:10px;" disabled>3D characters: loading…</button>
         </div>
 
         <div>
-          <span class="section-label">Join Friend on Same Hotspot / Wi-Fi</span>
+          <span class="section-label">Join by Room Code</span>
           <div class="input-row" style="margin-bottom:7px;">
-            <input id="input-room-code" class="lobby-input" type="text" maxlength="4" placeholder="4-digit Room Code (e.g. 4829)">
+            <input id="input-room-code" class="lobby-input" type="text" maxlength="6" placeholder="Room Code (e.g. 4829)">
             <button id="btn-join-code" class="secondary-cta" style="width:auto;padding:8px 16px;">Join</button>
           </div>
           <div id="room-list-box" class="room-list-box">
@@ -1478,6 +1498,24 @@
     <div id="interact-prompt" style="display:none;position:absolute;left:50%;bottom:96px;transform:translateX(-50%);padding:6px 14px;border-radius:10px;background:rgba(9,13,22,0.88);border:1px solid rgba(56,189,248,0.45);color:#f8fafc;font-size:12px;font-weight:900;white-space:nowrap;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,0.45);"></div>
   </div>
 
+  <!-- Aviation Telemetry Pill (shown on desktop & touch while flying the Apex Skyhawk) -->
+  <div id="heli-telemetry" style="display:none;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);padding:8px 16px;border-radius:999px;background:rgba(9,13,22,0.86);border:1px solid rgba(34,211,238,0.55);color:#e0f2fe;font-size:12px;font-weight:900;letter-spacing:0.6px;white-space:nowrap;pointer-events:none;z-index:16;box-shadow:0 6px 24px rgba(0,0,0,0.5);">
+    ALT 50m • 0 KM/H • ROTOR 0% • RINGS 0/8
+  </div>
+
+  <!-- Mobile Helicopter Flight Controls -->
+  <div id="heli-controls" class="hidden">
+    <div class="left-controls">
+      <div id="heli-joystick-zone" class="joystick-zone"></div>
+    </div>
+    <div class="right-controls">
+      <button id="heli-exit" class="touch-btn touch-btn--exit">EXIT</button>
+      <button id="heli-light" class="touch-btn" style="width:54px;height:54px;font-size:10px;background:rgba(250,204,21,0.22);border-color:#facc15;">LIGHT</button>
+      <button id="heli-descend" class="touch-btn brake" style="width:62px;height:62px;font-size:10px;">DOWN ▼</button>
+      <button id="heli-ascend" class="touch-btn gas" style="width:66px;height:66px;font-size:10px;">UP ▲</button>
+    </div>
+  </div>
+
   <!-- Character Customization Studio (Live 3D Preview Side Drawer) -->
   <div id="studio-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
@@ -1671,6 +1709,15 @@
         </div>
       </div>
 
+      <div class="setting-group">
+        <label>Save Backup &amp; Offline Data</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" id="btn-export-save" class="option-btn">Export Save JSON</button>
+          <button type="button" id="btn-import-save" class="option-btn">Import Save JSON</button>
+          <input id="input-import-save" type="file" accept="application/json,.json" style="display:none;">
+        </div>
+      </div>
+
       <div style="display:flex;gap:8px;margin-top:8px;">
         <button id="modal-lobby-btn" class="option-btn" style="padding:12px;">Back to Lobby</button>
         <button id="modal-resume-btn" class="primary-cta" style="margin-top:0;flex:1.6;">Resume</button>
@@ -1682,10 +1729,10 @@
   <div id="results-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
       <div class="brand-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>RACE COMPLETE!</span>
+        <span id="results-title">RACE COMPLETE!</span>
         <button id="results-close-btn" class="modal-close" aria-label="Close race results">&times;</button>
       </div>
-      <div class="brand-sub">Zenvo GP Lake Circuit Summary</div>
+      <div id="results-subtitle" class="brand-sub">Zenvo GP Lake Circuit Summary</div>
       <div id="results-status" class="brand-sub" role="status" aria-live="polite" style="min-height:15px;color:#fbbf24;"></div>
 
       <div class="results-grid">

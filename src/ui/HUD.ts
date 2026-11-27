@@ -1,5 +1,6 @@
 import { CarPhysics, CarInputs, GearboxType } from '../physics/CarPhysics';
 import type { CharacterInputs } from '../physics/CharacterController';
+import type { HelicopterInputs } from '../physics/HelicopterPhysics';
 import { LapManager } from '../game/LapManager';
 import { TrackEnvironment } from '../graphics/TrackEnvironment';
 import { FloatingJoystick } from './FloatingJoystick';
@@ -19,6 +20,8 @@ export class HUD {
   private hudOverlay: HTMLElement;
   private mobileControls: HTMLElement;
   private footControls: HTMLElement;
+  private heliControls: HTMLElement | null = null;
+  private heliTelemetryEl: HTMLElement | null = null;
   private bottomHudWrap: HTMLElement;
   private manualTouchBox: HTMLElement;
   private touchClutchBtn: HTMLElement;
@@ -30,6 +33,7 @@ export class HUD {
   private racePromptEl: HTMLElement;
   private moreDrawer: HTMLElement;
   private joystick: FloatingJoystick;
+  private heliJoystick: FloatingJoystick | null = null;
 
   private chatPanel: HTMLElement;
   private chatLog: HTMLElement;
@@ -122,6 +126,15 @@ export class HUD {
   private footDash = false;
   private footSprintLocked = false;
   private footInteract = false;
+  private heliAscend = false;
+  private heliDescend = false;
+  private heliInputs: HelicopterInputs = {
+    pitch: 0,
+    yaw: 0,
+    strafe: 0,
+    ascend: false,
+    descend: false
+  };
   private footSprintBtn: HTMLElement | null = null;
   private footStatusBar: HTMLElement | null = null;
   private footStaminaFill: HTMLElement | null = null;
@@ -136,6 +149,7 @@ export class HUD {
   public touchMode: TouchMode = 'AUTO';
   private isTouchDevice: boolean;
   private isOnFoot = false;
+  private isInHeli = false;
   private isPaused = false;
   private lastCanEnter = false;
   private lastHpShown = -1;
@@ -153,6 +167,8 @@ export class HUD {
     this.hudOverlay = document.getElementById('hud-overlay')!;
     this.mobileControls = document.getElementById('mobile-controls')!;
     this.footControls = document.getElementById('foot-controls')!;
+    this.heliControls = document.getElementById('heli-controls');
+    this.heliTelemetryEl = document.getElementById('heli-telemetry');
     this.bottomHudWrap = document.getElementById('bottom-hud-wrap')!;
     this.manualTouchBox = document.getElementById('manual-touch-box')!;
     this.touchClutchBtn = document.getElementById('touch-clutch')!;
@@ -168,6 +184,9 @@ export class HUD {
     this.racePromptEl = document.getElementById('race-prompt')!;
     this.moreDrawer = document.getElementById('more-drawer')!;
     this.joystick = new FloatingJoystick('foot-joystick-zone');
+    if (document.getElementById('heli-joystick-zone')) {
+      this.heliJoystick = new FloatingJoystick('heli-joystick-zone');
+    }
 
     this.chatPanel = document.getElementById('ingame-chat-panel')!;
     this.chatLog = document.getElementById('ingame-chat-log')!;
@@ -266,10 +285,13 @@ export class HUD {
     this.footPunch = false;
     this.footDash = false;
     this.footInteract = false;
+    this.heliAscend = false;
+    this.heliDescend = false;
     this.keyShiftUp = false;
     this.keyShiftDown = false;
     this.keyReset = false;
     this.joystick.forceReset();
+    this.heliJoystick?.forceReset();
     document.querySelectorAll('.touch-btn.pressed').forEach((el) => el.classList.remove('pressed'));
   }
 
@@ -417,20 +439,50 @@ export class HUD {
     this.updateTouchVisibility(gearbox);
   }
 
+  public setHelicopterMode(inHeli: boolean, gearbox: GearboxType): void {
+    if (inHeli === this.isInHeli) return;
+    this.clearAllInputs();
+    this.isInHeli = inHeli;
+    if (inHeli) {
+      this.isOnFoot = false;
+      this.bottomHudWrap.style.display = 'none';
+      this.enterExitLabel.textContent = 'Exit Heli';
+      this.enterExitBtn.style.opacity = '1';
+      this.enterExitBtn.style.background = 'rgba(255, 85, 0, 0.88)';
+      this.footDriveBtn.style.display = 'none';
+    }
+    if (this.heliTelemetryEl) {
+      this.heliTelemetryEl.style.display = inHeli ? 'block' : 'none';
+    }
+    this.updateTouchVisibility(gearbox);
+  }
+
+  public updateHeliTelemetry(altM: number, speedKmh: number, rotorPct: number, ringsPassed: number, totalRings: number): void {
+    if (!this.heliTelemetryEl || !this.isInHeli) return;
+    this.heliTelemetryEl.textContent = `ALT ${Math.max(0, Math.round(altM))}m • ${Math.round(speedKmh)} KM/H • ROTOR ${Math.round(rotorPct * 100)}% • RINGS ${ringsPassed}/${totalRings}`;
+  }
+
   public updateTouchVisibility(gearbox: GearboxType): void {
     this.lastGearboxShown = gearbox;
     const showTouch = this.touchMode === 'ON' || (this.touchMode === 'AUTO' && this.isTouchDevice);
     if (!showTouch || this.hudOverlay.classList.contains('hidden')) {
       this.mobileControls.classList.add('hidden');
       this.footControls.classList.add('hidden');
+      this.heliControls?.classList.add('hidden');
       return;
     }
 
-    if (this.isOnFoot) {
+    if (this.isInHeli) {
       this.mobileControls.classList.add('hidden');
+      this.footControls.classList.add('hidden');
+      this.heliControls?.classList.remove('hidden');
+    } else if (this.isOnFoot) {
+      this.mobileControls.classList.add('hidden');
+      this.heliControls?.classList.add('hidden');
       this.footControls.classList.remove('hidden');
     } else {
       this.footControls.classList.add('hidden');
+      this.heliControls?.classList.add('hidden');
       this.mobileControls.classList.remove('hidden');
       this.manualTouchBox.style.display = gearbox !== GearboxType.AUTO ? 'flex' : 'none';
       this.touchClutchBtn.style.display = gearbox === GearboxType.MANUAL ? 'flex' : 'none';
@@ -596,9 +648,9 @@ export class HUD {
       }
       // Key repeat must not re-trigger one-shot actions like enter/exit or theft.
       if (e.repeat) return;
-      // E is the on-foot interact key; do not latch a gearbox upshift from it.
-      if (e.code === 'KeyE' && !this.isOnFoot) this.keyShiftUp = true;
-      if (e.code === 'KeyQ') this.keyShiftDown = true;
+      // E is the on-foot interact key / flight strafe; do not latch a gearbox upshift from it.
+      if (e.code === 'KeyE' && !this.isOnFoot && !this.isInHeli) this.keyShiftUp = true;
+      if (e.code === 'KeyQ' && !this.isInHeli) this.keyShiftDown = true;
       if (e.code === 'KeyR') this.keyReset = true;
       if (e.code === 'KeyF' && !this.hudOverlay.classList.contains('hidden')) {
         this.onToggleEnterExit();
@@ -667,6 +719,10 @@ export class HUD {
     bindBtn('foot-punch', () => { this.footPunch = true; }, () => { this.footPunch = false; });
     bindBtn('foot-dash', () => { this.footDash = true; }, () => { this.footDash = false; });
     bindBtn('foot-interact', () => { this.footInteract = true; }, () => { this.footInteract = false; });
+    bindBtn('heli-ascend', () => { this.heliAscend = true; }, () => { this.heliAscend = false; });
+    bindBtn('heli-descend', () => { this.heliDescend = true; }, () => { this.heliDescend = false; });
+    document.getElementById('heli-light')?.addEventListener('click', () => this.onHorn());
+    document.getElementById('heli-exit')?.addEventListener('click', () => this.onToggleEnterExit());
     this.footSprintBtn?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -773,6 +829,28 @@ export class HUD {
     pad.addEventListener('pointercancel', endSteer);
   }
 
+  public pollHelicopterInputs(): HelicopterInputs {
+    if (this.isTypingChat()) {
+      return { pitch: 0, yaw: 0, strafe: 0, ascend: false, descend: false };
+    }
+    let pitch = this.heliJoystick?.value.y ?? 0;
+    let yaw = this.heliJoystick?.value.x ?? 0;
+    let strafe = 0;
+    if (this.keysDown.has('KeyW') || this.keysDown.has('ArrowUp')) pitch += 1;
+    if (this.keysDown.has('KeyS') || this.keysDown.has('ArrowDown')) pitch -= 1;
+    if (this.keysDown.has('KeyA') || this.keysDown.has('ArrowLeft')) yaw -= 1;
+    if (this.keysDown.has('KeyD') || this.keysDown.has('ArrowRight')) yaw += 1;
+    if (this.keysDown.has('KeyQ')) strafe -= 1;
+    if (this.keysDown.has('KeyE')) strafe += 1;
+
+    this.heliInputs.pitch = Math.max(-1, Math.min(1, pitch));
+    this.heliInputs.yaw = Math.max(-1, Math.min(1, yaw));
+    this.heliInputs.strafe = Math.max(-1, Math.min(1, strafe));
+    this.heliInputs.ascend = this.keysDown.has('Space') || this.heliAscend;
+    this.heliInputs.descend = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.keysDown.has('KeyC') || this.heliDescend;
+    return this.heliInputs;
+  }
+
   public pollCharacterInputs(): CharacterInputs {
     if (this.isTypingChat()) {
       return { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false, interact: false };
@@ -856,7 +934,8 @@ export class HUD {
     playerPos: { x: number; z: number; yaw: number },
     isTimedRace: boolean,
     racePosText: string,
-    extraMarkers: MinimapActor[] = []
+    extraMarkers: MinimapActor[] = [],
+    driftArenaInfo?: { remainingSec: number; totalPoints: number; mult: number }
   ): void {
     this.keyReset = false;
 
@@ -869,16 +948,22 @@ export class HUD {
     }
 
     const stats = lapManager.stats;
-    if (isTimedRace) {
+    if (driftArenaInfo) {
+      this.lapNumEl.textContent = 'DRIFT';
+      this.lapTimeEl.textContent = `${Math.max(0, Math.ceil(driftArenaInfo.remainingSec))}s`;
+      this.posEl.textContent = `${driftArenaInfo.totalPoints}`;
+      this.bestTimeEl.textContent = `x${driftArenaInfo.mult.toFixed(1)}`;
+    } else if (isTimedRace) {
       this.lapNumEl.textContent = `${stats.currentLap} / ${stats.totalLaps}`;
       this.lapTimeEl.textContent = lapManager.formatTime(stats.currentLapTime);
       this.posEl.textContent = racePosText;
+      this.bestTimeEl.textContent = stats.bestLapTime ? lapManager.formatTime(stats.bestLapTime) : '--:--.--';
     } else {
       this.lapNumEl.textContent = 'ROAM';
       this.lapTimeEl.textContent = '--:--.--';
       this.posEl.textContent = '--';
+      this.bestTimeEl.textContent = stats.bestLapTime ? lapManager.formatTime(stats.bestLapTime) : '--:--.--';
     }
-    this.bestTimeEl.textContent = stats.bestLapTime ? lapManager.formatTime(stats.bestLapTime) : '--:--.--';
 
     const promptVisible = ['race-prompt', 'rival-prompt', 'courier-prompt', 'steal-prompt']
       .some((id) => {

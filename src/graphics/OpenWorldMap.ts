@@ -55,6 +55,17 @@ export interface RooftopZone {
   switchY: number;
 }
 
+export interface SkyRing {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  label: string;
+  passed: boolean;
+  mesh: THREE.Mesh;
+}
+
 export interface RampBox {
   minX: number;
   maxX: number;
@@ -169,6 +180,9 @@ export class OpenWorldMap {
   public interactables: WorldInteractable[] = [];
   /** Neon stash crates placed inside buildings, alleys & rooftops for exploration rewards. */
   public collectibles: WorldCollectible[] = [];
+  /** Aerial Sky Rings scattered above skyscrapers, harbor & Touge for helicopter flight challenges. */
+  public skyRings: SkyRing[] = [];
+  private buildingRoofZones: Array<{ minX: number; maxX: number; minZ: number; maxZ: number; y: number }> = [];
   private animatedBeacons: THREE.Object3D[] = [];
   private waterDepthEnabled = true;
 
@@ -206,6 +220,7 @@ export class OpenWorldMap {
     this.ballMesh = this.createSoccerPlayground();
     this.createSmashableProps();
     this.createVendingAndCollectibles();
+    this.createSkyRings();
 
     // The Touge deck is a mesh and ramps live in `this.ramps`, so neither is
     // in `colliders`. Share them with line-of-sight checks as height-aware
@@ -1458,11 +1473,28 @@ export class OpenWorldMap {
         tier.position.set(b.x, b.h + tierH * 0.5, b.z);
         tier.castShadow = true;
         this.group.add(tier);
+        this.buildingRoofZones.push({
+          minX: b.x - b.w * 0.325,
+          maxX: b.x + b.w * 0.325,
+          minZ: b.z - b.d * 0.325,
+          maxZ: b.z + b.d * 0.325,
+          y: b.h + tierH
+        });
       } else if (b.interior !== 'zenith') {
         // Low-rise rooftop HVAC / utility unit for silhouette variety
         const hvac = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.26, 2.2, b.d * 0.26), roofMat);
         hvac.position.set(b.x - b.w * 0.18, b.h + 1.1, b.z + b.d * 0.14);
         this.group.add(hvac);
+      }
+
+      if (b.interior !== 'zenith') {
+        this.buildingRoofZones.push({
+          minX: b.x - b.w * 0.5,
+          maxX: b.x + b.w * 0.5,
+          minZ: b.z - b.d * 0.5,
+          maxZ: b.z + b.d * 0.5,
+          y: b.h
+        });
       }
 
       // Clean architectural rooftop parapet & muted accent cornice strip
@@ -1516,13 +1548,18 @@ export class OpenWorldMap {
         this.group.add(signBack);
       }
 
-      if (b.h > 44) {
+      if (b.h > 44 && b.interior !== 'zenith') {
         const spire = new THREE.Mesh(
           new THREE.CylinderGeometry(0.15, 0.45, 11, 6),
           spireMat
         );
         spire.position.set(b.x, b.h + 15.5, b.z);
         this.group.add(spire);
+      } else if (b.interior === 'zenith') {
+        // Put Zenith's beacon mast cleanly on the corner elevator penthouse so helipad center stays clear!
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.35, 9, 6), spireMat);
+        mast.position.set(b.x + b.w * 0.5 - 4.0, b.h + 8.5, b.z - b.d * 0.5 + 4.0);
+        this.group.add(mast);
       }
     });
 
@@ -2092,6 +2129,11 @@ export class OpenWorldMap {
       c.mesh.rotation.y = timeSec * 1.8;
       c.mesh.position.y = c.y + Math.sin(timeSec * 3.0 + c.x) * 0.16;
     }
+    for (const r of this.skyRings) {
+      if (r.passed) continue;
+      r.mesh.rotation.y = timeSec * 0.8;
+      r.mesh.position.y = r.y + Math.sin(timeSec * 2.2 + r.z * 0.05) * 0.45;
+    }
 
     const playerSpeed = Math.hypot(playerVel.x, playerVel.z);
     for (const p of this.smashProps) {
@@ -2139,6 +2181,54 @@ export class OpenWorldMap {
   public isInsideCityOrPlayground(x: number, z: number): boolean {
     if (x >= 6 && x <= WORLD_BOUNDS.maxX && z >= -345 && z <= 296) return true;
     return false;
+  }
+
+  private createSkyRings(): void {
+    const specs: Array<{ id: string; x: number; y: number; z: number; rotY: number; label: string }> = [
+      { id: 'sky_1', x: 225, y: 66, z: -25, rotY: 0.7, label: 'Zenith Departure Gate' },
+      { id: 'sky_2', x: 172, y: 84, z: -150, rotY: 0.3, label: 'Akiba Cyber Spire' },
+      { id: 'sky_3', x: 155, y: 34, z: -296, rotY: 1.57, label: 'Touge Summit Flyover' },
+      { id: 'sky_4', x: 0, y: 26, z: -90, rotY: 0, label: 'GP Main Straight Dive' },
+      { id: 'sky_5', x: -165, y: 24, z: -20, rotY: 0.5, label: 'Central Lake Skim' },
+      { id: 'sky_6', x: 84, y: 42, z: 90, rotY: 0.9, label: 'Stunt Arena Crown' },
+      { id: 'sky_7', x: 168, y: 24, z: 278, rotY: 0, label: 'Harbor Pier Flyby' },
+      { id: 'sky_8', x: 258, y: 60, z: 120, rotY: 0.2, label: 'Harbor Tower Approach' }
+    ];
+    const geo = new THREE.TorusGeometry(6.2, 0.38, 12, 32);
+    for (let i = 0; i < specs.length; i++) {
+      const s = specs[i];
+      const mat = new THREE.MeshBasicMaterial({ color: i % 2 === 0 ? 0x22d3ee : 0xfacc15 });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(s.x, s.y, s.z);
+      mesh.rotation.y = s.rotY;
+      this.group.add(mesh);
+      this.skyRings.push({
+        id: s.id,
+        x: s.x,
+        y: s.y,
+        z: s.z,
+        radius: 8.5,
+        label: s.label,
+        passed: false,
+        mesh
+      });
+    }
+  }
+
+  /** Helicopter surface sampler: Zenith Helipad (y=50), all skyscraper roofs, Touge & ground. */
+  public sampleHeliGroundHeight(x: number, z: number, currentY = 0): number {
+    let best = Math.max(0, this.sampleRampHeight(x, z));
+    for (const rz of this.rooftopZones) {
+      if (x >= rz.minX && x <= rz.maxX && z >= rz.minZ && z <= rz.maxZ && currentY >= rz.y - 1.5) {
+        best = Math.max(best, rz.y);
+      }
+    }
+    for (const roof of this.buildingRoofZones) {
+      if (x >= roof.minX && x <= roof.maxX && z >= roof.minZ && z <= roof.maxZ && currentY >= roof.y - 1.5) {
+        best = Math.max(best, roof.y);
+      }
+    }
+    return best;
   }
 
   public sampleRampHeight(x: number, z: number): number {
