@@ -24,6 +24,13 @@ const ACCESSORIES: { id: AccessoryId; label: string }[] = [
   { id: 'wing', label: 'Nitro Pack' }
 ];
 
+const CHARACTER_OPTIONS: { id: CharacterId; name: string; role: string; dot: string }[] = [
+  { id: 'kaito', name: 'Kaito', role: 'Street Racer', dot: '#ff5500' },
+  { id: 'mika', name: 'Mika', role: 'Drift Queen', dot: '#ec4899' },
+  { id: 'ren', name: 'Ren', role: 'Cyber Pilot', dot: '#38bdf8' },
+  { id: 'sora', name: 'Sora', role: 'Stunt Ace', dot: '#facc15' }
+];
+
 const HAIR_COLORS = ['#1c1917', '#3b2a20', '#6b4a2f', '#a16207', '#7f1d1d', '#9ca3af', '#2f3e46'];
 const EYE_COLORS = ['#4a2f1b', '#6b4423', '#3f6212', '#1e3a8a', '#0f172a', '#7c2d12'];
 const JACKET_COLORS = ['#c2410c', '#1e1b4b', '#1d4ed8', '#7f1d1d', '#18181b', '#166534', '#4c1d95'];
@@ -33,11 +40,13 @@ export class CharacterStudio {
   private modal: HTMLElement;
   private bodyEl: HTMLElement;
   public appearance: CharacterAppearance;
+  public characterId: CharacterId = 'kaito';
   public isOpen = false;
   /** Rigged GLBs support color tints but not procedural hairstyle/accessory geometry. */
   private rigged = false;
 
   public onChange: (app: CharacterAppearance) => void = () => {};
+  public onCharacterChange: (id: CharacterId) => void = () => {};
   public onToggle: (open: boolean) => void = () => {};
 
   constructor() {
@@ -77,6 +86,7 @@ export class CharacterStudio {
   }
 
   public applyPreset(charId: CharacterId): void {
+    this.characterId = charId;
     this.appearance = { ...DEFAULT_APPEARANCE_BY_ID[charId] };
     this.save();
     this.renderControls();
@@ -144,7 +154,25 @@ export class CharacterStudio {
       </div>
     `;
 
+    const characterRow = `
+      <div class="setting-group">
+        <label>Driver Character</label>
+        <div class="studio-char-grid">
+          ${CHARACTER_OPTIONS.map(c => `
+            <button type="button" class="char-card ${this.characterId === c.id ? 'selected' : ''}"
+                    data-studio-key="characterId" data-studio-val="${c.id}"
+                    aria-label="${c.name}, ${c.role}" aria-pressed="${this.characterId === c.id}">
+              <div class="char-dot" style="background:${c.dot};"></div>
+              <div class="char-name">${c.name}</div>
+              <div class="char-role">${c.role}</div>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
     this.bodyEl.innerHTML = `
+      ${characterRow}
       ${this.rigged ? '' : `
       <div class="setting-group">
         <label>Hairstyle</label>
@@ -181,9 +209,16 @@ export class CharacterStudio {
 
     this.bodyEl.querySelectorAll('[data-studio-key]').forEach((el) => {
       el.addEventListener('click', () => {
-        const key = el.getAttribute('data-studio-key') as keyof CharacterAppearance;
+        const key = el.getAttribute('data-studio-key')!;
         const val = el.getAttribute('data-studio-val')!;
-        this.updateField(key, val as never);
+        if (key === 'characterId') {
+          const id = val as CharacterId;
+          if (id === this.characterId) return;
+          this.applyPreset(id);
+          this.onCharacterChange(id);
+          return;
+        }
+        this.updateField(key as keyof CharacterAppearance, val as never);
       });
     });
 

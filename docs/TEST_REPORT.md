@@ -14,8 +14,14 @@ Command executed after final edits:
 
 ---
 
-## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (65/65)
-Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`65` pass, `0` fail, `0` skipped, `~21.6s`):
+## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (66/66)
+Compiled with `pnpm exec tsc tests/gameplay.test.ts --outDir "$TMPDIR/apx-tests" --module commonjs --moduleResolution node --target ES2022 --esModuleInterop --skipLibCheck --resolveJsonModule` and executed via `NODE_PATH="$PWD/node_modules" node --test "$TMPDIR/apx-tests/tests/gameplay.test.js"` (`66` pass, `0` fail, `0` skipped, `~19.8s`):
+
+### Sprint 17 — in-game driver switch (2026-11-27)
+| Item | Status | Evidence |
+| :--- | :---: | :--- |
+| No way to change Kaito/Mika/Ren/Sora outside the lobby | **FIXED** | `CharacterStudio` renders a `studio-char-grid`; selecting a driver calls `applyPreset()` + `onCharacterChange()`. |
+| Model, save and LAN state could drift apart | **FIXED** | `main.ts` swaps the GLTF model (or procedural `setCharacter`), persists `save.data.characterId`, mirrors `lobbyUI.config.characterId`, and updates `.char-card` selection. Source guard test added. |
 
 ### Sprint 16 — UI/UX design repair (`4916b2b`)
 | Issue | Status | Evidence |

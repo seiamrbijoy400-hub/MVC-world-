@@ -361,6 +361,24 @@ class GameApp {
     this.studio.onChange = (app) => {
       this.avatarMesh.setAppearance(app);
     };
+    this.studio.onCharacterChange = (id) => {
+      this.save.data.characterId = id;
+      this.save.scheduleSave();
+      if (this.lobbyUI) this.lobbyUI.config.characterId = id;
+      if (this.avatarMesh instanceof GLTFCharacterMesh) {
+        this.avatarMesh.setModel(modelUrlFor(id));
+      } else {
+        this.avatarMesh.setCharacter(id);
+      }
+      // applyPreset already pushed the new palette through onChange; reapply
+      // after a procedural rebuild so both paths end on the same look.
+      this.avatarMesh.setAppearance(this.studio.appearance);
+      document.querySelectorAll('.char-card').forEach((c) => {
+        const selected = c.getAttribute('data-char') === id;
+        c.classList.toggle('selected', selected);
+        c.setAttribute('aria-pressed', String(selected));
+      });
+    };
     this.studio.onToggle = (open) => {
       if (open && this.inCar) {
         this.toggleEnterExitCar();

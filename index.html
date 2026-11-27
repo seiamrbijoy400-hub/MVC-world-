@@ -196,6 +196,15 @@
     .char-name { font-size: 11px; font-weight: 800; color: #f8fafc; }
     .char-role { font-size: 11px; color: #cbd5e1; }
 
+    /* In-game driver switch inside the Character Studio drawer */
+    .studio-char-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .studio-char-grid .char-card { padding: 6px 2px; }
+    .studio-char-grid .char-role { font-size: 9px; }
+
     .color-picker-row { display: flex; gap: 9px; align-items: center; }
     .color-swatch {
       width: 32px;
@@ -1268,7 +1277,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></svg>
           <span>LAN</span>
         </button>
-        <button id="btn-studio" class="hud-btn" style="background:rgba(147,51,234,0.82);border-color:#c084fc;" title="Customize Avatar">
+        <button id="btn-studio" class="hud-btn" style="background:rgba(147,51,234,0.82);border-color:#c084fc;" title="Customize Avatar &amp; Character">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
           <span>Style</span>
         </button>
@@ -1473,7 +1482,7 @@
   <div id="studio-modal" class="modal-backdrop" role="dialog" aria-modal="true">
     <div class="modal-box">
       <div class="modal-title">
-        <span>🎨 Driver Style Studio</span>
+        <span>🎨 Driver &amp; Character Studio</span>
         <button id="studio-close-btn" class="modal-close" aria-label="Close character studio">&times;</button>
       </div>
       <div id="studio-body"></div>

@@ -1888,3 +1888,20 @@ test('CharacterController: swims in deep water, executes 3-hit boxing combo & do
   assert.equal(char.isDashing, true);
   assert.ok(char.stamina < 100);
 });
+
+test('CharacterStudio: in-game driver switch swaps model, saves and syncs LAN state', () => {
+  const studio = fs.readFileSync(path.join(process.cwd(), 'src/ui/CharacterStudio.ts'), 'utf8');
+  const main = fs.readFileSync(path.join(process.cwd(), 'src/main.ts'), 'utf8');
+  // The studio owns the selected driver id and renders a real button row.
+  assert.match(studio, /public characterId: CharacterId = 'kaito';/);
+  assert.match(studio, /public onCharacterChange: \(id: CharacterId\) => void/);
+  assert.match(studio, /public applyPreset\(charId: CharacterId\): void \{[\s\S]{0,80}this\.characterId = charId;/);
+  assert.match(studio, /data-studio-key="characterId"/);
+  assert.match(studio, /this\.applyPreset\(id\);[\s\S]{0,80}this\.onCharacterChange\(id\);/);
+  // The game swaps the visible model, persists the choice and keeps LAN in sync.
+  assert.match(main, /this\.studio\.onCharacterChange = \(id\) => \{/);
+  assert.match(main, /this\.save\.data\.characterId = id;/);
+  assert.match(main, /this\.lobbyUI\.config\.characterId = id;/);
+  assert.match(main, /this\.avatarMesh\.setModel\(modelUrlFor\(id\)\)/);
+  assert.match(main, /this\.avatarMesh\.setCharacter\(id\)/);
+});
