@@ -97,12 +97,17 @@ export class HUD {
     sprint: false,
     jump: false,
     punch: false,
+    dash: false,
     interact: false
   };
 
   private keysDown: Set<string> = new Set();
   private touchSteerLeft = false;
   private touchSteerRight = false;
+  private touchAnalogSteer = 0;
+  private steerPadEl: HTMLElement | null = null;
+  private steerPuckEl: HTMLElement | null = null;
+  private steerPointerId: number | null = null;
   private touchGas = false;
   private touchBrake = false;
   private touchHandbrake = false;
@@ -111,10 +116,18 @@ export class HUD {
   private touchShiftUp = false;
   private touchShiftDown = false;
 
-  // On-foot touch state (analog joystick + jump/punch)
+  // On-foot touch state (analog joystick + sprint/dash/jump/punch)
   private footJump = false;
   private footPunch = false;
+  private footDash = false;
+  private footSprintLocked = false;
   private footInteract = false;
+  private footSprintBtn: HTMLElement | null = null;
+  private footStatusBar: HTMLElement | null = null;
+  private footStaminaFill: HTMLElement | null = null;
+  private footBuffBadge: HTMLElement | null = null;
+  private worldPopupsEl: HTMLElement | null = null;
+  private activeWorldPopups = 0;
 
   private keyShiftUp = false;
   private keyShiftDown = false;
@@ -145,6 +158,11 @@ export class HUD {
     this.touchClutchBtn = document.getElementById('touch-clutch')!;
     this.footDriveBtn = document.getElementById('foot-drive')!;
     this.footInteractBtn = document.getElementById('foot-interact') as HTMLButtonElement;
+    this.footSprintBtn = document.getElementById('foot-sprint');
+    this.footStatusBar = document.getElementById('foot-status-bar');
+    this.footStaminaFill = document.getElementById('foot-stamina-fill');
+    this.footBuffBadge = document.getElementById('foot-buff-badge');
+    this.worldPopupsEl = document.getElementById('world-popups');
     this.enterExitBtn = document.getElementById('btn-enter-exit')!;
     this.enterExitLabel = document.getElementById('enter-exit-label')!;
     this.racePromptEl = document.getElementById('race-prompt')!;
@@ -233,6 +251,10 @@ export class HUD {
     this.keysDown.clear();
     this.touchSteerLeft = false;
     this.touchSteerRight = false;
+    this.touchAnalogSteer = 0;
+    this.steerPointerId = null;
+    this.steerPadEl?.classList.remove('active');
+    if (this.steerPuckEl) this.steerPuckEl.style.transform = 'translateX(0px)';
     this.touchGas = false;
     this.touchBrake = false;
     this.touchHandbrake = false;
@@ -242,6 +264,7 @@ export class HUD {
     this.touchShiftDown = false;
     this.footJump = false;
     this.footPunch = false;
+    this.footDash = false;
     this.footInteract = false;
     this.keyShiftUp = false;
     this.keyShiftDown = false;
@@ -563,7 +586,7 @@ export class HUD {
   }
 
   private setupKeyboardListeners(): void {
-    const emojis = ['🔥', '😂', '💨', '❤️', '👊', '👑'];
+    const emojis = ['GROOVE', 'WAVE', 'CHILL', 'SALUTE', 'TAUNT', 'VICTORY'];
     window.addEventListener('keydown', (e) => {
       if (this.isTypingChat() || this.isPaused) return;
 
@@ -629,6 +652,7 @@ export class HUD {
       el.addEventListener('mouseleave', () => release(new Event('mouseleave')));
     };
 
+    this.setupAnalogSteerPad();
     bindBtn('touch-left', () => { this.touchSteerLeft = true; }, () => { this.touchSteerLeft = false; });
     bindBtn('touch-right', () => { this.touchSteerRight = true; }, () => { this.touchSteerRight = false; });
     bindBtn('touch-gas', () => { this.touchGas = true; }, () => { this.touchGas = false; });
@@ -641,8 +665,112 @@ export class HUD {
 
     bindBtn('foot-jump', () => { this.footJump = true; }, () => { this.footJump = false; });
     bindBtn('foot-punch', () => { this.footPunch = true; }, () => { this.footPunch = false; });
+    bindBtn('foot-dash', () => { this.footDash = true; }, () => { this.footDash = false; });
     bindBtn('foot-interact', () => { this.footInteract = true; }, () => { this.footInteract = false; });
+    this.footSprintBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.footSprintLocked = !this.footSprintLocked;
+      if (this.footSprintBtn) {
+        this.footSprintBtn.style.background = this.footSprintLocked ? 'rgba(56,189,248,0.85)' : 'rgba(15,23,42,0.78)';
+        this.footSprintBtn.style.borderColor = this.footSprintLocked ? '#38bdf8' : 'rgba(148,163,184,0.45)';
+        this.footSprintBtn.textContent = this.footSprintLocked ? 'RUN ON' : 'RUN';
+      }
+    });
     this.footDriveBtn.addEventListener('click', () => this.onToggleEnterExit());
+  }
+
+  /** Shows stamina bar & active Ramen/Espresso buffs when on foot. */
+  public updateFootStatus(stamina: number, speedBuffSec: number, powerBuffSec: number, isSwimming: boolean): void {
+    if (this.footStatusBar) {
+      this.footStatusBar.style.display = this.isOnFoot ? 'flex' : 'none';
+    }
+    if (this.footStaminaFill) {
+      const pct = Math.max(0, Math.min(100, Math.round(stamina)));
+      this.footStaminaFill.style.width = `${pct}%`;
+    }
+    if (this.footBuffBadge) {
+      const parts: string[] = [];
+      if (isSwimming) parts.push('SWIM');
+      if (speedBuffSec > 0) parts.push(`SPD ${Math.ceil(speedBuffSec)}s`);
+      if (powerBuffSec > 0) parts.push(`PWR ${Math.ceil(powerBuffSec)}s`);
+      this.footBuffBadge.textContent = parts.join(' • ');
+      this.footBuffBadge.style.display = parts.length > 0 ? 'inline' : 'none';
+    }
+  }
+
+  /** Snappy floating world popup (damage numbers, combos, stash pickups, buffs). */
+  public showWorldPopup(text: string, color = '#facc15', screenXRatio = 0.5, screenYRatio = 0.42): void {
+    if (!this.worldPopupsEl || this.activeWorldPopups >= 12) return;
+    const el = document.createElement('div');
+    el.textContent = text;
+    // Clamp to safe screen bounds so combo spam cannot cover the HUD edges.
+    const x = Math.max(0.08, Math.min(0.92, screenXRatio));
+    const y = Math.max(0.12, Math.min(0.72, screenYRatio));
+    const jx = (Math.random() - 0.5) * 32;
+    const jy = (Math.random() - 0.5) * 14;
+    el.style.cssText = `
+      position:absolute;left:calc(${(x * 100).toFixed(1)}% + ${jx.toFixed(0)}px);
+      top:calc(${(y * 100).toFixed(1)}% + ${jy.toFixed(0)}px);
+      transform:translate(-50%,-50%) scale(0.85);
+      color:${color};font-size:15px;font-weight:900;letter-spacing:0.5px;
+      text-shadow:0 2px 10px rgba(0,0,0,0.9);
+      transition:transform 0.65s cubic-bezier(0.22,1,0.36,1),opacity 0.65s ease;
+      opacity:1;white-space:nowrap;
+    `;
+    this.activeWorldPopups++;
+    this.worldPopupsEl.appendChild(el);
+    requestAnimationFrame(() => {
+      el.style.transform = 'translate(-50%,-125%) scale(1.06)';
+      el.style.opacity = '0';
+    });
+    window.setTimeout(() => {
+      el.remove();
+      this.activeWorldPopups = Math.max(0, this.activeWorldPopups - 1);
+    }, 700);
+  }
+
+  private setupAnalogSteerPad(): void {
+    this.steerPadEl = document.getElementById('steer-pad');
+    this.steerPuckEl = document.getElementById('steer-pad-puck');
+    const pad = this.steerPadEl;
+    if (!pad) return;
+
+    const maxTravel = 56;
+    const updateSteer = (clientX: number) => {
+      const rect = pad.getBoundingClientRect();
+      const cx = rect.left + rect.width * 0.5;
+      const dx = Math.max(-maxTravel, Math.min(maxTravel, clientX - cx));
+      const norm = dx / maxTravel;
+      this.touchAnalogSteer = Math.abs(norm) < 0.06 ? 0 : norm;
+      if (this.steerPuckEl) {
+        this.steerPuckEl.style.transform = `translateX(${dx.toFixed(1)}px)`;
+      }
+    };
+
+    pad.addEventListener('pointerdown', (e) => {
+      if (this.steerPointerId !== null) return;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation();
+      this.steerPointerId = e.pointerId;
+      pad.setPointerCapture(e.pointerId);
+      pad.classList.add('active');
+      updateSteer(e.clientX);
+    });
+    pad.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== this.steerPointerId) return;
+      if (e.cancelable) e.preventDefault();
+      updateSteer(e.clientX);
+    });
+    const endSteer = (e: PointerEvent) => {
+      if (e.pointerId !== this.steerPointerId) return;
+      this.steerPointerId = null;
+      this.touchAnalogSteer = 0;
+      pad.classList.remove('active');
+      if (this.steerPuckEl) this.steerPuckEl.style.transform = 'translateX(0px)';
+    };
+    pad.addEventListener('pointerup', endSteer);
+    pad.addEventListener('pointercancel', endSteer);
   }
 
   public pollCharacterInputs(): CharacterInputs {
@@ -658,9 +786,10 @@ export class HUD {
 
     this.charInputs.moveX = Math.max(-1, Math.min(1, mx));
     this.charInputs.moveY = Math.max(-1, Math.min(1, my));
-    this.charInputs.sprint = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.joystick.value.sprint;
+    this.charInputs.sprint = this.keysDown.has('ShiftLeft') || this.keysDown.has('ShiftRight') || this.joystick.value.sprint || this.footSprintLocked;
     this.charInputs.jump = this.keysDown.has('Space') || this.footJump;
     this.charInputs.punch = this.keysDown.has('KeyJ') || this.keysDown.has('KeyK') || this.footPunch;
+    this.charInputs.dash = this.keysDown.has('KeyQ') || this.keysDown.has('AltLeft') || this.footDash;
     this.charInputs.interact = this.keysDown.has('KeyE') || this.footInteract;
     return this.charInputs;
   }
@@ -698,7 +827,7 @@ export class HUD {
 
     this.inputs.throttle = Math.max(kbThrottle, gpThrottle, this.touchGas ? 1.0 : 0);
     this.inputs.brake = Math.max(kbBrake, gpBrake, this.touchBrake ? 1.0 : 0);
-    this.inputs.steer = Math.max(-1, Math.min(1, kbSteer + gpSteer));
+    this.inputs.steer = Math.max(-1, Math.min(1, kbSteer + gpSteer + this.touchAnalogSteer));
     this.inputs.handbrake = kbHandbrake || gpHandbrake || this.touchHandbrake;
     this.inputs.nitro = kbNitro || gpNitro || this.touchNitro;
     this.inputs.clutch = kbClutch || this.touchClutch;
@@ -890,8 +1019,10 @@ export class HUD {
     const w = this.mapCanvas.width;
     const h = this.mapCanvas.height;
     ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#0c1526';
+    ctx.fillRect(0, 0, w, h);
 
-    const mapScale = 0.16;
+    const mapScale = 0.165;
     const mapOffsetX = w * 0.5 + 10;
     const mapOffsetY = h * 0.5 + 6;
     const toX = (wx: number) => wx * mapScale + mapOffsetX;
@@ -921,8 +1052,8 @@ export class HUD {
     ctx.fillRect(toX(134), toY(48), 80 * mapScale, 84 * mapScale);
 
     // City Road Network (Avenues, Streets, GP Connectors, Touge Access)
-    ctx.strokeStyle = 'rgba(226, 232, 240, 0.42)';
-    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = 'rgba(226, 232, 240, 0.58)';
+    ctx.lineWidth = 2.4;
     ctx.beginPath();
     for (const ax of [46, 122, 224, 296]) {
       ctx.moveTo(toX(ax), toY(-215));

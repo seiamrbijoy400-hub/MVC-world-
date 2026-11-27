@@ -2,20 +2,50 @@ import * as THREE from 'three';
 import { CarPhysics } from '../physics/CarPhysics';
 
 interface SmokeParticle {
-  mesh: THREE.Mesh;
+  sprite: THREE.Sprite;
   velocity: THREE.Vector3;
   life: number;
   maxLife: number;
+  startScale: number;
   scaleGrowth: number;
+  baseOpacity: number;
   isSpark: boolean;
+}
+
+function createSoftSmokeTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  ctx.clearRect(0, 0, 128, 128);
+
+  // Soft multi-lobe volumetric cloud puff (no polygon silhouettes!)
+  const lobes = [
+    { x: 64, y: 64, r: 54, a: 0.55 },
+    { x: 46, y: 56, r: 36, a: 0.35 },
+    { x: 82, y: 58, r: 34, a: 0.35 },
+    { x: 64, y: 78, r: 38, a: 0.30 }
+  ];
+  for (const lobe of lobes) {
+    const grad = ctx.createRadialGradient(lobe.x, lobe.y, 2, lobe.x, lobe.y, lobe.r);
+    grad.addColorStop(0, `rgba(255,255,255,${lobe.a})`);
+    grad.addColorStop(0.55, `rgba(255,255,255,${lobe.a * 0.4})`);
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(lobe.x, lobe.y, lobe.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.userData.shared = true;
+  return tex;
 }
 
 export class ParticleSystem {
   public scene: THREE.Scene;
 
   private particlePool: SmokeParticle[] = [];
-  private smokeGeo: THREE.DodecahedronGeometry;
-  private smokeMat: THREE.MeshBasicMaterial;
+  private static sharedSmokeTex: THREE.CanvasTexture | null = null;
 
   private exhaustFlameL: THREE.Mesh;
   private exhaustFlameR: THREE.Mesh;
@@ -33,23 +63,29 @@ export class ParticleSystem {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
 
-    this.smokeGeo = new THREE.DodecahedronGeometry(0.28, 0);
-    this.smokeMat = new THREE.MeshBasicMaterial({
-      color: 0xe2e8f0,
-      transparent: true,
-      opacity: 0.4
-    });
+    if (!ParticleSystem.sharedSmokeTex) {
+      ParticleSystem.sharedSmokeTex = createSoftSmokeTexture();
+    }
 
     for (let i = 0; i < 120; i++) {
-      const mesh = new THREE.Mesh(this.smokeGeo, this.smokeMat.clone());
-      mesh.visible = false;
-      this.scene.add(mesh);
+      const mat = new THREE.SpriteMaterial({
+        map: ParticleSystem.sharedSmokeTex,
+        color: 0xe2e8f0,
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false
+      });
+      const sprite = new THREE.Sprite(mat);
+      sprite.visible = false;
+      this.scene.add(sprite);
       this.particlePool.push({
-        mesh,
+        sprite,
         velocity: new THREE.Vector3(),
         life: 0,
         maxLife: 1.0,
-        scaleGrowth: 1.5,
+        startScale: 0.45,
+        scaleGrowth: 1.8,
+        baseOpacity: 0.32,
         isSpark: false
       });
     }
@@ -89,34 +125,39 @@ export class ParticleSystem {
 
   public emitSmoke(pos: THREE.Vector3, vel: THREE.Vector3, isOffroad = false, driftMult = 1): void {
     for (const p of this.particlePool) {
-      if (!p.mesh.visible) {
-        p.mesh.visible = true;
+      if (!p.sprite.visible) {
+        p.sprite.visible = true;
         p.isSpark = false;
-        p.mesh.position.copy(pos);
-        p.mesh.scale.setScalar(0.3);
-        p.velocity.copy(vel).multiplyScalar(0.18).add(new THREE.Vector3(
-          (Math.random() - 0.5) * 1.4,
-          Math.random() * 1.6 + 0.6,
-          (Math.random() - 0.5) * 1.4
+        p.sprite.position.copy(pos);
+        p.sprite.position.y += 0.14;
+        p.startScale = isOffroad ? 0.55 : 0.42;
+        p.sprite.scale.setScalar(p.startScale);
+        p.velocity.copy(vel).multiplyScalar(0.16).add(new THREE.Vector3(
+          (Math.random() - 0.5) * 1.1,
+          Math.random() * 1.15 + 0.45,
+          (Math.random() - 0.5) * 1.1
         ));
         p.life = 0;
-        p.maxLife = Math.random() * 0.45 + 0.45;
-        p.scaleGrowth = 2.8;
+        p.maxLife = Math.random() * 0.45 + 0.48;
+        p.scaleGrowth = isOffroad ? 1.9 : 2.2;
 
-        const mat = p.mesh.material as THREE.MeshBasicMaterial;
+        const mat = p.sprite.material as THREE.SpriteMaterial;
+        mat.blending = THREE.NormalBlending;
+        mat.rotation = Math.random() * Math.PI * 2;
         if (isOffroad) {
-          mat.color.setHex(0x785338);
-          mat.opacity = 0.48;
+          mat.color.setHex(0x8c6d53);
+          p.baseOpacity = 0.28;
         } else if (driftMult >= 5) {
           mat.color.setHex(Math.random() > 0.4 ? 0xf97316 : 0x38bdf8);
-          mat.opacity = 0.44;
+          p.baseOpacity = 0.32;
         } else if (driftMult >= 2.5) {
           mat.color.setHex(0xfde047);
-          mat.opacity = 0.38;
+          p.baseOpacity = 0.28;
         } else {
-          mat.color.setHex(0xd1d5db);
-          mat.opacity = 0.34;
+          mat.color.setHex(0xe2e8f0);
+          p.baseOpacity = 0.26;
         }
+        mat.opacity = p.baseOpacity;
         break;
       }
     }
@@ -125,11 +166,12 @@ export class ParticleSystem {
   public emitSparks(pos: THREE.Vector3, count = 12): void {
     let spawned = 0;
     for (const p of this.particlePool) {
-      if (!p.mesh.visible) {
-        p.mesh.visible = true;
+      if (!p.sprite.visible) {
+        p.sprite.visible = true;
         p.isSpark = true;
-        p.mesh.position.copy(pos).add(new THREE.Vector3(0, 0.4, 0));
-        p.mesh.scale.setScalar(0.18);
+        p.sprite.position.copy(pos).add(new THREE.Vector3(0, 0.35, 0));
+        p.startScale = 0.22;
+        p.sprite.scale.setScalar(0.22);
         p.velocity.set(
           (Math.random() - 0.5) * 14,
           Math.random() * 6 + 2,
@@ -138,8 +180,10 @@ export class ParticleSystem {
         p.life = 0;
         p.maxLife = 0.25 + Math.random() * 0.2;
         p.scaleGrowth = 0;
+        p.baseOpacity = 1.0;
 
-        const mat = p.mesh.material as THREE.MeshBasicMaterial;
+        const mat = p.sprite.material as THREE.SpriteMaterial;
+        mat.blending = THREE.AdditiveBlending;
         mat.color.setHex(Math.random() > 0.4 ? 0xfbbf24 : 0xf97316);
         mat.opacity = 1.0;
         spawned++;
@@ -192,20 +236,23 @@ export class ParticleSystem {
 
   public update(dt: number, physics: CarPhysics, driftMult = 1): void {
     for (const p of this.particlePool) {
-      if (p.mesh.visible) {
+      if (p.sprite.visible) {
         p.life += dt;
         if (p.life >= p.maxLife) {
-          p.mesh.visible = false;
+          p.sprite.visible = false;
         } else {
           if (p.isSpark) p.velocity.y -= 18 * dt;
-          p.mesh.position.addScaledVector(p.velocity, dt);
+          p.sprite.position.addScaledVector(p.velocity, dt);
           const progress = p.life / p.maxLife;
+          const mat = p.sprite.material as THREE.SpriteMaterial;
           if (!p.isSpark) {
-            const currentScale = 0.3 + progress * p.scaleGrowth;
-            p.mesh.scale.setScalar(currentScale);
-            (p.mesh.material as THREE.MeshBasicMaterial).opacity = (1.0 - progress) * 0.34;
+            const currentScale = p.startScale + progress * p.scaleGrowth;
+            p.sprite.scale.setScalar(currentScale);
+            mat.opacity = (1.0 - progress) * p.baseOpacity;
+            mat.rotation += dt * 0.8;
           } else {
-            (p.mesh.material as THREE.MeshBasicMaterial).opacity = 1.0 - progress;
+            p.sprite.scale.setScalar(p.startScale * (1.0 - progress * 0.5));
+            mat.opacity = 1.0 - progress;
           }
         }
       }

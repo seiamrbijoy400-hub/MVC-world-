@@ -6,7 +6,7 @@ import { HumanCharacterMesh } from './graphics/HumanCharacterMesh';
 import { GLTFCharacterMesh } from './graphics/GLTFCharacterMesh';
 import { modelUrlFor } from './graphics/CharacterAnimationMap';
 import { TrackEnvironment, TimeOfDay } from './graphics/TrackEnvironment';
-import { OpenWorldMap, DISTRICTS, type DistrictId } from './graphics/OpenWorldMap';
+import { OpenWorldMap, DISTRICTS, type DistrictId, type WorldInteractable } from './graphics/OpenWorldMap';
 import { ParticleSystem } from './graphics/ParticleSystem';
 import { SoundManager } from './audio/SoundManager';
 import { LapManager, LapStats } from './game/LapManager';
@@ -160,6 +160,7 @@ class GameApp {
   private orbitAngle = 0.55;
   private footCamYaw = 0.45;
   private cameraShake = 0;
+  private camRoll = 0;
   private syncAccumulator = 0;
   private boostCooldown = 0;
   private peerScratch = new THREE.Vector3();
@@ -168,6 +169,11 @@ class GameApp {
   private interactPromptEl = document.getElementById('interact-prompt');
   private garagePromptEl = document.getElementById('garage-prompt');
   private timerPillEl = document.getElementById('activity-timer-pill');
+  private speedVignetteEl = document.getElementById('speed-vignette');
+  private impactFlashEl = document.getElementById('impact-flash');
+  private impactFlashAlpha = 0;
+  private hitStopTimer = 0;
+  private interactCooldowns = new Map<string, number>();
 
   private lastTime = performance.now();
   private isPaused = false;
@@ -231,9 +237,12 @@ class GameApp {
         // y=0 track plane lets cars "land" on water after a pier jump.
         return { ...base, height: -1.05, isRoad: false };
       }
+      const groundH = interiorH !== null
+        ? Math.max(base.height, rampH, interiorH)
+        : Math.max(base.height, rampH);
       return {
         ...base,
-        height: Math.max(base.height, rampH, interiorH ?? 0),
+        height: groundH,
         isRoad: base.isRoad || inCity || rampH > 0 || interiorH !== null
       };
     };
@@ -264,15 +273,32 @@ class GameApp {
       this.sound.playCrash(impactKmh);
       this.particles.emitSparks(this.physics.position, 14);
       this.cameraShake = Math.min(0.42, impactKmh / 140);
+      if (impactKmh > 48) {
+        this.impactFlashAlpha = Math.min(0.32, (impactKmh - 40) / 260);
+      }
       this.lapManager.handleDriftCrash(impactKmh);
     };
 
     // Character Controller
     this.charCtrl = new CharacterController();
     this.charCtrl.groundHeightSampler = (x, z, y) => this.sampleUnifiedGround(x, z, y).height;
+    this.charCtrl.waterSurfaceSampler = (x, z) => {
+      if (this.openWorld.isOverOpenWater(x, z)) return -0.8;
+      if (this.track.isOverLakeWater(x, z)) return -1.2;
+      return null;
+    };
     this.charCtrl.worldCollider = (pos, vel, rad) => this.openWorld.resolveCollision(pos, vel, rad);
     this.charCtrl.onPunchStrike = (origin, fwd) => this.handlePlayerPunch(origin, fwd);
     this.charCtrl.onLand = (impact) => this.sound.playLand(impact);
+    this.charCtrl.onDash = () => {
+      this.sound.playPunchWhoosh();
+      this.particles.emitSparks(this.charCtrl.position, 6);
+    };
+    this.charCtrl.onSplash = (pos) => {
+      this.sound.playLand(7.5);
+      this.particles.emitSparks(pos, 14);
+      this.hud.showWorldPopup('SPLASH!', '#38bdf8');
+    };
     this.charCtrl.respawnPoint = new THREE.Vector3(13.8, 0, 24.5);
     this.charCtrl.onDeath = () => {
       this.koReason = 'WASTED';
@@ -313,7 +339,14 @@ class GameApp {
     this.studio = new CharacterStudio();
     this.studio.applyPreset(this.save.data.characterId);
     const modelUrl = modelUrlFor(this.save.data.characterId);
-    this.avatarMesh = new GLTFCharacterMesh(modelUrl, this.save.data.characterId, this.save.data.playerName, this.studio.appearance);
+    this.avatarMesh = new GLTFCharacterMesh(
+      modelUrl,
+      this.save.data.characterId,
+      this.save.data.playerName,
+      this.studio.appearance,
+      0,
+      false
+    );
     GLTFCharacterMesh.onModelStatus(() => {
       const playerReady = this.avatarMesh instanceof GLTFCharacterMesh && this.avatarMesh.isRealistic;
       const badge = document.getElementById('btn-model-status');
@@ -895,42 +928,88 @@ class GameApp {
     }
   }
 
-  private handlePlayerPunch(origin: THREE.Vector3, fwd: THREE.Vector3): void {
+  private handlePlayerPunch(origin: THREE.Vector3, _fwd: THREE.Vector3): void {
     this.sound.playPunchWhoosh();
-    this.avatarMesh.triggerPunchVisual();
+    const combo = this.charCtrl.comboStep;
+    if (this.avatarMesh instanceof GLTFCharacterMesh) {
+      this.avatarMesh.setPunchCombo(combo);
+    } else {
+      this.avatarMesh.triggerPunchVisual();
+    }
+
+    // Soft auto-aim: smoothly turn toward the closest target within 3.6m so punches feel responsive!
+    let bestTarget: THREE.Vector3 | null = null;
+    let bestDist = 3.6;
+    for (const f of this.sparringFighters) {
+      if (f.isDead) continue;
+      const d = Math.hypot(f.controller.position.x - origin.x, f.controller.position.z - origin.z);
+      if (d < bestDist && Math.abs(f.controller.position.y - origin.y) < 2.2) {
+        bestDist = d;
+        bestTarget = f.controller.position;
+      }
+    }
+    if (!bestTarget) {
+      for (const ped of this.pedestrians.agents) {
+        if (ped.controller.isDead) continue;
+        const d = Math.hypot(ped.controller.position.x - origin.x, ped.controller.position.z - origin.z);
+        if (d < 3.0 && d < bestDist && Math.abs(ped.controller.position.y - origin.y) < 2.2) {
+          bestDist = d;
+          bestTarget = ped.controller.position;
+        }
+      }
+    }
+    if (!bestTarget) {
+      for (const peer of this.remotePeers.values()) {
+        if (peer.lastState.inCar) continue;
+        const pp = peer.charMesh.root.position;
+        const d = Math.hypot(pp.x - origin.x, pp.z - origin.z);
+        if (d < bestDist && Math.abs(pp.y - origin.y) < 2.2) {
+          bestDist = d;
+          bestTarget = pp;
+        }
+      }
+    }
+    if (bestTarget) {
+      this.charCtrl.faceTarget(bestTarget.x, bestTarget.z);
+    }
+    const fwd = this.charCtrl.getForwardVector();
+    const comboLabels = ['CROSS', 'JAB', 'UPPERCUT!!'];
+    const baseDamages = [24, 28, 44];
+    const buffMult = this.charCtrl.powerBuffTimer > 0 ? 1.5 : 1.0;
+    const dmg = Math.round(baseDamages[combo] * buffMult);
+    const isFinisher = combo === 2;
 
     // 1. Kick giant soccer ball if nearby
-    if (origin.distanceTo(this.openWorld.ballPos) < this.openWorld.ballRadius + 2.2) {
-      this.openWorld.ballVel.x += fwd.x * 16;
-      this.openWorld.ballVel.z += fwd.z * 16;
-      this.openWorld.ballVel.y += 6.5;
-      this.particles.emitSparks(this.openWorld.ballPos, 8);
+    if (origin.distanceTo(this.openWorld.ballPos) < this.openWorld.ballRadius + 2.4) {
+      this.openWorld.ballVel.x += fwd.x * (isFinisher ? 22 : 16);
+      this.openWorld.ballVel.z += fwd.z * (isFinisher ? 22 : 16);
+      this.openWorld.ballVel.y += isFinisher ? 9.5 : 6.5;
+      this.particles.emitSparks(this.openWorld.ballPos, 10);
     }
 
     // 2. Hit Roaming Sparring Fighters
     for (const f of this.sparringFighters) {
       if (f.isDead) continue;
-      const toF = f.controller.position.clone().sub(origin);
-      const d = Math.hypot(toF.x, toF.z);
-      if (d < 2.5 && d > 0.01) {
-        toF.y = 0;
-        toF.normalize();
-        if (toF.dot(fwd) > 0.05) {
-          const killed = f.controller.takeDamage(25, fwd.x, fwd.z);
-          this.sound.playCrash(28);
-          this.particles.emitSparks(f.controller.position, killed ? 22 : 10);
-          this.cameraShake = 0.16;
+      const dx = f.controller.position.x - origin.x;
+      const dz = f.controller.position.z - origin.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2.9 && d > 0.01 && Math.abs(f.controller.position.y - origin.y) < 2.2) {
+        const dot = (dx * fwd.x + dz * fwd.z) / d;
+        if (dot > -0.15) {
+          const killed = f.controller.takeDamage(dmg, fwd.x * (isFinisher ? 1.45 : 1), fwd.z * (isFinisher ? 1.45 : 1));
+          this.sound.playCrash(isFinisher ? 44 : 28);
+          this.particles.emitSparks(f.controller.position, killed ? 26 : (isFinisher ? 16 : 10));
+          this.cameraShake = isFinisher ? 0.28 : 0.16;
+          this.hitStopTimer = isFinisher ? 0.05 : 0.025;
+          this.hud.showWorldPopup(`${comboLabels[combo]} ${dmg}`, isFinisher ? '#f97316' : '#facc15');
 
           if (killed) {
             this.save.data.knockouts++;
             this.save.scheduleSave();
-            this.award(120, 160);
-            // Sparring fighters attack the player first, so beating them is a
-            // sanctioned fight, not a street assault. No police heat and no
-            // witness report here (civilian pedestrians still report crimes).
+            this.award(140, 180);
             this.hud.showNotification(
               `${f.name.toUpperCase()} DOWN`,
-              'Sparring win. No heat — the fighters agreed to this.',
+              'Sparring win. No heat — +₡140 & +180 XP.',
               2.6
             );
             this.sound.playRankUpFanfare();
@@ -942,17 +1021,19 @@ class GameApp {
     // 2b. Hit City Pedestrians (triggers panic & witness reporting!)
     for (const ped of this.pedestrians.agents) {
       if (ped.controller.isDead) continue;
-      const toP = ped.controller.position.clone().sub(origin);
-      const d = Math.hypot(toP.x, toP.z);
-      if (d < 2.4 && d > 0.01) {
-        toP.y = 0;
-        toP.normalize();
-        if (toP.dot(fwd) > 0.05) {
-          ped.controller.takeDamage(26, fwd.x, fwd.z);
+      const dx = ped.controller.position.x - origin.x;
+      const dz = ped.controller.position.z - origin.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2.7 && d > 0.01 && Math.abs(ped.controller.position.y - origin.y) < 2.2) {
+        const dot = (dx * fwd.x + dz * fwd.z) / d;
+        if (dot > -0.1) {
+          ped.controller.takeDamage(dmg, fwd.x, fwd.z);
           this.pedestrians.markVictimFlee(ped, origin);
           this.sound.playCrash(24);
           this.particles.emitSparks(ped.controller.position, 8);
           this.cameraShake = 0.14;
+          this.hitStopTimer = 0.025;
+          this.hud.showWorldPopup(`${comboLabels[combo]} ${dmg}`, '#f87171');
           this.pedestrians.alertDanger(origin, 22);
           this.pedestrians.notifyCrime(origin, 'ASSAULT ON CIVILIAN', 32, ped);
         }
@@ -963,16 +1044,17 @@ class GameApp {
     for (const [peerId, peer] of this.remotePeers.entries()) {
       if (peer.lastState.inCar) continue;
       const peerPos = peer.charMesh.root.position;
-      const toP = peerPos.clone().sub(origin);
-      const d = Math.hypot(toP.x, toP.z);
-      if (d < 2.5 && d > 0.01) {
-        toP.y = 0;
-        toP.normalize();
-        if (toP.dot(fwd) > 0.05) {
-          this.lobbyClient.sendMeleeHit(peerId, 20, fwd.x, fwd.z);
+      const dx = peerPos.x - origin.x;
+      const dz = peerPos.z - origin.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 2.8 && d > 0.01 && Math.abs(peerPos.y - origin.y) < 2.2) {
+        const dot = (dx * fwd.x + dz * fwd.z) / d;
+        if (dot > -0.1) {
+          this.lobbyClient.sendMeleeHit(peerId, dmg, fwd.x, fwd.z);
           this.sound.playCrash(30);
           this.particles.emitSparks(peerPos, 12);
-          this.cameraShake = 0.15;
+          this.cameraShake = 0.16;
+          this.hud.showWorldPopup(`${comboLabels[combo]} ${dmg}`, '#38bdf8');
         }
       }
     }
@@ -1289,15 +1371,17 @@ class GameApp {
     this.ambientLight = new THREE.AmbientLight(0xffffff, 0.26);
     this.scene.add(this.ambientLight);
 
+    const isCoarseTouch = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
+    const shadowRes = isCoarseTouch ? 1024 : 2048;
     this.sunLight = new THREE.DirectionalLight(0xfffbeb, 2.15);
     this.sunLight.position.set(80, 140, 60);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.width = 2048;
-    this.sunLight.shadow.mapSize.height = 2048;
+    this.sunLight.shadow.mapSize.width = shadowRes;
+    this.sunLight.shadow.mapSize.height = shadowRes;
     this.sunLight.shadow.camera.near = 10;
     this.sunLight.shadow.camera.far = 340;
 
-    const shadowDist = 55;
+    const shadowDist = isCoarseTouch ? 48 : 55;
     this.sunLight.shadow.camera.left = -shadowDist;
     this.sunLight.shadow.camera.right = shadowDist;
     this.sunLight.shadow.camera.top = shadowDist;
@@ -1398,6 +1482,22 @@ class GameApp {
     const todNameEl = document.getElementById('tod-name');
     if (todNameEl) todNameEl.textContent = todLabel;
     this.syncOptionSelection('.tod-options .option-btn', 'data-tod', tod);
+
+    // Night-mode: boost underglow on all cars + apply CSS bloom to canvas
+    const isNight = tod === 'NIGHT';
+    this.carMesh.setNightMode(isNight);
+    for (const bot of this.raceBots) bot.mesh.setNightMode(isNight);
+    for (const c of this.cityCruisers) c.mesh.setNightMode(isNight);
+    const rc = document.getElementById('render-canvas');
+    if (rc) {
+      if (isNight) {
+        rc.style.filter = 'brightness(1.04) contrast(1.06) saturate(1.14)';
+      } else if (tod === 'SUNSET') {
+        rc.style.filter = 'brightness(1.02) contrast(1.03) saturate(1.08)';
+      } else {
+        rc.style.filter = '';
+      }
+    }
   }
 
   private spawnCityCruisers(): void {
@@ -1683,6 +1783,116 @@ class GameApp {
       }
     }
     return best;
+  }
+
+  private nearbyInteractable(): WorldInteractable | null {
+    let best: WorldInteractable | null = null;
+    let bestDist = Infinity;
+    const p = this.charCtrl.position;
+    for (const item of this.openWorld.interactables) {
+      if (Math.abs(item.y - p.y) > 3.2) continue;
+      const d = Math.hypot(item.x - p.x, item.z - p.z);
+      if (d <= item.radius && d < bestDist) {
+        best = item;
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
+  private handleInteractableUse(item: WorldInteractable): void {
+    const cd = this.interactCooldowns.get(item.id) ?? 0;
+    if (cd > 0) {
+      this.hud.showNotification('RECHARGING', `${item.title} ready in ${Math.ceil(cd)}s`, 1.4);
+      return;
+    }
+
+    switch (item.type) {
+      case 'ELEVATOR_UP':
+        this.sound.playDiscoveryChime();
+        this.charCtrl.position.set(item.x, 50.0, item.z - 1.5);
+        this.charCtrl.velocity.set(0, 0, 0);
+        this.charCtrl.isGrounded = true;
+        this.footCamYaw = Math.PI * 0.25;
+        this.hud.showWorldPopup('50M SKY ROOFTOP', '#22d3ee');
+        this.hud.showNotification('ZENITH ROOFTOP', 'Helipad, Data Vault & Sky-Launch Basejump!', 2.4);
+        break;
+
+      case 'ELEVATOR_DOWN':
+        this.sound.playDiscoveryChime();
+        this.charCtrl.position.set(item.x, 0.22, item.z - 1.5);
+        this.charCtrl.velocity.set(0, 0, 0);
+        this.charCtrl.isGrounded = true;
+        this.hud.showWorldPopup('STREET LOBBY', '#facc15');
+        break;
+
+      case 'GARAGE_TUNE':
+        this.ownZenvo.physics.nitro = 100;
+        this.physics.nitro = 100;
+        this.sound.playDiscoveryChime();
+        this.hud.showWorldPopup('NITRO 100% & TUNED', '#38bdf8');
+        this.garage.open();
+        break;
+
+      case 'EAT_RAMEN':
+        this.interactCooldowns.set(item.id, 18);
+        this.charCtrl.hp = this.charCtrl.maxHp;
+        this.charCtrl.stamina = this.charCtrl.maxStamina;
+        this.charCtrl.speedBuffTimer = Math.max(this.charCtrl.speedBuffTimer, 45);
+        this.charCtrl.powerBuffTimer = Math.max(this.charCtrl.powerBuffTimer, 45);
+        this.sound.playDiscoveryChime();
+        this.hud.showWorldPopup('TONKOTSU BUFF 45s!', '#facc15');
+        this.hud.showNotification('SPICY NEO RAMEN', 'Full HP + 45s Super Speed & +50% Punch Power!', 2.6);
+        break;
+
+      case 'ESPRESSO':
+        this.interactCooldowns.set(item.id, 15);
+        this.charCtrl.hp = Math.min(this.charCtrl.maxHp, this.charCtrl.hp + 50);
+        this.charCtrl.stamina = this.charCtrl.maxStamina;
+        this.charCtrl.speedBuffTimer = Math.max(this.charCtrl.speedBuffTimer, 30);
+        this.sound.playChallengeChime();
+        this.hud.showWorldPopup('+50 HP • SPEED 30s', '#4ade80');
+        this.hud.showNotification('MATCHA ESPRESSO', '+50 HP & 30s Sprint Boost!', 2.2);
+        break;
+
+      case 'VENDING':
+        this.interactCooldowns.set(item.id, 12);
+        this.charCtrl.hp = Math.min(this.charCtrl.maxHp, this.charCtrl.hp + 30);
+        this.charCtrl.stamina = this.charCtrl.maxStamina;
+        this.charCtrl.speedBuffTimer = Math.max(this.charCtrl.speedBuffTimer, 20);
+        this.sound.playBeep(920, 0.14);
+        this.hud.showWorldPopup('NEON FIZZ +30 HP', '#22d3ee');
+        break;
+
+      case 'ARCADE':
+        this.interactCooldowns.set(item.id, 25);
+        this.sound.playRankUpFanfare();
+        this.award(60, 120);
+        this.hud.showWorldPopup('HIGH SCORE +₡120!', '#ec4899');
+        this.hud.showNotification('NEON VELO ARCADE', 'New cabinet record! +₡120 & +60 XP', 2.4);
+        break;
+
+      case 'HACK_TERMINAL':
+        this.interactCooldowns.set(item.id, 45);
+        this.sound.playRankUpFanfare();
+        this.particles.emitSparks(this.charCtrl.position, 18);
+        this.award(180, 650);
+        this.police.addHeat(1, 'ZENITH VAULT BREACH', this.charCtrl.position);
+        this.hud.showWorldPopup('VAULT +₡650!', '#22d3ee');
+        this.hud.showNotification('ZENITH VAULT HACKED', '+₡650 & +180 XP • Watch out for Police!', 2.8);
+        break;
+
+      case 'ROOFTOP_GLIDE':
+        this.sound.playPunchWhoosh();
+        this.charCtrl.position.set(item.x - 2.5, 51.0, item.z);
+        this.charCtrl.yaw = Math.PI * 0.5;
+        this.charCtrl.isGrounded = false;
+        this.charCtrl.isGliding = true;
+        this.charCtrl.velocity.set(-22, 6.2, 0);
+        this.hud.showWorldPopup('SKY-LAUNCH!!', '#38bdf8');
+        this.hud.showNotification('BASEJUMP GLIDE', 'Steer smoothly in mid-air over Neo Velo!', 2.4);
+        break;
+    }
   }
 
   private setRivalPrompt(rival: RivalSprintDef | null): void {
@@ -2146,8 +2356,17 @@ class GameApp {
     this.sunLight.target.position.copy(focusPos);
 
     if (!this.isPaused) {
+      for (const [id, rem] of this.interactCooldowns.entries()) {
+        if (rem <= dt) this.interactCooldowns.delete(id);
+        else this.interactCooldowns.set(id, rem - dt);
+      }
+      if (this.hitStopTimer > 0) {
+        this.hitStopTimer = Math.max(0, this.hitStopTimer - dt);
+      }
+      const simDt = this.hitStopTimer > 0 ? dt * 0.14 : dt;
+
       const weatherForward = this.inCar ? this.physics.getForwardVector() : this.charCtrl.getForwardVector();
-      this.weather.update(dt, focusPos, weatherForward);
+      this.weather.update(simDt, focusPos, weatherForward);
       this.physics.weatherGripMultiplier = this.weather.gripMultiplier;
       const flash = this.weather.lightningFlash;
       this.ambientLight.intensity = this.baseAmbientIntensity + flash * 0.75;
@@ -2184,14 +2403,13 @@ class GameApp {
       if (this.inCar) {
         const inputs = this.hud.pollInputs(this.physics.gearboxType);
         const prevGear = this.physics.gear;
-        this.physics.update(dt, inputs, canDrive);
+        this.physics.update(simDt, inputs, canDrive);
 
-        // A pier jump that clears the deck lands in the ocean, not on an
-        // invisible y=0 plane. Recover from the last road position instead of
-        // teleporting the car backwards through the seawall mid-flight.
+        // Recover car cleanly from either harbor ocean OR central circuit lake water
         if (
-          this.openWorld.isOverOpenWater(this.physics.position.x, this.physics.position.z)
-          && this.physics.position.y < -0.35
+          (this.openWorld.isOverOpenWater(this.physics.position.x, this.physics.position.z)
+            || this.track.isOverLakeWater(this.physics.position.x, this.physics.position.z))
+          && this.physics.position.y < -0.55
         ) {
           this.particles.emitSparks(this.physics.position, 12);
           this.sound.playCrash(55);
@@ -2308,23 +2526,25 @@ class GameApp {
 
         if (!this.charCtrl.isDead) {
           if (this.sittingSpot) {
-            // Standing up must not require hunting for the USE key: any real
-            // movement input, a jump, E/USE or F all get the player out of the
-            // chair. The touch button is relabelled STAND while seated.
             const wantsMove = Math.hypot(charInputs.moveX, charInputs.moveY) > 0.45;
             if (interactEdge || charInputs.jump || wantsMove) this.exitSeat(true);
           } else if (interactEdge) {
-            const spot = this.nearbySitSpot();
-            if (spot) {
-              const root = this.sitRootFor(spot);
-              this.sittingSpot = { ...spot, root };
-              this.standScootTotal.set(0, 0, 0);
-              this.standScootApplied = 1;
-              this.charCtrl.position.copy(root);
-              this.charCtrl.yaw = spot.yaw;
-              this.charCtrl.velocity.set(0, 0, 0);
-              if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(true);
-              this.hud.showNotification('SEATED', `${spot.label} • Move / Jump / USE to stand`, 1.8);
+            const worldItem = this.nearbyInteractable();
+            if (worldItem) {
+              this.handleInteractableUse(worldItem);
+            } else {
+              const spot = this.nearbySitSpot();
+              if (spot) {
+                const root = this.sitRootFor(spot);
+                this.sittingSpot = { ...spot, root };
+                this.standScootTotal.set(0, 0, 0);
+                this.standScootApplied = 1;
+                this.charCtrl.position.copy(root);
+                this.charCtrl.yaw = spot.yaw;
+                this.charCtrl.velocity.set(0, 0, 0);
+                if (this.avatarMesh instanceof GLTFCharacterMesh) this.avatarMesh.setSitting(true);
+                this.hud.showNotification('SEATED', `${spot.label} • Move / Jump / USE to stand`, 1.8);
+              }
             }
           }
         }
@@ -2357,7 +2577,7 @@ class GameApp {
         }
 
         const wasGroundedBeforeStep = this.charCtrl.isGrounded;
-        this.charCtrl.update(dt, charInputs, this.footCamYaw);
+        this.charCtrl.update(simDt, charInputs, this.footCamYaw);
         if (seated && this.sittingSpot) {
           this.charCtrl.position.copy(this.sittingSpot.root);
           this.charCtrl.yaw = this.sittingSpot.yaw;
@@ -2388,20 +2608,42 @@ class GameApp {
           const onStairs = !seated && this.openWorld.isInInteriorStairs(this.charCtrl.position.x, this.charCtrl.position.z)
             && (this.charCtrl.animState === 'WALK' || this.charCtrl.animState === 'RUN');
           this.avatarMesh.setStairs(onStairs, stairFwdZ >= 0 ? 'up' : 'down');
+          this.avatarMesh.setSwimming(this.charCtrl.isSwimming);
           // Raise the fists while a sparring opponent is in striking range.
           const nearFighter = this.sparringFighters.some(
             (f) => !f.isDead && f.controller.position.distanceTo(this.charCtrl.position) < 9
           );
-          this.avatarMesh.setCombatStance(nearFighter && !seated);
+          this.avatarMesh.setCombatStance(nearFighter && !seated && !this.charCtrl.isSwimming);
         }
-        this.avatarMesh.updateAnimation(dt, this.charCtrl.animState);
+        this.avatarMesh.updateAnimation(simDt, this.charCtrl.animState);
         this.avatarMesh.setNameAndHp(this.lobbyUI.config.playerName, this.charCtrl.hp);
+        this.hud.updateFootStatus(
+          this.charCtrl.stamina,
+          this.charCtrl.speedBuffTimer,
+          this.charCtrl.powerBuffTimer,
+          this.charCtrl.isSwimming
+        );
 
-        const promptSpot = this.sittingSpot ?? this.nearbySitSpot();
-        this.hud.setUseLabel(this.sittingSpot ? 'STAND' : (promptSpot ? 'SIT' : 'USE'));
+        const nearbyItem = !this.charCtrl.isDead && !this.sittingSpot ? this.nearbyInteractable() : null;
+        const promptSpot = this.sittingSpot ?? (nearbyItem ? null : this.nearbySitSpot());
+        if (nearbyItem) {
+          this.hud.setUseLabel(
+            nearbyItem.type === 'ELEVATOR_UP' ? 'ROOF'
+              : nearbyItem.type === 'ELEVATOR_DOWN' ? 'LOBBY'
+              : nearbyItem.type === 'GARAGE_TUNE' ? 'TUNE'
+              : nearbyItem.type === 'EAT_RAMEN' ? 'EAT'
+              : nearbyItem.type === 'HACK_TERMINAL' ? 'HACK'
+              : nearbyItem.type === 'ROOFTOP_GLIDE' ? 'JUMP'
+              : 'USE'
+          );
+        } else {
+          this.hud.setUseLabel(this.sittingSpot ? 'STAND' : (promptSpot ? 'SIT' : 'USE'));
+        }
         if (this.interactPromptEl) {
-          if (promptSpot && !this.charCtrl.isDead) {
-            const label = this.sittingSpot ? 'E / USE — Stand up' : `E / USE — Sit (${promptSpot.label})`;
+          if (!this.charCtrl.isDead && (this.sittingSpot || nearbyItem || promptSpot)) {
+            const label = this.sittingSpot
+              ? 'E / USE — Stand up'
+              : (nearbyItem ? nearbyItem.prompt : `E / USE — Sit (${promptSpot!.label})`);
             if (this.interactPromptEl.textContent !== label) this.interactPromptEl.textContent = label;
             this.interactPromptEl.style.display = 'block';
           } else {
@@ -2459,8 +2701,20 @@ class GameApp {
       const activePos = this.inCar ? this.physics.position : this.charCtrl.position;
       const activeVel = this.inCar ? this.physics.velocity : this.charCtrl.velocity;
 
-      // Update ocean waves & smashable traffic cones!
+      // Update ocean waves & smashable traffic cones + hidden Neon Cash Stash pickups!
       this.openWorld.updateWorldDynamics(dt, this.elapsedSec, activePos, activeVel, this.inCar);
+      for (const item of this.openWorld.collectibles) {
+        if (item.collected) continue;
+        if (Math.abs(activePos.y - item.y) < 2.6 && Math.hypot(activePos.x - item.x, activePos.z - item.z) < (this.inCar ? 2.8 : 1.7)) {
+          item.collected = true;
+          item.mesh.visible = false;
+          this.sound.playDiscoveryChime();
+          this.particles.emitSparks(activePos, 18);
+          this.award(item.xp, item.reward);
+          this.hud.showWorldPopup(`+₡${item.reward} STASH!`, '#facc15');
+          this.hud.showNotification(`FOUND: ${item.label.toUpperCase()}`, `+₡${item.reward} Credits & +${item.xp} XP`, 2.6);
+        }
+      }
 
       // District tracking & first-discovery bonus
       const districtId = this.openWorld.getDistrictAt(activePos.x, activePos.z);
@@ -2679,6 +2933,16 @@ class GameApp {
       }
     }
 
+    if (this.impactFlashAlpha > 0) {
+      this.impactFlashAlpha = Math.max(0, this.impactFlashAlpha - dt * 2.2);
+      if (this.impactFlashEl) this.impactFlashEl.style.opacity = this.impactFlashAlpha.toFixed(3);
+    }
+    if (this.speedVignetteEl) {
+      const vig = this.inCar
+        ? Math.min(0.65, Math.max(0, (this.physics.speedKmh - 105) / 180))
+        : (this.charCtrl.isDead ? 0.72 : (this.charCtrl.isDashing || this.charCtrl.isGliding ? 0.28 : 0));
+      this.speedVignetteEl.style.opacity = vig.toFixed(2);
+    }
     this.updateCamera(dt);
 
     const playerMarker = this.inCar
@@ -2787,13 +3051,32 @@ class GameApp {
         return;
       }
 
-      this.setCameraFov(62);
+      if (this.charCtrl.isDead) {
+        this.footCamYaw += dt * 0.48;
+        this.setCameraFov(THREE.MathUtils.damp(this.camera.fov, 54, 4, dt));
+        const koDist = 3.3;
+        const focusPt = this.camScratchA.set(cPos.x, cPos.y + 0.42, cPos.z);
+        const rawCam = this.camScratchB.set(
+          cPos.x + Math.sin(this.footCamYaw) * koDist,
+          cPos.y + 1.25,
+          cPos.z + Math.cos(this.footCamYaw) * koDist
+        );
+        const safeCam = this.openWorld.clampCameraToWorld(focusPt, rawCam);
+        this.chaseCamPos.lerp(safeCam, 1 - Math.exp(-8 * dt));
+        this.camera.position.copy(this.chaseCamPos);
+        this.chaseCamLook.lerp(focusPt, 1 - Math.exp(-10 * dt));
+        this.camera.lookAt(this.chaseCamLook);
+        return;
+      }
 
-      const dist = 4.4;
-      const focusPt = this.camScratchA.set(cPos.x, cPos.y + 1.35, cPos.z);
+      const targetFootFov = this.charCtrl.animState === 'RUN' || this.charCtrl.isGliding ? 66 : 62;
+      this.setCameraFov(THREE.MathUtils.damp(this.camera.fov, targetFootFov, 7, dt));
+
+      const dist = 4.3;
+      const focusPt = this.camScratchA.set(cPos.x, cPos.y + 1.32, cPos.z);
       const rawCam = this.camScratchB.set(
         cPos.x + Math.sin(this.footCamYaw) * dist,
-        cPos.y + 2.15,
+        cPos.y + 2.05,
         cPos.z + Math.cos(this.footCamYaw) * dist
       );
       const safeCam = this.openWorld.clampCameraToWorld(focusPt, rawCam);
@@ -2814,21 +3097,22 @@ class GameApp {
 
     if (this.cameraView === CameraView.CHASE) {
       const speedKmh = this.physics.speedKmh;
-      const targetFov = 62 + Math.min(20, (speedKmh / 280) * 20);
-      this.setCameraFov(THREE.MathUtils.damp(this.camera.fov, targetFov, 7, dt));
+      const targetFov = 62 + Math.min(16, (speedKmh / 260) * 16) + (this.physics.isNitroActive ? 6.0 : 0);
+      this.setCameraFov(THREE.MathUtils.damp(this.camera.fov, targetFov, 7.5, dt));
 
-      const posAlpha = 1 - Math.exp(-10 * dt);
-      const lookAlpha = 1 - Math.exp(-14 * dt);
+      const posAlpha = 1 - Math.exp(-10.5 * dt);
+      const lookAlpha = 1 - Math.exp(-14.5 * dt);
 
       // Drift corner-peek: blend car forward with travel direction at speed so apex stays visible
       const camDir = this.camScratchA.copy(forward);
       const speedMs = Math.hypot(this.physics.velocity.x, this.physics.velocity.z);
       if (speedMs > 7 && this.physics.forwardVelocity > 2) {
         const velDir = this.camScratchB.set(this.physics.velocity.x, 0, this.physics.velocity.z).normalize();
-        camDir.lerp(velDir, 0.28).normalize();
+        camDir.lerp(velDir, 0.30).normalize();
       }
 
-      const wantedCam = this.camScratchC.copy(carPos).addScaledVector(camDir, -6.2).addScaledVector(up, 2.25);
+      const camDist = 6.0 + Math.min(1.15, (speedKmh / 260) * 1.15);
+      const wantedCam = this.camScratchC.copy(carPos).addScaledVector(camDir, -camDist).addScaledVector(up, 2.2);
       const targetCamPos = this.openWorld.clampCameraToWorld(
         this.camScratchD.copy(carPos).addScaledVector(up, 0.8), wantedCam
       );
@@ -2840,9 +3124,13 @@ class GameApp {
         this.camera.position.y += (Math.random() - 0.5) * this.cameraShake;
       }
 
-      const targetLook = this.camScratchE.copy(carPos).addScaledVector(camDir, 3.4).addScaledVector(up, 0.85);
+      const targetLook = this.camScratchE.copy(carPos).addScaledVector(camDir, 3.6).addScaledVector(up, 0.85);
       this.chaseCamLook.lerp(targetLook, lookAlpha);
       this.camera.lookAt(this.chaseCamLook);
+
+      const targetRoll = THREE.MathUtils.clamp(this.physics.yawRate * Math.min(1, speedKmh / 140) * 0.042, -0.045, 0.045);
+      this.camRoll = THREE.MathUtils.damp(this.camRoll, targetRoll, 7.0, dt);
+      this.camera.rotateZ(this.camRoll);
     } else if (this.cameraView === CameraView.HOOD) {
       this.setCameraFov(74);
 

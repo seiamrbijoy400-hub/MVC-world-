@@ -694,6 +694,41 @@
     .touch-btn--jump { width: 58px; height: 58px; font-size: 11px; }
     .touch-btn--use { width: 62px; height: 58px; font-size: 10px; background: rgba(56,189,248,0.72); border-color: #38bdf8; }
     .left-controls, .right-controls { display: flex; gap: 10px; align-items: flex-end; }
+    .steer-pad {
+      pointer-events: auto;
+      position: relative;
+      width: 172px;
+      height: 66px;
+      border-radius: 20px;
+      background: rgba(15, 23, 42, 0.58);
+      backdrop-filter: blur(8px);
+      border: 2px solid rgba(255, 255, 255, 0.22);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      touch-action: none;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      user-select: none;
+    }
+    .steer-pad svg { width: 18px; height: 18px; color: rgba(226, 232, 240, 0.65); pointer-events: none; }
+    .steer-pad-puck {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 44px;
+      height: 44px;
+      margin-left: -22px;
+      margin-top: -22px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #38bdf8, #2563eb);
+      border: 2px solid rgba(248, 250, 252, 0.85);
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.55);
+      pointer-events: none;
+      transition: background 0.12s ease;
+    }
+    .steer-pad.active { border-color: #38bdf8; }
+    .steer-pad.active .steer-pad-puck { background: linear-gradient(135deg, #facc15, #f97316); }
     .joystick-zone {
       width: 132px;
       height: 132px;
@@ -773,14 +808,22 @@
       border: 1px solid rgba(255,255,255,0.14);
     }
     .emoji-btn {
-      background: none;
-      border: none;
-      font-size: 17px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      color: #e2e8f0;
       cursor: pointer;
-      padding: 2px 4px;
-      transition: transform 0.12s ease;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
     }
-    .emoji-btn:active { transform: scale(1.35); }
+    .emoji-btn svg { width: 15px; height: 15px; pointer-events: none; }
+    .emoji-btn:hover { background: rgba(56, 189, 248, 0.22); border-color: rgba(56, 189, 248, 0.5); }
+    .emoji-btn:active { transform: scale(1.22); background: rgba(249, 115, 22, 0.35); border-color: #fb923c; }
     .ingame-chat-panel {
       width: 240px;
       background: rgba(9, 13, 22, 0.84);
@@ -1005,6 +1048,10 @@
 <body>
   <div id="game-container">
     <canvas id="render-canvas"></canvas>
+    <!-- Speed vignette: darkens corners at high speed for immersion -->
+    <div id="speed-vignette" style="pointer-events:none;position:absolute;inset:0;opacity:0;transition:opacity 0.18s ease;background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.72) 100%);z-index:2;"></div>
+    <!-- Impact flash: white flash on heavy collision -->
+    <div id="impact-flash" style="pointer-events:none;position:absolute;inset:0;opacity:0;background:#fff;z-index:3;"></div>
   </div>
 
   <!-- ================== HOTSPOT LAN & FRIENDS DRAWER (Hidden by default — Open World First!) ================== -->
@@ -1320,15 +1367,27 @@
     <!-- Active Courier / Sprint Live Timer Pill -->
     <div id="activity-timer-pill" class="glass-card selectable-text" style="position:absolute;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:none;padding:6px 14px;border:1.5px solid #f59e0b;font-size:12px;font-weight:900;color:#fde68a;z-index:22;pointer-events:none;max-width:min(320px,72vw);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
 
-    <!-- Animated Emoji Reactions & Live Chat -->
+    <!-- Animated 3D Character Emotes & Live Chat -->
     <div class="social-bar">
-      <div class="emoji-strip">
-        <button class="emoji-btn" data-emoji="🔥">🔥</button>
-        <button class="emoji-btn" data-emoji="😂">😂</button>
-        <button class="emoji-btn" data-emoji="💨">💨</button>
-        <button class="emoji-btn" data-emoji="❤️">❤️</button>
-        <button class="emoji-btn" data-emoji="👊">👊</button>
-        <button class="emoji-btn" data-emoji="👑">👑</button>
+      <div class="emoji-strip" title="3D Emotes (Keys 1-6)">
+        <button class="emoji-btn" data-emoji="GROOVE" title="Groove Dance [1]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        </button>
+        <button class="emoji-btn" data-emoji="WAVE" title="Friendly Wave [2]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+        </button>
+        <button class="emoji-btn" data-emoji="CHILL" title="Arms Crossed Chill [3]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button class="emoji-btn" data-emoji="SALUTE" title="Respect Salute [4]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </button>
+        <button class="emoji-btn" data-emoji="TAUNT" title="Fighter Guard Taunt [5]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </button>
+        <button class="emoji-btn" data-emoji="VICTORY" title="Champion Victory [6]">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>
+        </button>
       </div>
       <div id="ingame-chat-panel" class="ingame-chat-panel">
         <div id="ingame-chat-log" class="ingame-chat-log"></div>
@@ -1363,8 +1422,11 @@
   <!-- Mobile On-Screen Car Controls -->
   <div id="mobile-controls" class="hidden">
     <div class="left-controls">
-      <button id="touch-left" class="touch-btn" style="width:68px;height:68px;font-size:18px;">◀</button>
-      <button id="touch-right" class="touch-btn" style="width:68px;height:68px;font-size:18px;">▶</button>
+      <div id="steer-pad" class="steer-pad" title="Slide to Steer Analog">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        <div id="steer-pad-puck" class="steer-pad-puck"></div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
     </div>
 
     <div class="right-controls">
@@ -1381,19 +1443,30 @@
     </div>
   </div>
 
+  <div id="world-popups" style="pointer-events:none;position:fixed;inset:0;overflow:hidden;z-index:18;"></div>
+
   <!-- Mobile On-Screen Anime Character Controls (360° Analog Floating Joystick) -->
   <div id="foot-controls" class="hidden">
-    <div class="left-controls">
+    <div id="foot-status-bar" style="pointer-events:none;position:absolute;left:50%;bottom:136px;transform:translateX(-50%);display:none;align-items:center;gap:8px;padding:4px 10px;border-radius:999px;background:rgba(9,13,22,0.78);border:1px solid rgba(56,189,248,0.28);font-size:10px;font-weight:800;color:#e2e8f0;white-space:nowrap;">
+      <span>STAMINA</span>
+      <span style="width:66px;height:6px;background:rgba(255,255,255,0.14);border-radius:999px;overflow:hidden;display:inline-block;">
+        <span id="foot-stamina-fill" style="display:block;height:100%;width:100%;background:linear-gradient(90deg,#38bdf8,#4ade80);transition:width 0.08s;"></span>
+      </span>
+      <span id="foot-buff-badge" style="color:#facc15;display:none;"></span>
+    </div>
+    <div class="left-controls" style="gap:8px;align-items:flex-end;">
       <div id="foot-joystick-zone" class="joystick-zone"></div>
+      <button id="foot-sprint" class="touch-btn touch-btn--sprint">RUN</button>
     </div>
 
     <div class="right-controls">
-      <button id="foot-drive" class="touch-btn" style="display:none;background:rgba(34,197,94,0.75);border-color:#4ade80;width:62px;height:62px;font-size:11px;">DRIVE</button>
-      <button id="foot-jump" class="touch-btn" style="width:58px;height:58px;font-size:11px;">JUMP</button>
+      <button id="foot-drive" class="touch-btn touch-btn--drive" style="display:none;">DRIVE</button>
+      <button id="foot-dash" class="touch-btn touch-btn--dash">DASH</button>
+      <button id="foot-jump" class="touch-btn touch-btn--jump">JUMP</button>
       <button id="foot-punch" class="touch-btn fight">FIGHT</button>
-      <button id="foot-interact" class="touch-btn" style="width:58px;height:58px;font-size:11px;background:rgba(56,189,248,0.72);border-color:#38bdf8;">USE</button>
+      <button id="foot-interact" class="touch-btn touch-btn--use">USE</button>
     </div>
-    <div id="interact-prompt" style="display:none;position:absolute;left:50%;bottom:96px;transform:translateX(-50%);padding:6px 12px;border-radius:10px;background:rgba(9,13,22,0.82);color:#f8fafc;font-size:12px;font-weight:900;white-space:nowrap;pointer-events:none;"></div>
+    <div id="interact-prompt" style="display:none;position:absolute;left:50%;bottom:96px;transform:translateX(-50%);padding:6px 14px;border-radius:10px;background:rgba(9,13,22,0.88);border:1px solid rgba(56,189,248,0.45);color:#f8fafc;font-size:12px;font-weight:900;white-space:nowrap;pointer-events:none;box-shadow:0 4px 16px rgba(0,0,0,0.45);"></div>
   </div>
 
   <!-- Character Customization Studio (Live 3D Preview Side Drawer) -->

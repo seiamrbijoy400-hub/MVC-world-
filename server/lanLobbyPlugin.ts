@@ -355,7 +355,7 @@ export function lanLobbyPlugin(): {
           broadcastToRoom(room.code, 'EMOJI_FX', {
             senderId: clientId,
             senderName: sender?.name || 'Player',
-            emoji: String(payload.emoji || '🔥').slice(0, 6)
+            emoji: String(payload.emoji || 'GROOVE').slice(0, 12)
           });
           return;
         }

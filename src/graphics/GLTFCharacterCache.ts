@@ -40,6 +40,8 @@ function normalizedBoneKey(name: string): string | null {
     [/^hand_r/, 'handR'],
     [/^upper_leg_l/, 'upperLegL'],
     [/^upper_leg_r/, 'upperLegR'],
+    [/^lower_leg_l|^shin_l|^calf_l/, 'lowerLegL'],
+    [/^lower_leg_r|^shin_r|^calf_r/, 'lowerLegR'],
     [/^hips?/, 'hips'],
     [/^spine 1/, 'spine1'],
     [/^spine/, 'spine'],

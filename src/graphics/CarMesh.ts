@@ -165,6 +165,13 @@ export class CarMesh {
     this.underglowMat.color.set(hex);
   }
 
+  /** Boost underglow opacity and add soft puddle reflection disc at night. */
+  public setNightMode(isNight: boolean): void {
+    if (!this.underglowMesh || !this.underglowMat) return;
+    if (!this.underglowMesh.visible) return; // OFF — keep hidden
+    this.underglowMat.opacity = isNight ? 0.92 : 0.65;
+  }
+
   private createHeadlights(): void {
     for (const sideX of [-0.62, 0.62]) {
       const spot = new THREE.SpotLight(0xe0f2fe, 0, 62, Math.PI * 0.24, 0.45, 1.2);

@@ -17,6 +17,32 @@ import type {
  * staying fully offline and customizable.
  */
 
+export type EmoteType = 'GROOVE' | 'WAVE' | 'CHILL' | 'SALUTE' | 'TAUNT' | 'VICTORY';
+
+export function mapReactionToEmote(code: string): EmoteType {
+  switch (code) {
+    case 'GROOVE':
+    case '🔥':
+      return 'GROOVE';
+    case 'WAVE':
+    case '😂':
+      return 'WAVE';
+    case 'CHILL':
+    case '💨':
+      return 'CHILL';
+    case 'SALUTE':
+    case '❤️':
+      return 'SALUTE';
+    case 'TAUNT':
+    case '👊':
+      return 'TAUNT';
+    case 'VICTORY':
+    case '👑':
+    default:
+      return 'VICTORY';
+  }
+}
+
 export interface CharacterPreset {
   id: CharacterId;
   name: string;
@@ -314,6 +340,9 @@ export class HumanCharacterMesh {
   private emojiSparkles: THREE.Mesh[] = [];
   private emojiTimer = 0;
 
+  private activeEmote: EmoteType | null = null;
+  private emoteTimer = 0;
+  private emoteDuration = 2.6;
   private comboStep = 0;
 
   private animPhase = 0;
@@ -412,9 +441,9 @@ export class HumanCharacterMesh {
     this.torso = new THREE.Group();
     this.waist.add(this.torso);
 
-    const chestGeo = new THREE.CylinderGeometry(0.158, 0.118, 0.34, 16);
+    const chestGeo = new THREE.CylinderGeometry(0.152, 0.114, 0.34, 16);
     const chest = this.addPart(this.torso, chestGeo, this.jacketMat, 0.009);
-    chest.scale.set(1.14, 1, 0.78);
+    chest.scale.set(1.08, 1, 0.78);
     chest.position.y = 0.21;
     chest.castShadow = true;
 
@@ -520,16 +549,16 @@ export class HumanCharacterMesh {
     this.buildHairStyle(this.appearance.hairStyle);
     this.buildAccessory(this.appearance.accessory);
 
-    // --- Articulated Arms with Shoulder & Elbow Bridging Caps ---
-    const upperArmGeo = new THREE.CapsuleGeometry(0.042, 0.165, 6, 10);
+    // --- Articulated Arms with Flush Tailored Shoulders & Elbow Bridging Caps ---
+    const upperArmGeo = new THREE.CapsuleGeometry(0.041, 0.165, 6, 10);
     upperArmGeo.translate(0, -0.105, 0);
-    const forearmGeo = new THREE.CapsuleGeometry(0.036, 0.155, 6, 10);
+    const forearmGeo = new THREE.CapsuleGeometry(0.035, 0.155, 6, 10);
     forearmGeo.translate(0, -0.105, 0);
-    const shoulderCapGeo = new THREE.SphereGeometry(0.052, 10, 10);
-    const elbowCapGeo = new THREE.SphereGeometry(0.041, 10, 10);
+    const shoulderCapGeo = new THREE.SphereGeometry(0.044, 10, 10);
+    const elbowCapGeo = new THREE.SphereGeometry(0.038, 10, 10);
 
     this.leftArm = new THREE.Group();
-    this.leftArm.position.set(-0.195, 0.355, 0);
+    this.leftArm.position.set(-0.172, 0.342, 0);
     this.addPart(this.leftArm, shoulderCapGeo, this.jacketMat, 0);
     this.addPart(this.leftArm, upperArmGeo, this.jacketMat, 0);
     this.leftForearm = new THREE.Group();
@@ -543,7 +572,7 @@ export class HumanCharacterMesh {
     this.torso.add(this.leftArm);
 
     this.rightArm = new THREE.Group();
-    this.rightArm.position.set(0.195, 0.355, 0);
+    this.rightArm.position.set(0.172, 0.342, 0);
     this.addPart(this.rightArm, shoulderCapGeo, this.jacketMat, 0);
     this.addPart(this.rightArm, upperArmGeo, this.jacketMat, 0);
     this.rightForearm = new THREE.Group();
@@ -966,43 +995,32 @@ export class HumanCharacterMesh {
     this.bubbleTimer = 4.0;
   }
 
-  public triggerEmoji(emoji: string): void {
-    const c = document.createElement('canvas');
-    c.width = 128;
-    c.height = 128;
-    const ctx = c.getContext('2d')!;
-    const grad = ctx.createRadialGradient(64, 64, 12, 64, 64, 60);
-    grad.addColorStop(0, 'rgba(250, 204, 21, 0.9)');
-    grad.addColorStop(0.6, 'rgba(255, 85, 0, 0.4)');
-    grad.addColorStop(1, 'rgba(255, 85, 0, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 128, 128);
+  public triggerEmote(emote: EmoteType, duration = 2.6): void {
+    this.activeEmote = emote;
+    this.emoteDuration = duration;
+    this.emoteTimer = duration;
 
-    ctx.font = '74px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(emoji, 64, 68);
-
-    const tex = new THREE.CanvasTexture(c);
-    if (!this.emojiSprite) {
-      this.emojiSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-      this.root.add(this.emojiSprite);
-    } else {
-      const mat = this.emojiSprite.material as THREE.SpriteMaterial;
-      if (mat.map) mat.map.dispose();
-      mat.map = tex;
-      mat.needsUpdate = true;
-    }
-
-    this.emojiSprite.position.set(0, 2.25, 0);
-    this.emojiSprite.scale.set(0.2, 0.2, 1);
-    this.emojiSprite.visible = true;
-    this.emojiTimer = 2.0;
-
-    for (const s of this.emojiSparkles) {
+    const fxColors: Record<EmoteType, number> = {
+      GROOVE: 0xf97316,
+      WAVE: 0x38bdf8,
+      CHILL: 0x22d3ee,
+      SALUTE: 0xf43f5e,
+      TAUNT: 0xef4444,
+      VICTORY: 0xfacc15
+    };
+    const c = fxColors[emote];
+    for (let i = 0; i < this.emojiSparkles.length; i++) {
+      const s = this.emojiSparkles[i];
       s.visible = true;
-      s.position.set(0, 2.25, 0);
+      s.position.set(0, 1.4, 0);
+      (s.material as THREE.MeshBasicMaterial).color.setHex(i % 2 === 0 ? c : 0xf8fafc);
     }
+    this.emojiTimer = 1.4;
+  }
+
+  public triggerEmoji(emoji: string): void {
+    const emote = mapReactionToEmote(emoji);
+    this.triggerEmote(emote, 2.5);
   }
 
   public triggerPunchVisual(): void {
@@ -1016,24 +1034,28 @@ export class HumanCharacterMesh {
       if (this.bubbleTimer <= 0 && this.bubbleSprite) this.bubbleSprite.visible = false;
     }
 
-    if (this.emojiTimer > 0 && this.emojiSprite) {
+    if (this.emojiTimer > 0) {
       this.emojiTimer -= dt;
-      const t = 1 - this.emojiTimer / 2.0;
-      const popScale = t < 0.2 ? THREE.MathUtils.lerp(0.2, 1.45, t / 0.2) : THREE.MathUtils.lerp(1.45, 1.0, (t - 0.2) / 0.8);
-      this.emojiSprite.scale.set(popScale, popScale, 1);
-      this.emojiSprite.position.y = 2.25 + t * 1.15 + Math.sin(t * 14) * 0.08;
-      (this.emojiSprite.material as THREE.SpriteMaterial).opacity = t > 0.7 ? (1 - t) / 0.3 : 1;
-
+      const t = 1 - this.emojiTimer / 1.4;
       for (let i = 0; i < this.emojiSparkles.length; i++) {
         const s = this.emojiSparkles[i];
-        const ang = (i / this.emojiSparkles.length) * Math.PI * 2 + t * 5;
-        const r = t * 1.1;
-        s.position.set(Math.cos(ang) * r, 2.25 + t * 1.2 + Math.sin(t * 8 + i) * 0.2, Math.sin(ang) * r);
-        s.rotation.y += dt * 6;
-        (s.material as THREE.MeshBasicMaterial).opacity = 1 - t;
+        const ang = (i / this.emojiSparkles.length) * Math.PI * 2 + t * 5.2;
+        const r = 0.55 + t * 0.55;
+        s.position.set(Math.cos(ang) * r, 1.15 + t * 1.15 + Math.sin(t * 9 + i) * 0.14, Math.sin(ang) * r);
+        s.rotation.y += dt * 7;
+        (s.material as THREE.MeshBasicMaterial).opacity = Math.max(0, 1 - t);
         if (this.emojiTimer <= 0) s.visible = false;
       }
-      if (this.emojiTimer <= 0) this.emojiSprite.visible = false;
+    }
+
+    // Cancel any active emote immediately on fast action states
+    if (this.activeEmote && (state === 'RUN' || state === 'FLEE' || state === 'JUMP' || state === 'PUNCH' || state === 'HIT' || state === 'KO')) {
+      this.activeEmote = null;
+      this.emoteTimer = 0;
+    }
+    if (this.emoteTimer > 0) {
+      this.emoteTimer -= dt;
+      if (this.emoteTimer <= 0) this.activeEmote = null;
     }
 
     // Natural eye blink & expressive mouth
@@ -1055,153 +1077,253 @@ export class HumanCharacterMesh {
     let tRShinX = 0;
     let tLFootX = 0;
     let tRFootX = 0;
-    let tLArmX = 0;
-    let tRArmX = 0;
-    let tLArmZ = 0.08;
-    let tRArmZ = -0.08;
-    let tLForeX = -0.18;
-    let tRForeX = -0.18;
+    let tLArmX = 0.04;
+    let tRArmX = 0.04;
+    // Outward natural A-pose: -Z pushes LeftArm (-X) out, +Z pushes RightArm (+X) out
+    let tLArmZ = -0.10;
+    let tRArmZ = 0.10;
+    // Forearm +X flexes elbows naturally forward (-Z)
+    let tLForeX = 0.22;
+    let tRForeX = 0.22;
     let blendRate = 14;
 
-    if (state === 'IDLE') {
+    if (this.activeEmote && state === 'IDLE') {
+      const p = 1 - this.emoteTimer / this.emoteDuration;
+      const pulse = Math.sin(p * Math.PI * 6);
+      const wave = Math.sin(p * Math.PI * 8);
+      blendRate = 16;
+
+      if (this.activeEmote === 'VICTORY') {
+        tHipsY = 0.85 + Math.abs(pulse) * 0.08;
+        tTorsoX = -0.08;
+        tHeadX = 0.18;
+        tRArmX = 2.55 + pulse * 0.22;
+        tRArmZ = 0.25;
+        tRForeX = 0.35;
+        tLArmX = 0.35;
+        tLArmZ = -0.25;
+        tLForeX = 1.15;
+        tLLegX = 0.12;
+        tRLegX = -0.12;
+        tLShinX = -0.15;
+      } else if (this.activeEmote === 'GROOVE') {
+        tHipsY = 0.83 + Math.abs(pulse) * 0.045;
+        tHipsX = wave * 0.045;
+        tHipsYaw = pulse * 0.22;
+        tTorsoZ = -wave * 0.08;
+        tTorsoY = -pulse * 0.18;
+        tHeadY = wave * 0.16;
+        tLArmX = 0.85 + pulse * 0.35;
+        tRArmX = 0.85 - pulse * 0.35;
+        tLArmZ = -0.32;
+        tRArmZ = 0.32;
+        tLForeX = 1.25 + wave * 0.25;
+        tRForeX = 1.25 - wave * 0.25;
+        tLLegX = Math.max(0, pulse) * 0.28;
+        tRLegX = Math.max(0, -pulse) * 0.28;
+        tLShinX = -Math.max(0, pulse) * 0.42;
+        tRShinX = -Math.max(0, -pulse) * 0.42;
+      } else if (this.activeEmote === 'WAVE') {
+        tHipsY = 0.86 + Math.sin(p * Math.PI * 2) * 0.015;
+        tTorsoZ = -0.07;
+        tHeadY = -0.12;
+        tHeadX = 0.08;
+        tRArmX = 2.05;
+        tRArmZ = 0.45 + wave * 0.24;
+        tRForeX = 0.45 + wave * 0.35;
+        tLArmZ = -0.14;
+        tLForeX = 0.35;
+      } else if (this.activeEmote === 'CHILL') {
+        tHipsY = 0.84;
+        tHipsX = 0.025;
+        tTorsoX = -0.06;
+        tTorsoZ = 0.04;
+        tHeadY = 0.18;
+        tLArmX = 0.55;
+        tRArmX = 0.55;
+        tLArmZ = 0.22; // cross arms neatly in front of chest!
+        tRArmZ = -0.22;
+        tLForeX = 1.35;
+        tRForeX = 1.35;
+        tRLegX = 0.16;
+        tRShinX = -0.22;
+      } else if (this.activeEmote === 'SALUTE') {
+        tTorsoX = 0.05;
+        tHeadX = -0.08 + Math.sin(p * Math.PI * 2) * 0.08;
+        tRArmX = 1.25;
+        tRArmZ = 0.15;
+        tRForeX = 1.65;
+        tLArmX = 0.15;
+        tLArmZ = -0.10;
+        tLForeX = 0.30;
+      } else if (this.activeEmote === 'TAUNT') {
+        tHipsY = 0.81 + Math.abs(pulse) * 0.03;
+        tHipsYaw = -0.35;
+        tTorsoX = 0.14;
+        tTorsoY = 0.25;
+        tHeadY = 0.15;
+        tLArmX = 1.25 + pulse * 0.15;
+        tRArmX = 1.32 - pulse * 0.15;
+        tLArmZ = -0.18;
+        tRArmZ = 0.18;
+        tLForeX = 1.48;
+        tRForeX = 1.48;
+        tLLegX = 0.28;
+        tRLegX = -0.26;
+        tLShinX = -0.34;
+        tRShinX = -0.28;
+      }
+    } else if (state === 'IDLE') {
       this.animPhase += dt * 1.6;
       const breath = Math.sin(this.animPhase);
       const sway = Math.sin(this.animPhase * 0.5);
       tHipsY = 0.86 + breath * 0.008;
       tHipsX = sway * 0.006;
-      tTorsoX = breath * 0.012;
+      tTorsoX = breath * 0.015;
       tTorsoZ = sway * 0.012;
       tHeadX = -breath * 0.010;
-      tHeadY = sway * 0.04;
-      tLArmX = sway * 0.025;
-      tRArmX = -sway * 0.025;
-      tLArmZ = 0.06 + sway * 0.015;
-      tRArmZ = -0.06 - sway * 0.015;
+      tHeadY = sway * 0.05;
+      tLArmX = 0.06 + sway * 0.03;
+      tRArmX = 0.06 - sway * 0.03;
+      tLArmZ = -0.10 - sway * 0.015;
+      tRArmZ = 0.10 + sway * 0.015;
+      tLForeX = 0.22;
+      tRForeX = 0.22;
     } else if (state === 'WALK') {
       this.animPhase += dt * 7.6;
       const swing = Math.sin(this.animPhase);
       const absSwing = Math.abs(swing);
-      const legAmp = 0.58;
+      const legAmp = 0.56;
       tHipsY = 0.85 + absSwing * 0.038;
       tHipsX = swing * 0.018;
-      tHipsYaw = swing * 0.09;
-      tWaistYaw = -swing * 0.07;
-      tTorsoX = 0.06;
+      tHipsYaw = swing * 0.08;
+      tWaistYaw = -swing * 0.06;
+      tTorsoX = 0.05;
       tTorsoY = -swing * 0.08;
-      tTorsoZ = -swing * 0.05;
-      tHeadY = swing * 0.05;
+      tTorsoZ = -swing * 0.04;
+      tHeadY = swing * 0.04;
       tHeadX = -0.04;
       tLLegX = swing * legAmp;
       tRLegX = -swing * legAmp;
-      tLShinX = Math.max(0, -swing) * 0.72;
-      tRShinX = Math.max(0, swing) * 0.72;
-      tLFootX = -(tLLegX + tLShinX) * 0.58 + Math.max(0, -swing) * 0.22;
-      tRFootX = -(tRLegX + tRShinX) * 0.58 + Math.max(0, swing) * 0.22;
-      tLArmX = -swing * 0.46;
-      tRArmX = swing * 0.46;
-      tLArmZ = 0.08 + absSwing * 0.04;
-      tRArmZ = -0.08 - absSwing * 0.04;
-      tLForeX = -0.32 - Math.max(0, -swing) * 0.22;
-      tRForeX = -0.32 - Math.max(0, swing) * 0.22;
+      // Knees bend BACKWARD (negative X)
+      tLShinX = -Math.max(0, -swing) * 0.68;
+      tRShinX = -Math.max(0, swing) * 0.68;
+      tLFootX = -(tLLegX + tLShinX) * 0.45;
+      tRFootX = -(tRLegX + tRShinX) * 0.45;
+      tLArmX = -swing * 0.44;
+      tRArmX = swing * 0.44;
+      tLArmZ = -0.10 - absSwing * 0.03;
+      tRArmZ = 0.10 + absSwing * 0.03;
+      tLForeX = 0.30 + Math.max(0, -swing) * 0.24;
+      tRForeX = 0.30 + Math.max(0, swing) * 0.24;
     } else if (state === 'RUN' || state === 'FLEE') {
       const isFlee = state === 'FLEE';
       this.animPhase += dt * (isFlee ? 15.5 : 13.0);
       const swing = Math.sin(this.animPhase);
       const absSwing = Math.abs(swing);
-      const legAmp = isFlee ? 1.08 : 0.98;
-      tHipsY = 0.82 + absSwing * 0.085;
-      tHipsX = swing * 0.024;
-      tHipsYaw = swing * 0.16;
-      tWaistYaw = -swing * 0.13;
-      tTorsoX = isFlee ? 0.36 : 0.30;
-      tTorsoY = -swing * 0.16;
-      tTorsoZ = -swing * 0.08;
-      tHeadY = isFlee ? Math.sin(this.animPhase * 0.5) * 0.22 : swing * 0.10;
-      tHeadX = -0.16;
+      const legAmp = isFlee ? 1.04 : 0.94;
+      tHipsY = 0.82 + absSwing * 0.08;
+      tHipsX = swing * 0.022;
+      tHipsYaw = swing * 0.14;
+      tWaistYaw = -swing * 0.12;
+      tTorsoX = isFlee ? 0.32 : 0.26;
+      tTorsoY = -swing * 0.15;
+      tTorsoZ = -swing * 0.07;
+      tHeadY = isFlee ? Math.sin(this.animPhase * 0.5) * 0.22 : swing * 0.09;
+      tHeadX = -0.14;
       tLLegX = swing * legAmp;
       tRLegX = -swing * legAmp;
-      tLShinX = Math.max(0, -swing) * 1.15;
-      tRShinX = Math.max(0, swing) * 1.15;
-      tLFootX = -(tLLegX + tLShinX) * 0.52 + Math.max(0, -swing) * 0.30;
-      tRFootX = -(tRLegX + tRShinX) * 0.52 + Math.max(0, swing) * 0.30;
-      tLArmX = isFlee ? -1.50 + swing * 0.40 : -swing * 0.92;
-      tRArmX = isFlee ? -1.50 - swing * 0.40 : swing * 0.92;
-      tLArmZ = isFlee ? 0.34 : 0.20;
-      tRArmZ = isFlee ? -0.34 : -0.20;
-      tLForeX = isFlee ? -0.80 : -1.10;
-      tRForeX = isFlee ? -0.80 : -1.10;
+      tLShinX = -Math.max(0, -swing) * 1.15;
+      tRShinX = -Math.max(0, swing) * 1.15;
+      tLFootX = -(tLLegX + tLShinX) * 0.35;
+      tRFootX = -(tRLegX + tRShinX) * 0.35;
+      tLArmX = isFlee ? 1.55 + swing * 0.35 : -swing * 0.88;
+      tRArmX = isFlee ? 1.55 - swing * 0.35 : swing * 0.88;
+      tLArmZ = isFlee ? -0.32 : -0.18;
+      tRArmZ = isFlee ? 0.32 : 0.18;
+      tLForeX = isFlee ? 0.78 : 1.05;
+      tRForeX = isFlee ? 0.78 : 1.05;
     } else if (state === 'JUMP') {
       tHipsY = 0.88;
       tTorsoX = 0.10;
       tHeadX = -0.08;
-      tLArmX = -1.25;
-      tRArmX = -1.25;
-      tLArmZ = 0.30;
-      tRArmZ = -0.30;
-      tLForeX = -0.60;
-      tRForeX = -0.60;
-      tLLegX = 0.62;
-      tLShinX = 0.95;
-      tLFootX = -0.38;
-      tRLegX = -0.28;
-      tRShinX = 0.50;
-      tRFootX = 0.28;
+      tLArmX = 1.18;
+      tRArmX = 1.18;
+      tLArmZ = -0.28;
+      tRArmZ = 0.28;
+      tLForeX = 0.62;
+      tRForeX = 0.62;
+      tLLegX = 0.58;
+      tLShinX = -0.92;
+      tLFootX = 0.28;
+      tRLegX = -0.22;
+      tRShinX = -0.45;
+      tRFootX = -0.18;
     } else if (state === 'PUNCH') {
       this.animPhase += dt * 16.0;
       blendRate = 26;
       tHipsY = 0.80;
       if (this.comboStep === 2) {
-        tTorsoX = 0.08;
-        tTorsoY = 0.72;
-        tRLegX = 1.28;
-        tRShinX = 0.10;
-        tRFootX = -0.28;
-        tLArmZ = 0.70;
-        tRArmZ = -0.70;
-        tLArmX = -0.6;
-        tRArmX = -0.9;
+        // High front snap kick + counter balance
+        tTorsoX = -0.12;
+        tTorsoY = -0.58;
+        tRLegX = 1.32;
+        tRShinX = -0.12;
+        tRFootX = 0.22;
+        tLArmZ = -0.55;
+        tRArmZ = 0.55;
+        tLArmX = 0.55;
+        tRArmX = 0.85;
+        tLForeX = 0.85;
+        tRForeX = 0.85;
       } else if (this.comboStep === 1) {
-        tTorsoX = 0.18;
-        tTorsoY = 0.52;
-        tLArmX = -1.60;
-        tLForeX = -0.12;
-        tRArmX = -0.90;
-        tRForeX = -1.20;
-      } else {
+        // Left cross punch forward (-Z = positive arm X)
         tTorsoX = 0.18;
         tTorsoY = -0.52;
-        tRArmX = -1.60;
-        tRForeX = -0.12;
-        tLArmX = -0.90;
-        tLForeX = -1.20;
+        tLArmX = 1.62;
+        tLForeX = 0.10;
+        tLArmZ = -0.06;
+        tRArmX = 0.90;
+        tRForeX = 1.35;
+        tRArmZ = 0.12;
+      } else {
+        // Right jab punch forward (-Z = positive arm X)
+        tTorsoX = 0.18;
+        tTorsoY = 0.52;
+        tRArmX = 1.62;
+        tRForeX = 0.10;
+        tRArmZ = 0.06;
+        tLArmX = 0.90;
+        tLForeX = 1.35;
+        tLArmZ = -0.12;
       }
     } else if (state === 'HIT') {
       blendRate = 22;
       tHipsY = 0.80;
-      tTorsoX = -0.38;
-      tHeadX = -0.28;
-      tLArmX = -0.50;
-      tRArmX = -0.50;
-      tLArmZ = 0.48;
-      tRArmZ = -0.48;
-      tLForeX = -0.70;
-      tRForeX = -0.70;
+      tTorsoX = -0.36;
+      tHeadX = -0.26;
+      tLArmX = 0.45;
+      tRArmX = 0.45;
+      tLArmZ = -0.46;
+      tRArmZ = 0.46;
+      tLForeX = 0.70;
+      tRForeX = 0.70;
     } else if (state === 'KO') {
       blendRate = 7.0;
       tHipsY = 0.12;
       tHipsRotX = Math.PI * 0.50;
       tTorsoX = 0.05;
       tHeadX = -0.20;
-      tLArmX = -0.22;
-      tRArmX = -0.12;
-      tLArmZ = 0.55;
-      tRArmZ = -0.60;
-      tLForeX = -0.38;
-      tRForeX = -0.48;
+      tLArmX = 0.18;
+      tRArmX = 0.12;
+      tLArmZ = -0.48;
+      tRArmZ = 0.52;
+      tLForeX = 0.35;
+      tRForeX = 0.42;
       tLLegX = 0.04;
       tRLegX = -0.03;
-      tLShinX = 0.08;
-      tRShinX = 0.05;
+      tLShinX = -0.08;
+      tRShinX = -0.05;
     }
     const s = 1 - Math.exp(-blendRate * dt);
     this.hips.position.y += (tHipsY - this.hips.position.y) * s;

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { HumanCharacterMesh } from './HumanCharacterMesh';
+import { HumanCharacterMesh, mapReactionToEmote, type EmoteType } from './HumanCharacterMesh';
 import type { CharAnimState, CharacterAppearance } from '../network/LobbyProtocol';
 import {
   mapAnimStateToClip,
@@ -119,6 +119,12 @@ export class GLTFCharacterMesh {
   private stairDir: 'up' | 'down' = 'up';
   /** Raises the fists into a boxing guard while an opponent is close. */
   private combatStance = false;
+  private isSwimming = false;
+  private swimPhase = 0;
+  private punchComboStep = 0;
+  private activeEmote: EmoteType | null = null;
+  private emoteTimer = 0;
+  private emoteDuration = 2.6;
   private static statusListeners = new Set<(ready: boolean) => void>();
 
   /** Native sitting clips shipped inside the two rigs (no retargeting). */
@@ -353,11 +359,20 @@ export class GLTFCharacterMesh {
    * own world axes (right / up / back) instead of each rig's local bone axes,
    * so the male and female skeletons produce the same readable motion.
    */
+  public setSwimming(swimming: boolean): void {
+    this.isSwimming = swimming;
+  }
+
+  public setPunchCombo(step: number): void {
+    this.punchComboStep = ((step % 3) + 3) % 3;
+  }
+
   private applyCombatPose(dt: number, state: CharAnimState): void {
     const instance = this.instance;
     if (!instance) return;
     const isGuardIdle = this.combatStance && (state === 'IDLE' || state === 'WALK' || state === 'RUN');
-    const procedural = usesProceduralPose(state) || isGuardIdle;
+    const hasActiveEmote = this.activeEmote !== null && state === 'IDLE' && !this.combatStance && !this.isSwimming;
+    const procedural = usesProceduralPose(state) || isGuardIdle || hasActiveEmote || this.isSwimming;
     // A new punch/hit/KO starts at t=0 even when the guard stance was already
     // running; otherwise poseTime would already be past the end of the swing.
     if (state !== this.lastPoseState) {
@@ -394,12 +409,34 @@ export class GLTFCharacterMesh {
     };
 
     if (state === 'KO') {
-      const t = Math.min(1, this.poseTime / 0.6);
+      const t = Math.min(1, this.poseTime / 0.55);
       const settle = 1 - (1 - t) * (1 - t);
+      const collapse = t > 0.35 ? Math.min(1, (t - 0.35) / 0.65) : 0;
       const knockAxis = this.poseAxisX.set(1, 0, 0);
-      rotateLocal('hips', knockAxis, (this.model === 'male' ? 1.35 : 1.45) * settle);
-      rotateLocal('head', knockAxis, 0.22 * settle);
-      instance.group.position.y = (this.model === 'male' ? -0.02 : -0.42) * settle;
+      const twistAxis = this.poseAxisY.set(0, 1, 0);
+      const splayAxis = this.poseAxisZ.set(0, 0, 1);
+
+      // Keep topple strongly forward (-Z) while bending knees, slumping torso & splaying limbs naturally
+      rotateLocal('hips', knockAxis, (this.model === 'male' ? 1.42 : 1.50) * settle);
+      rotateLocal('hips', twistAxis, 0.14 * collapse);
+      rotateLocal('spine', knockAxis, 0.24 * settle);
+      rotateLocal('chest', knockAxis, 0.18 * settle);
+      rotateLocal('head', knockAxis, 0.25 * settle);
+      rotateLocal('head', twistAxis, -0.28 * collapse);
+
+      rotateLocal('upperLegL', knockAxis, -0.45 * settle);
+      rotateLocal('upperLegR', knockAxis, -0.22 * settle);
+      rotateLocal('lowerLegL', knockAxis, 0.72 * settle);
+      rotateLocal('lowerLegR', knockAxis, 0.42 * settle);
+
+      rotateLocal('upperArmL', knockAxis, -0.65 * settle);
+      rotateLocal('upperArmL', splayAxis, -0.58 * collapse);
+      rotateLocal('lowerArmL', knockAxis, 0.55 * collapse);
+      rotateLocal('upperArmR', knockAxis, -0.82 * settle);
+      rotateLocal('upperArmR', splayAxis, 0.64 * collapse);
+      rotateLocal('lowerArmR', knockAxis, 0.48 * collapse);
+
+      instance.group.position.y = (this.model === 'male' ? -0.18 : -0.54) * settle;
       return;
     }
 
@@ -449,30 +486,149 @@ export class GLTFCharacterMesh {
 
     // Torso first: shoulders/elbows are children of the chest, so rotating it
     // afterwards would drag the already-posed arms into the wrong plane.
+    if (hasActiveEmote && this.activeEmote) {
+      const p = THREE.MathUtils.clamp(1 - this.emoteTimer / Math.max(0.1, this.emoteDuration), 0, 1);
+      const env = smooth(p / 0.14) * smooth((1 - p) / 0.18);
+      const pulse = Math.sin(p * Math.PI * 6);
+      const wave = Math.sin(p * Math.PI * 8);
+      const emote = this.activeEmote;
+
+      if (emote === 'VICTORY') {
+        rotateWorld('hips', axisY, 0.12 * env);
+        rotateWorld('chest', axisX, -0.08 * env);
+        rotateWorld('head', axisX, -0.14 * env);
+        rotateWorld('upperArmR', axisX, (2.42 + pulse * 0.20) * env);
+        rotateWorld('upperArmR', axisZ, 0.26 * env);
+        rotateWorld('lowerArmR', axisX, 0.28 * env);
+        rotateWorld('upperArmL', axisX, 0.42 * env);
+        rotateWorld('upperArmL', axisZ, -0.24 * env);
+        rotateWorld('lowerArmL', axisX, 1.15 * env);
+        instance.group.position.y = Math.abs(pulse) * 0.045 * env;
+      } else if (emote === 'GROOVE') {
+        rotateWorld('hips', axisY, pulse * 0.20 * env);
+        rotateWorld('chest', axisY, -pulse * 0.18 * env);
+        rotateWorld('chest', axisZ, -wave * 0.08 * env);
+        rotateWorld('head', axisY, wave * 0.15 * env);
+        rotateWorld('upperArmL', axisX, (0.85 + pulse * 0.32) * env);
+        rotateWorld('upperArmR', axisX, (0.85 - pulse * 0.32) * env);
+        rotateWorld('upperArmL', axisZ, -0.30 * env);
+        rotateWorld('upperArmR', axisZ, 0.30 * env);
+        rotateWorld('lowerArmL', axisX, (1.22 + wave * 0.25) * env);
+        rotateWorld('lowerArmR', axisX, (1.22 - wave * 0.25) * env);
+        instance.group.position.y = Math.abs(pulse) * 0.04 * env;
+      } else if (emote === 'WAVE') {
+        rotateWorld('chest', axisZ, -0.06 * env);
+        rotateWorld('head', axisY, -0.14 * env);
+        rotateWorld('upperArmR', axisX, 1.98 * env);
+        rotateWorld('upperArmR', axisZ, (0.44 + wave * 0.24) * env);
+        rotateWorld('lowerArmR', axisX, (0.42 + wave * 0.32) * env);
+        rotateWorld('upperArmL', axisZ, -0.12 * env);
+        rotateWorld('lowerArmL', axisX, 0.25 * env);
+        instance.group.position.y = 0;
+      } else if (emote === 'CHILL') {
+        rotateWorld('chest', axisX, -0.06 * env);
+        rotateWorld('chest', axisZ, 0.04 * env);
+        rotateWorld('head', axisY, 0.18 * env);
+        rotateWorld('upperArmL', axisX, 0.58 * env);
+        rotateWorld('upperArmR', axisX, 0.58 * env);
+        rotateWorld('upperArmL', axisZ, 0.22 * env);
+        rotateWorld('upperArmR', axisZ, -0.22 * env);
+        rotateWorld('lowerArmL', axisX, 1.35 * env);
+        rotateWorld('lowerArmR', axisX, 1.35 * env);
+        rotateWorld('lowerArmL', axisY, 0.35 * env);
+        rotateWorld('lowerArmR', axisY, -0.35 * env);
+        instance.group.position.y = 0;
+      } else if (emote === 'SALUTE') {
+        rotateWorld('chest', axisX, 0.04 * env);
+        rotateWorld('head', axisX, (0.06 + Math.sin(p * Math.PI * 2) * 0.06) * env);
+        rotateWorld('upperArmR', axisX, 1.28 * env);
+        rotateWorld('upperArmR', axisZ, 0.18 * env);
+        rotateWorld('lowerArmR', axisX, 1.62 * env);
+        rotateWorld('upperArmL', axisZ, -0.08 * env);
+        rotateWorld('lowerArmL', axisX, 0.22 * env);
+        instance.group.position.y = 0;
+      } else if (emote === 'TAUNT') {
+        rotateWorld('hips', axisY, -0.30 * env);
+        rotateWorld('chest', axisY, 0.22 * env);
+        rotateWorld('chest', axisX, 0.10 * env);
+        rotateWorld('head', axisY, 0.14 * env);
+        rotateWorld('upperArmL', axisX, (1.15 + pulse * 0.15) * env);
+        rotateWorld('upperArmR', axisX, (1.25 - pulse * 0.15) * env);
+        rotateWorld('upperArmL', axisZ, -0.18 * env);
+        rotateWorld('upperArmR', axisZ, 0.18 * env);
+        rotateWorld('lowerArmL', axisX, 1.45 * env);
+        rotateWorld('lowerArmR', axisX, 1.45 * env);
+        instance.group.position.y = Math.abs(pulse) * 0.025 * env;
+      }
+      return;
+    }
+
+    if (this.isSwimming) {
+      this.swimPhase += dt * (state === 'RUN' ? 7.5 : 3.2);
+      const stroke = Math.sin(this.swimPhase);
+      const pitch = state === 'RUN' ? 0.62 : 0.18;
+      rotateWorld('hips', axisX, pitch);
+      rotateWorld('head', axisX, -pitch * 0.65);
+      rotateWorld('upperArmL', axisX, 1.3 + stroke * 0.95);
+      rotateWorld('upperArmR', axisX, 1.3 - stroke * 0.95);
+      rotateWorld('upperArmL', axisZ, -0.35);
+      rotateWorld('upperArmR', axisZ, 0.35);
+      rotateWorld('lowerArmL', axisX, 0.45 + Math.max(0, -stroke) * 0.6);
+      rotateWorld('lowerArmR', axisX, 0.45 + Math.max(0, stroke) * 0.6);
+      rotateWorld('upperLegL', axisX, -stroke * 0.35);
+      rotateWorld('upperLegR', axisX, stroke * 0.35);
+      instance.group.position.y = Math.sin(this.swimPhase * 2) * 0.04;
+      return;
+    }
+
     rotateWorld('chest', axisX, 0.05);
     rotateWorld('chest', axisY, -0.05);
 
     if (state === 'PUNCH') {
-      // t: 0..1 over the 0.34s punch. Load the rear shoulder, snap the right
-      // cross through the target line, then recoil back to the guard.
-      const t = Math.min(1, this.poseTime / 0.34);
-      const windup = smooth(t / 0.26) * (1 - smooth((t - 0.16) / 0.18));
-      const extend = smooth((t - 0.2) / 0.18) * (1 - smooth((t - 0.62) / 0.38));
+      const t = Math.min(1, this.poseTime / 0.28);
+      const windup = smooth(t / 0.24) * (1 - smooth((t - 0.14) / 0.18));
+      const extend = smooth((t - 0.18) / 0.18) * (1 - smooth((t - 0.62) / 0.38));
 
-      rotateWorld('hips', axisY, -0.1 * windup + 0.18 * extend);
-      rotateWorld('chest', axisY, -0.28 * windup + 0.42 * extend);
-      rotateWorld('head', axisY, 0.08 * windup - 0.1 * extend);
-      rotateWorld('chest', axisX, 0.1 * extend);
+      if (this.punchComboStep === 1) {
+        // Combo 2: snappy Left Jab / Hook (lead hand shoots forward)
+        rotateWorld('hips', axisY, 0.08 * windup - 0.20 * extend);
+        rotateWorld('chest', axisY, 0.22 * windup - 0.36 * extend);
+        rotateWorld('head', axisY, -0.06 * windup + 0.08 * extend);
+        rotateWorld('upperArmL', axisZ, 0.14);
+        rotateWorld('upperArmL', axisX, 0.62 - 0.15 * windup + 1.05 * extend);
+        rotateWorld('upperArmL', axisY, -0.18 * extend);
+        rotateWorld('lowerArmL', axisX, 1.65 + 0.1 * windup - 1.55 * extend);
+        rotateWorld('upperArmR', axisZ, -0.16);
+        rotateWorld('upperArmR', axisX, 0.58);
+        rotateWorld('lowerArmR', axisX, 1.65);
+      } else if (this.punchComboStep === 2) {
+        // Combo 3: explosive Right Uppercut finisher
+        rotateWorld('hips', axisY, -0.16 * windup + 0.28 * extend);
+        rotateWorld('chest', axisY, -0.34 * windup + 0.50 * extend);
+        rotateWorld('chest', axisX, 0.14 * windup - 0.18 * extend);
+        rotateWorld('head', axisX, -0.14 * extend);
+        rotateWorld('upperArmR', axisZ, -0.22);
+        rotateWorld('upperArmR', axisX, 0.35 - 0.28 * windup + 1.55 * extend);
+        rotateWorld('lowerArmR', axisX, 1.65 - 0.85 * extend);
+        rotateWorld('upperArmL', axisZ, 0.18);
+        rotateWorld('upperArmL', axisX, 0.66);
+        rotateWorld('lowerArmL', axisX, 1.75);
+      } else {
+        // Combo 1 (default): clean Right Cross driving handR straight forward (-Z)
+        rotateWorld('hips', axisY, -0.1 * windup + 0.18 * extend);
+        rotateWorld('chest', axisY, -0.28 * windup + 0.42 * extend);
+        rotateWorld('head', axisY, 0.08 * windup - 0.1 * extend);
+        rotateWorld('chest', axisX, 0.1 * extend);
 
-      // Rear (right) arm: shoulder into the punch line, elbow straightens.
-      rotateWorld('upperArmR', axisZ, -0.16);
-      rotateWorld('upperArmR', axisX, 0.55 - 0.18 * windup + 1.0 * extend);
-      rotateWorld('upperArmR', axisY, 0.18 * extend);
-      rotateWorld('lowerArmR', axisX, 1.55 + 0.1 * windup - 1.5 * extend);
-      // Lead (left) hand holds the guard near the chin.
-      rotateWorld('upperArmL', axisZ, 0.16);
-      rotateWorld('upperArmL', axisX, 0.62);
-      rotateWorld('lowerArmL', axisX, 1.7 + 0.08 * extend);
+        rotateWorld('upperArmR', axisZ, -0.16);
+        rotateWorld('upperArmR', axisX, 0.55 - 0.18 * windup + 1.0 * extend);
+        rotateWorld('upperArmR', axisY, 0.18 * extend);
+        rotateWorld('lowerArmR', axisX, 1.55 + 0.1 * windup - 1.5 * extend);
+
+        rotateWorld('upperArmL', axisZ, 0.16);
+        rotateWorld('upperArmL', axisX, 0.62);
+        rotateWorld('lowerArmL', axisX, 1.7 + 0.08 * extend);
+      }
     } else {
       // Both fists up in an orthodox guard: elbows down, forearms vertical.
       rotateWorld('upperArmR', axisZ, -0.16);
@@ -568,6 +724,13 @@ export class GLTFCharacterMesh {
   public updateAnimation(dt: number, state: CharAnimState): void {
     if (this.disposed) return;
     this.desiredState = state;
+    if (state !== 'IDLE' || this.sitPhase) {
+      this.activeEmote = null;
+      this.emoteTimer = 0;
+    } else if (this.emoteTimer > 0) {
+      this.emoteTimer -= dt;
+      if (this.emoteTimer <= 0) this.activeEmote = null;
+    }
     if (this.fallback) {
       this.fallback.updateAnimation(dt, state);
       return;
@@ -723,12 +886,31 @@ export class GLTFCharacterMesh {
     this.showSprite(text, '#f8fafc', 2.6, 2.5);
   }
 
+  public triggerEmote(emote: EmoteType, duration = 2.6): void {
+    if (this.fallback) {
+      this.fallback.triggerEmote(emote, duration);
+      return;
+    }
+    this.activeEmote = emote;
+    this.emoteDuration = duration;
+    this.emoteTimer = duration;
+    const fxColors: Record<EmoteType, string> = {
+      GROOVE: '#a855f7',
+      WAVE: '#38bdf8',
+      CHILL: '#94a3b8',
+      SALUTE: '#4ade80',
+      TAUNT: '#f97316',
+      VICTORY: '#facc15'
+    };
+    this.showSprite(emote, fxColors[emote], 1.15, 2.38);
+  }
+
   public triggerEmoji(emoji: string): void {
     if (this.fallback) {
       this.fallback.triggerEmoji(emoji);
       return;
     }
-    this.showSprite(emoji, '#facc15', 1.6, 2.7);
+    this.triggerEmote(mapReactionToEmote(emoji), 2.5);
   }
 
   public triggerPunchVisual(): void {

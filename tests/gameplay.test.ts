@@ -111,6 +111,8 @@ import { PedestrianSystem } from '../src/ai/PedestrianSystem';
 import { SparringFighter, CityCruiserBot } from '../src/ai/RaceBotAI';
 import { WorldActivities, type CourierContractDef } from '../src/game/WorldActivities';
 import { CarMesh } from '../src/graphics/CarMesh';
+import { HumanCharacterMesh } from '../src/graphics/HumanCharacterMesh';
+import { ParticleSystem } from '../src/graphics/ParticleSystem';
 import { mapAnimStateToClip, modelForCharacter, modelUrlFor } from '../src/graphics/CharacterAnimationMap';
 import { GLTFCharacterMesh } from '../src/graphics/GLTFCharacterMesh';
 import { lanLobbyPlugin } from '../server/lanLobbyPlugin';
@@ -1782,4 +1784,107 @@ test('AI cars use ocean ground and recover from splashdowns like the player', ()
     assert.match(src, /isOverOpenWater\(x, z\)/);
     assert.match(src, /shouldRecoverFromWater\(/);
   }
+});
+
+test('HumanCharacterMesh 3D emote engine, joint sign anatomy & ParticleSystem soft smoke sprites', () => {
+  const char = new HumanCharacterMesh('kaito', 'Kaito_01');
+  const rig = char as unknown as {
+    leftArm: THREE.Group;
+    rightArm: THREE.Group;
+    leftForearm: THREE.Group;
+    rightForearm: THREE.Group;
+    leftShin: THREE.Group;
+    rightShin: THREE.Group;
+    activeEmote: string | null;
+  };
+
+  // IDLE pose: outward arm hang (left <= 0, right >= 0) & forward elbow flex (> 0)
+  for (let i = 0; i < 30; i++) char.updateAnimation(1 / 60, 'IDLE');
+  assert.ok(rig.leftArm.rotation.z < 0, `Expected outward leftArm.z < 0, got ${rig.leftArm.rotation.z}`);
+  assert.ok(rig.rightArm.rotation.z > 0, `Expected outward rightArm.z > 0, got ${rig.rightArm.rotation.z}`);
+  assert.ok(rig.leftForearm.rotation.x > 0, `Expected forward forearm flex > 0, got ${rig.leftForearm.rotation.x}`);
+
+  // Emote VICTORY: raises right arm skyward & triggers activeEmote
+  char.triggerEmote('VICTORY', 2.0);
+  assert.equal(rig.activeEmote, 'VICTORY');
+  for (let i = 0; i < 20; i++) char.updateAnimation(1 / 60, 'IDLE');
+  assert.ok(rig.rightArm.rotation.x > 1.2, `Expected VICTORY raised right arm x > 1.2, got ${rig.rightArm.rotation.x}`);
+
+  // Running immediately cancels emote and bends knees backward (<= 0)
+  for (let i = 0; i < 25; i++) char.updateAnimation(1 / 60, 'RUN');
+  assert.equal(rig.activeEmote, null);
+  assert.ok(rig.leftShin.rotation.x <= 0.01 && rig.rightShin.rotation.x <= 0.01);
+
+  // Soft sprite particle pool check (no dodecahedron smoke blobs)
+  const scene = new THREE.Scene();
+  const particles = new ParticleSystem(scene);
+  particles.emitSmoke(new THREE.Vector3(0, 0, 0), new THREE.Vector3(4, 0, 0), false, 1);
+  const pool = (particles as unknown as { particlePool: { sprite: THREE.Sprite }[] }).particlePool;
+  assert.equal(pool.length, 120);
+  assert.equal(pool[0].sprite.isSprite, true);
+  assert.equal(pool[0].sprite.visible, true);
+
+  char.dispose();
+});
+
+test('OpenWorldMap & TrackEnvironment: enterable Drift Garage, Neo Ramen, Zenith 50m Rooftop, flat city & deep lake', () => {
+  const scene = new THREE.Scene();
+  const track = new TrackEnvironment(scene);
+  const map = new OpenWorldMap(scene);
+
+  // 1. Track Lake is genuinely submerged below water surface (-1.2), not y = 0 thin air
+  assert.ok(track.isOverLakeWater(-165, -20));
+  assert.ok(track.sampleGround(-165, -20).height < -2.0, 'lake center must submerge below -1.2 water');
+
+  // 2. All 4 landmark interiors register walkable floors + Zenith rooftop at y = 50
+  assert.ok(map.interiorFloors.length >= 4, 'ANIME CAFE, DRIFT GARAGE, NEO RAMEN & ZENITH LOBBY must be enterable');
+  assert.equal(map.sampleInteriorHeight(84, -5, 0), 0, 'DRIFT GARAGE interior bay must be walkable');
+  assert.equal(map.sampleInteriorHeight(260, -100, 0), 0, 'NEO RAMEN interior must be walkable');
+  assert.equal(map.sampleInteriorHeight(260, -5, 0), 0, 'ZENITH CORP lobby must be walkable');
+  assert.equal(map.sampleInteriorHeight(260, -5, 50), 50, 'ZENITH CORP rooftop must support y=50 sky deck');
+
+  // 3. Interactables & hidden collectibles give real purpose to [E / USE] and exploration
+  const types = new Set(map.interactables.map((i) => i.type));
+  for (const req of ['GARAGE_TUNE', 'EAT_RAMEN', 'ESPRESSO', 'ARCADE', 'ELEVATOR_UP', 'ELEVATOR_DOWN', 'HACK_TERMINAL', 'ROOFTOP_GLIDE', 'VENDING'] as const) {
+    assert.ok(types.has(req), `expected interactable type ${req}`);
+  }
+  assert.ok(map.collectibles.length >= 8, 'city & rooftops must contain hidden cash stashes');
+
+  // 4. Garage entrance bay (z = 9, x = 84) is wide open for driving in
+  const bayPos = new THREE.Vector3(84, 0, 9);
+  assert.equal(map.resolveCollision(bayPos, new THREE.Vector3(0, 0, -5), 1.4), false, 'Drift Garage bay doorway must let cars drive in');
+});
+
+test('CharacterController: swims in deep water, executes 3-hit boxing combo & dodge-dash', () => {
+  const char = new CharacterController();
+  let splashes = 0;
+  let dashes = 0;
+  char.groundHeightSampler = (x) => (x > 50 ? -2.5 : 0);
+  char.waterSurfaceSampler = (x) => (x > 50 ? -0.8 : null);
+  char.onSplash = () => { splashes++; };
+  char.onDash = () => { dashes++; };
+  char.resetAt(new THREE.Vector3(60, -0.5, 0), 0);
+
+  for (let i = 0; i < 45; i++) {
+    char.update(1 / 60, { moveX: 0, moveY: 0, sprint: false, jump: false, punch: false }, 0);
+  }
+  assert.equal(char.isSwimming, true, 'deep water must switch character into swimming state');
+  assert.ok(splashes >= 1, 'entering deep water should emit splash event');
+  assert.ok(char.position.y > -2.2 && char.position.y < -1.2, `character must float near water surface, got y=${char.position.y}`);
+
+  // Dry land: 3-hit boxing combo cycles 0 -> 1 -> 2 & dash spends stamina
+  char.resetAt(new THREE.Vector3(0, 0, 0), 0);
+  const steps: number[] = [];
+  for (let hit = 0; hit < 3; hit++) {
+    for (let f = 0; f < 22; f++) {
+      char.update(1 / 60, { moveX: 0, moveY: 0, sprint: false, jump: false, punch: f === 0 }, 0);
+    }
+    steps.push(char.comboStep);
+  }
+  assert.deepEqual(steps, [0, 1, 2], 'boxing punches must chain 3-hit combo');
+
+  char.update(1 / 60, { moveX: 0, moveY: 1, sprint: false, jump: false, punch: false, dash: true }, 0);
+  assert.equal(dashes, 1);
+  assert.equal(char.isDashing, true);
+  assert.ok(char.stamina < 100);
 });

@@ -43,9 +43,15 @@ export class FloatingJoystick {
       this.activePointerId = e.pointerId;
       this.zoneEl.setPointerCapture(e.pointerId);
 
+      // Anchor dynamically where the thumb landed (clamped smoothly inside the zone)
       const rect = this.zoneEl.getBoundingClientRect();
-      this.centerX = rect.left + rect.width * 0.5;
-      this.centerY = rect.top + rect.height * 0.5;
+      const zoneCx = rect.left + rect.width * 0.5;
+      const zoneCy = rect.top + rect.height * 0.5;
+      const offX = Math.max(-10, Math.min(10, e.clientX - zoneCx));
+      const offY = Math.max(-10, Math.min(10, e.clientY - zoneCy));
+      this.centerX = zoneCx + offX;
+      this.centerY = zoneCy + offY;
+      this.baseEl.style.transform = `translate(${offX}px, ${offY}px)`;
       this.updateFromPoint(e.clientX, e.clientY);
     });
 
@@ -99,6 +105,7 @@ export class FloatingJoystick {
     this.value.sprint = false;
     this.value.active = false;
     this.knobEl.style.transform = 'translate(0px, 0px)';
+    this.baseEl.style.transform = 'translate(0px, 0px)';
     this.baseEl.classList.remove('sprinting');
   }
 

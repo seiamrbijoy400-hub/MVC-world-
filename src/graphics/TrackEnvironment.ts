@@ -344,31 +344,195 @@ export class TrackEnvironment {
     this.curbsMesh = new THREE.Mesh(curbGeo, curbMat);
     this.curbsMesh.receiveShadow = true;
     this.scene.add(this.curbsMesh);
+
+    // Crushed gravel runoff traps on outer corners (avoids east city straight)
+    const gravelVerts: number[] = [];
+    const gravelNorms: number[] = [];
+    const gravelUVs: number[] = [];
+    const gravelIdx: number[] = [];
+    const gravelW = 6.2;
+    let gCount = 0;
+
+    for (let i = 0; i < segments; i++) {
+      const pt = this.trackPoints[i];
+      const nextPt = this.trackPoints[(i + 1) % segments];
+      const t0 = this.trackTangents[i];
+      const t1 = this.trackTangents[(i + 1) % segments];
+      const r0 = new THREE.Vector3().crossVectors(t0, new THREE.Vector3(0, 1, 0)).normalize();
+      const r1 = new THREE.Vector3().crossVectors(t1, new THREE.Vector3(0, 1, 0)).normalize();
+
+      // Skip GP east straight near Metro City connectors
+      if (pt.x > -24 && pt.z > -195 && pt.z < 75) continue;
+
+      // Outer side of left-hand circuit is -right when driving forward around CCW loop?
+      // Place gravel on Turn 1/2, Back Sweeper, Chicane, and Hairpin outside perimeter
+      const inCorner =
+        (i >= 32 && i <= 145) ||
+        (i >= 185 && i <= 295) ||
+        (i >= 325 && i <= 430);
+      if (!inCorner) continue;
+
+      const side = (i >= 220 && i <= 265) ? 1 : -1;
+      const inner0 = pt.clone().addScaledVector(r0, side * (halfW + curbW - 0.1));
+      const outer0 = pt.clone().addScaledVector(r0, side * (halfW + curbW + gravelW));
+      const inner1 = nextPt.clone().addScaledVector(r1, side * (halfW + curbW - 0.1));
+      const outer1 = nextPt.clone().addScaledVector(r1, side * (halfW + curbW + gravelW));
+
+      const base = gCount * 4;
+      gravelVerts.push(
+        inner0.x, inner0.y + 0.015, inner0.z,
+        outer0.x, outer0.y - 0.04, outer0.z,
+        inner1.x, inner1.y + 0.015, inner1.z,
+        outer1.x, outer1.y - 0.04, outer1.z
+      );
+      gravelNorms.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+      gravelUVs.push(0, i * 0.6, 1, i * 0.6, 0, (i + 1) * 0.6, 1, (i + 1) * 0.6);
+      gravelIdx.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+      gCount++;
+    }
+
+    if (gCount > 0) {
+      const gravelGeo = new THREE.BufferGeometry();
+      gravelGeo.setAttribute('position', new THREE.Float32BufferAttribute(gravelVerts, 3));
+      gravelGeo.setAttribute('normal', new THREE.Float32BufferAttribute(gravelNorms, 3));
+      gravelGeo.setAttribute('uv', new THREE.Float32BufferAttribute(gravelUVs, 2));
+      gravelGeo.setIndex(gravelIdx);
+      const gravelMat = new THREE.MeshStandardMaterial({
+        map: this.createGravelTexture(),
+        roughness: 0.96,
+        metalness: 0.02
+      });
+      const gravelMesh = new THREE.Mesh(gravelGeo, gravelMat);
+      gravelMesh.receiveShadow = true;
+      this.scene.add(gravelMesh);
+    }
+
+    // Seamless asphalt connector pads linking GP East straight to Metro City roads
+    const connMat = new THREE.MeshStandardMaterial({ color: 0x24272f, roughness: 0.82, metalness: 0.08 });
+    for (const cz of [-160, -40, 30]) {
+      const connGeo = new THREE.PlaneGeometry(24, 16);
+      connGeo.rotateX(-Math.PI * 0.5);
+      const connMesh = new THREE.Mesh(connGeo, connMat);
+      connMesh.position.set(1, 0.018, cz);
+      connMesh.receiveShadow = true;
+      this.scene.add(connMesh);
+    }
+  }
+
+  private createGravelTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 256;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#5f6368';
+    ctx.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 6500; i++) {
+      const v = 72 + Math.floor(Math.random() * 64);
+      ctx.fillStyle = `rgb(${v + 4},${v + 2},${v - 2})`;
+      ctx.fillRect(Math.random() * 254, Math.random() * 254, 2 + Math.random() * 2, 2 + Math.random() * 2);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  private createSkylineTextures(): { map: THREE.CanvasTexture; emissiveMap: THREE.CanvasTexture } {
+    const diff = document.createElement('canvas');
+    diff.width = 128;
+    diff.height = 256;
+    const dCtx = diff.getContext('2d')!;
+    const grad = dCtx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, '#0f172a');
+    grad.addColorStop(0.5, '#0b1220');
+    grad.addColorStop(1, '#070b14');
+    dCtx.fillStyle = grad;
+    dCtx.fillRect(0, 0, 128, 256);
+
+    const em = document.createElement('canvas');
+    em.width = 128;
+    em.height = 256;
+    const eCtx = em.getContext('2d')!;
+    eCtx.fillStyle = '#000000';
+    eCtx.fillRect(0, 0, 128, 256);
+
+    for (let y = 18; y < 228; y += 10) {
+      const fade = 1 - Math.abs((y - 115) / 130);
+      for (let x = 10; x < 118; x += 10) {
+        const hash = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+        const r = hash - Math.floor(hash);
+        if (r > 0.62 - fade * 0.18) {
+          const warm = r > 0.78;
+          dCtx.fillStyle = warm ? '#334155' : '#1e293b';
+          dCtx.fillRect(x, y, 6, 5);
+          eCtx.fillStyle = warm ? 'rgba(251, 191, 36, 0.78)' : 'rgba(56, 189, 248, 0.62)';
+          eCtx.fillRect(x, y, 6, 5);
+        }
+      }
+    }
+
+    const map = new THREE.CanvasTexture(diff);
+    const emissiveMap = new THREE.CanvasTexture(em);
+    return { map, emissiveMap };
   }
 
   private createLakeAndTerrain(): void {
-    const terrainGeo = new THREE.PlaneGeometry(1400, 1400, 80, 80);
+    const terrainGeo = new THREE.PlaneGeometry(1400, 1400, 96, 96);
     terrainGeo.rotateX(-Math.PI * 0.5);
 
     const posAttr = terrainGeo.attributes.position;
+    const colors = new Float32Array(posAttr.count * 3);
+    const tmpCol = new THREE.Color();
+    const valleyCol = new THREE.Color(0x96b38a);
+    const midCol = new THREE.Color(0x7d8f69);
+    const ridgeCol = new THREE.Color(0x5a6470);
+    const lakeBedCol = new THREE.Color(0x3a4d3f);
+
     for (let i = 0; i < posAttr.count; i++) {
       const vx = posAttr.getX(i);
       const vz = posAttr.getZ(i);
       const distFromLake = Math.hypot(vx + 165, vz + 20);
 
       let height = -0.18; // Sit safely just beneath road elevation
-      if (vx < -385 || vx > 265 || vz < -350 || vz > 285) {
-        // Mountains outside the open-world perimeter zone
-        height = 18 + Math.abs(Math.sin(vx * 0.02) * Math.cos(vz * 0.02)) * 45;
-      } else if (distFromLake < 82) {
+      if (distFromLake < 82) {
         height = -4.5;
+        tmpCol.copy(lakeBedCol);
+      } else {
+        // Keep the entire playable City, Mountain Touge (z = -340..-252),
+        // GP Circuit, and Harbor Ocean/Pier (x >= -15, z = 268..380) completely flat.
+        // Hills only rise OUTSIDE those playable footprints along the outer horizon!
+        const westMargin = Math.max(0, -372 - vx);
+        const northMargin = vx > 20 ? Math.max(0, -372 - vz) : Math.max(0, -356 - vz);
+        const southMargin = vx > -20 ? Math.max(0, vz - 405) : Math.max(0, vz - 285);
+        const edgeDist = Math.max(westMargin, northMargin, southMargin);
+        if (edgeDist > 0) {
+          const ramp = Math.min(1, edgeDist / 135);
+          const smoothRamp = ramp * ramp * (3 - 2 * ramp);
+          const ridge =
+            26 +
+            Math.sin(vx * 0.015) * Math.cos(vz * 0.017) * 18 +
+            Math.abs(Math.sin(vx * 0.008 + vz * 0.009)) * 24;
+          height = -0.18 + smoothRamp * ridge;
+        }
+        const hNorm = Math.min(1, Math.max(0, height / 34));
+        if (hNorm < 0.45) {
+          tmpCol.copy(valleyCol).lerp(midCol, hNorm / 0.45);
+        } else {
+          tmpCol.copy(midCol).lerp(ridgeCol, (hNorm - 0.45) / 0.55);
+        }
       }
       posAttr.setY(i, height);
+      colors[i * 3] = tmpCol.r;
+      colors[i * 3 + 1] = tmpCol.g;
+      colors[i * 3 + 2] = tmpCol.b;
     }
+    terrainGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     terrainGeo.computeVertexNormals();
 
     const terrainMat = new THREE.MeshStandardMaterial({
       map: this.createGrassTexture(),
+      vertexColors: true,
       roughness: 0.92,
       metalness: 0.02
     });
@@ -385,31 +549,86 @@ export class TrackEnvironment {
     this.waterMesh.position.set(-165, -1.2, -20);
     this.scene.add(this.waterMesh);
 
-    // Instanced Mountain Rock Formations (1 draw call!)
-    const rockGeo = new THREE.DodecahedronGeometry(14, 1);
-    const rockMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.95 });
-    const rockCount = 34;
-    const rockInst = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
+    // Distant Atmospheric Horizon Skyline Silhouettes (grounds the city in a metropolis!)
+    const skylineGeo = new THREE.BoxGeometry(1, 1, 1);
+    skylineGeo.translate(0, 0.5, 0);
+    const skyTex = this.createSkylineTextures();
+    const skylineMat = new THREE.MeshStandardMaterial({
+      color: 0x101828,
+      map: skyTex.map,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: skyTex.emissiveMap,
+      emissiveIntensity: 0.55,
+      roughness: 0.96,
+      metalness: 0.04
+    });
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+    const skylineTransforms: THREE.Matrix4[] = [];
+    const beaconTransforms: THREE.Matrix4[] = [];
     const dummy = new THREE.Object3D();
-    for (let r = 0; r < rockCount; r++) {
-      const angle = (r / rockCount) * Math.PI * 2;
-      const rad = 390 + Math.random() * 110;
-      dummy.position.set(Math.cos(angle) * rad - 130, Math.random() * 14 + 12, Math.sin(angle) * rad);
-      dummy.scale.set(1.2 + Math.random() * 2.5, 1.8 + Math.random() * 3.2, 1.2 + Math.random() * 2.5);
-      dummy.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
-      dummy.updateMatrix();
-      rockInst.setMatrixAt(r, dummy.matrix);
-    }
-    rockInst.instanceMatrix.needsUpdate = true;
-    this.sceneryGroup.add(rockInst);
 
-    // Instanced Pine Trees outside barriers (2 draw calls total for 150 trees!)
-    const trunkGeo = new THREE.CylinderGeometry(0.3, 0.45, 3.8, 6);
-    trunkGeo.translate(0, 1.9, 0);
-    const foliageGeo = new THREE.ConeGeometry(2.5, 6.8, 7);
-    foliageGeo.translate(0, 5.6, 0);
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x543d2b, roughness: 0.9 });
-    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x1b4332, roughness: 0.82 });
+    for (let s = 0; s < 56; s++) {
+      const ang = (s / 56) * Math.PI * 2;
+      // Leave open ocean vista toward Harbor East (-0.45..+0.45 rad around +X)
+      if (Math.cos(ang) > 0.72) continue;
+      const rad = 465 + (s % 4) * 32;
+      const sx = Math.cos(ang) * rad - 40;
+      const sz = Math.sin(ang) * rad;
+      // Never place background skyline silhouettes inside playable city, Touge or Harbor bounds
+      if (sx > -390 && sx < 385 && sz > -385 && sz < 375) continue;
+      const baseH = 62 + ((s * 37) % 68); // anchored at y=-24 so top hits 38..106 cleanly inside hills
+      const w = 18 + ((s * 13) % 18);
+      const d = 18 + ((s * 19) % 18);
+      dummy.position.set(sx, -24, sz);
+      dummy.scale.set(w, baseH, d);
+      dummy.rotation.set(0, ang + 0.3, 0);
+      dummy.updateMatrix();
+      skylineTransforms.push(dummy.matrix.clone());
+
+      // Stepped architectural crown on taller skyline towers
+      let topY = -24 + baseH;
+      if (s % 2 === 0) {
+        const crownH = 12 + ((s * 11) % 14);
+        dummy.position.set(sx, topY, sz);
+        dummy.scale.set(w * 0.64, crownH, d * 0.64);
+        dummy.updateMatrix();
+        skylineTransforms.push(dummy.matrix.clone());
+        topY += crownH;
+      }
+
+      if (s % 3 === 0) {
+        dummy.position.set(sx, topY + 0.6, sz);
+        dummy.scale.set(1.6, 1.2, 1.6);
+        dummy.updateMatrix();
+        beaconTransforms.push(dummy.matrix.clone());
+      }
+    }
+    if (skylineTransforms.length > 0) {
+      const skyInst = new THREE.InstancedMesh(skylineGeo, skylineMat, skylineTransforms.length);
+      skylineTransforms.forEach((m, i) => skyInst.setMatrixAt(i, m));
+      skyInst.instanceMatrix.needsUpdate = true;
+      this.sceneryGroup.add(skyInst);
+    }
+    if (beaconTransforms.length > 0) {
+      const beaconInst = new THREE.InstancedMesh(skylineGeo, beaconMat, beaconTransforms.length);
+      beaconTransforms.forEach((m, i) => beaconInst.setMatrixAt(i, m));
+      beaconInst.instanceMatrix.needsUpdate = true;
+      this.sceneryGroup.add(beaconInst);
+    }
+
+    // Layered Multi-Tier Sculpted Pines outside barriers (replaces single beginner cone!)
+    const trunkGeo = new THREE.CylinderGeometry(0.24, 0.42, 4.4, 7);
+    trunkGeo.translate(0, 2.2, 0);
+    const tier1Geo = new THREE.ConeGeometry(2.6, 3.6, 8);
+    tier1Geo.translate(0, 4.4, 0);
+    const tier2Geo = new THREE.ConeGeometry(2.05, 3.2, 8);
+    tier2Geo.translate(0, 6.2, 0);
+    const tier3Geo = new THREE.ConeGeometry(1.3, 2.7, 7);
+    tier3Geo.translate(0, 7.9, 0);
+
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x452d1d, roughness: 0.92 });
+    const leafDarkMat = new THREE.MeshStandardMaterial({ color: 0x183d2c, roughness: 0.84 });
+    const leafMidMat = new THREE.MeshStandardMaterial({ color: 0x22543d, roughness: 0.8 });
 
     const treeTransforms: THREE.Matrix4[] = [];
     for (let i = 0; i < 160; i++) {
@@ -426,7 +645,7 @@ export class TrackEnvironment {
       if (Math.hypot(treePos.x + 165, treePos.z + 20) < 92 || treePos.x > 14) continue;
 
       dummy.position.set(treePos.x, treePos.y, treePos.z);
-      const scale = 0.85 + Math.random() * 0.72;
+      const scale = 0.8 + Math.random() * 0.72;
       dummy.scale.set(scale, scale, scale);
       dummy.rotation.set(0, Math.random() * Math.PI * 2, 0);
       dummy.updateMatrix();
@@ -434,16 +653,24 @@ export class TrackEnvironment {
     }
 
     if (treeTransforms.length > 0) {
-      const trunkInst = new THREE.InstancedMesh(trunkGeo, trunkMat, treeTransforms.length);
-      const foliageInst = new THREE.InstancedMesh(foliageGeo, foliageMat, treeTransforms.length);
-      foliageInst.castShadow = true;
+      const n = treeTransforms.length;
+      const trunkInst = new THREE.InstancedMesh(trunkGeo, trunkMat, n);
+      const tier1Inst = new THREE.InstancedMesh(tier1Geo, leafDarkMat, n);
+      const tier2Inst = new THREE.InstancedMesh(tier2Geo, leafMidMat, n);
+      const tier3Inst = new THREE.InstancedMesh(tier3Geo, leafMidMat, n);
+      tier1Inst.castShadow = true;
+      tier2Inst.castShadow = true;
       treeTransforms.forEach((m, i) => {
         trunkInst.setMatrixAt(i, m);
-        foliageInst.setMatrixAt(i, m);
+        tier1Inst.setMatrixAt(i, m);
+        tier2Inst.setMatrixAt(i, m);
+        tier3Inst.setMatrixAt(i, m);
       });
       trunkInst.instanceMatrix.needsUpdate = true;
-      foliageInst.instanceMatrix.needsUpdate = true;
-      this.sceneryGroup.add(trunkInst, foliageInst);
+      tier1Inst.instanceMatrix.needsUpdate = true;
+      tier2Inst.instanceMatrix.needsUpdate = true;
+      tier3Inst.instanceMatrix.needsUpdate = true;
+      this.sceneryGroup.add(trunkInst, tier1Inst, tier2Inst, tier3Inst);
     }
   }
 
@@ -719,6 +946,11 @@ export class TrackEnvironment {
     }
   }
 
+  /** Lake center (-165, -20), radius 82, surface at y = -1.2. */
+  public isOverLakeWater(x: number, z: number): boolean {
+    return Math.hypot(x + 165, z + 20) < 77.5;
+  }
+
   // Smooth segment-interpolated ground & track boundary sampler
   public sampleGround(x: number, z: number): GroundSample {
     const count = this.trackPoints.length - 1;
@@ -755,8 +987,18 @@ export class TrackEnvironment {
     const isRoad = distToCenter <= halfRoad;
     const isCurb = distToCenter > halfRoad && distToCenter <= (halfRoad + this.curbWidth);
 
+    let groundHeight = bestClosest.y;
+    if (!isRoad && !isCurb) {
+      const distFromLake = Math.hypot(x + 165, z + 20);
+      if (distFromLake < 82) {
+        // Slopes down cleanly below the y = -1.2 lake water surface instead of invisible y = 0 ground
+        const t = Math.min(1, (82 - distFromLake) / 10);
+        groundHeight = -0.18 - t * 3.4;
+      }
+    }
+
     return {
-      height: bestClosest.y,
+      height: groundHeight,
       normal: new THREE.Vector3(0, 1, 0),
       isRoad,
       isCurb,

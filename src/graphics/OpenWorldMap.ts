@@ -8,6 +8,51 @@ export interface AABBCollider {
   minZ: number;
   maxZ: number;
   height: number;
+  /** Optional floor height so second-storey furniture doesn't block downstairs. */
+  minY?: number;
+}
+
+export type InteractableType =
+  | 'GARAGE_TUNE'
+  | 'EAT_RAMEN'
+  | 'ESPRESSO'
+  | 'ARCADE'
+  | 'ELEVATOR_UP'
+  | 'ELEVATOR_DOWN'
+  | 'HACK_TERMINAL'
+  | 'VENDING'
+  | 'ROOFTOP_GLIDE';
+
+export interface WorldInteractable {
+  id: string;
+  type: InteractableType;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  title: string;
+  prompt: string;
+}
+
+export interface WorldCollectible {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  reward: number;
+  xp: number;
+  label: string;
+  collected: boolean;
+  mesh: THREE.Object3D;
+}
+
+export interface RooftopZone {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  y: number;
+  switchY: number;
 }
 
 export interface RampBox {
@@ -94,7 +139,7 @@ export const DISTRICTS: Record<DistrictId, DistrictInfo> = {
 };
 
 interface SmashProp {
-  mesh: THREE.Mesh;
+  mesh: THREE.Object3D;
   homePos: THREE.Vector3;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
@@ -117,8 +162,15 @@ export class OpenWorldMap {
   public ramps: RampBox[] = [];
   public boostPads: BoostPad[] = [];
   public interiorFloors: InteriorFloorZone[] = [];
+  public rooftopZones: RooftopZone[] = [];
   /** Chair seats the player can sit on, with the facing yaw to use. */
   public sitSpots: Array<{ pos: THREE.Vector3; yaw: number; label: string }> = [];
+  /** Contextual interactive props, terminals, shops, lifts & vending machines for [E / USE]. */
+  public interactables: WorldInteractable[] = [];
+  /** Neon stash crates placed inside buildings, alleys & rooftops for exploration rewards. */
+  public collectibles: WorldCollectible[] = [];
+  private animatedBeacons: THREE.Object3D[] = [];
+  private waterDepthEnabled = true;
 
   // Giant Physics Soccer Ball in Playground
   public ballMesh: THREE.Mesh;
@@ -132,6 +184,9 @@ export class OpenWorldMap {
 
   private buildingMats: THREE.MeshStandardMaterial[] = [];
   private roadMats: THREE.MeshStandardMaterial[] = [];
+  private lampGlowMat: THREE.MeshBasicMaterial | null = null;
+  private lampBulbMat: THREE.MeshBasicMaterial | null = null;
+  private neonSignMats: THREE.MeshStandardMaterial[] = [];
   private elevatedOccluders: AABBCollider[] = [];
   private oceanUniforms: AnimeWaterUniforms | null = null;
   private smashProps: SmashProp[] = [];
@@ -150,6 +205,7 @@ export class OpenWorldMap {
     this.createStuntPlayground();
     this.ballMesh = this.createSoccerPlayground();
     this.createSmashableProps();
+    this.createVendingAndCollectibles();
 
     // The Touge deck is a mesh and ramps live in `this.ramps`, so neither is
     // in `colliders`. Share them with line-of-sight checks as height-aware
@@ -186,6 +242,36 @@ export class OpenWorldMap {
     for (const m of this.buildingMats) {
       m.emissiveIntensity = emissiveBoost;
     }
+
+    // Street lamp glow pools — invisible by day, soft amber at sunset, bright warm at night
+    if (this.lampGlowMat) {
+      this.lampGlowMat.opacity = tod === 'NIGHT' ? 1.0 : (tod === 'SUNSET' ? 0.52 : 0.0);
+      this.lampGlowMat.visible = tod !== 'DAY';
+    }
+    if (this.lampBulbMat) {
+      this.lampBulbMat.color.setHex(tod === 'NIGHT' ? 0xfff8e7 : (tod === 'SUNSET' ? 0xfdba74 : 0x64748b));
+    }
+
+    // Neon sign cornice strips — pop at night/sunset
+    const neonEmissive = tod === 'NIGHT' ? 1.8 : (tod === 'SUNSET' ? 0.9 : 0.32);
+    for (const m of this.neonSignMats) {
+      m.emissiveIntensity = neonEmissive;
+    }
+
+    // Wet road reflections react to TOD: night roads are mirror-like
+    if (tod === 'NIGHT') {
+      for (const m of this.roadMats) {
+        if (m.roughness < 0.4) continue; // already wet — don't override
+        m.roughness = Math.min(m.roughness, 0.72);
+        m.envMapIntensity = 0.55;
+      }
+    } else {
+      for (const m of this.roadMats) {
+        if (m.roughness < 0.4) continue;
+        m.envMapIntensity = 0.0;
+      }
+    }
+
     if (this.oceanUniforms) {
       if (tod === 'NIGHT') {
         this.oceanUniforms.uShallowColor.value.set('#0284c7');
@@ -462,7 +548,7 @@ export class OpenWorldMap {
     const minZ = b.z - b.d * 0.5;
     const maxZ = b.z + b.d * 0.5;
     const wallT = 0.6;
-    const wallH = 8.8;
+    const wallH = 10.2;
     const upperY = 4.2;
     const doorHalf = 1.1;
     const innerMinX = minX + wallT;
@@ -470,14 +556,18 @@ export class OpenWorldMap {
     const innerMinZ = minZ + wallT;
     const innerMaxZ = maxZ - wallT;
 
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x2a3446, roughness: 0.82 });
-    const woodMat = new THREE.MeshStandardMaterial({ color: 0x7c4a2d, roughness: 0.68 });
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.72 });
+    const innerWallMat = new THREE.MeshStandardMaterial({ color: 0x1e2536, roughness: 0.85 });
+    const wainscotMat = new THREE.MeshStandardMaterial({ color: 0x5c3a24, roughness: 0.7 });
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x7c4a2d, roughness: 0.62 });
     const metalMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.7, roughness: 0.35 });
     const glowMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    const warmBulbMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7 });
+    const pinkGlowMat = new THREE.MeshBasicMaterial({ color: 0xf472b6 });
 
     const addBox = (
       w: number, h: number, d: number, x: number, y: number, z: number,
-      mat: THREE.Material, collide = false, collideHeight = wallH
+      mat: THREE.Material, collide = false, collideHeight = wallH, minY?: number
     ): void => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       mesh.position.set(x, y, z);
@@ -488,13 +578,13 @@ export class OpenWorldMap {
         this.colliders.push({
           minX: x - w * 0.5, maxX: x + w * 0.5,
           minZ: z - d * 0.5, maxZ: z + d * 0.5,
-          height: collideHeight
+          height: collideHeight,
+          minY
         });
       }
     };
 
-    // Perimeter walls. Full-height colliders also keep the follow-camera from
-    // clipping through the mezzanine walls (camera sits around y=6.4 upstairs).
+    // Perimeter walls (keeps exact minX=64, maxX=104 North wall collider)
     addBox(b.w, wallH, wallT, b.x, wallH * 0.5, minZ + wallT * 0.5, facadeMat, true, wallH);
     addBox(wallT, wallH, b.d, minX + wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
     addBox(wallT, wallH, b.d, maxX - wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
@@ -503,14 +593,24 @@ export class OpenWorldMap {
     addBox(leftW, wallH, wallT, minX + leftW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
     addBox(rightW, wallH, wallT, b.x + doorHalf + rightW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
 
-    // Door frame + warm interior glow
+    // Clean interior wall cladding + warm wood wainscot so interior never looks like skyscraper glass
+    const iW = innerMaxX - innerMinX;
+    const iD = innerMaxZ - innerMinZ;
+    addBox(iW, wallH - 0.3, 0.08, b.x, wallH * 0.5, innerMinZ + 0.05, innerWallMat);
+    addBox(0.08, wallH - 0.3, iD, innerMinX + 0.05, wallH * 0.5, b.z, innerWallMat);
+    addBox(0.08, wallH - 0.3, iD, innerMaxX - 0.05, wallH * 0.5, b.z, innerWallMat);
+    addBox(iW, 1.3, 0.12, b.x, 0.65, innerMinZ + 0.09, wainscotMat);
+    addBox(0.12, 1.3, iD, innerMinX + 0.09, 0.65, b.z, wainscotMat);
+    addBox(0.12, 1.3, iD, innerMaxX - 0.09, 0.65, b.z, wainscotMat);
+
+    // Door frame + warm interior welcome threshold
     addBox(0.22, 3.3, 0.3, b.x - doorHalf, 1.65, maxZ + 0.15, neonMat);
     addBox(0.22, 3.3, 0.3, b.x + doorHalf, 1.65, maxZ + 0.15, neonMat);
     addBox(doorHalf * 2 + 0.22, 0.22, 0.3, b.x, 3.3, maxZ + 0.15, neonMat);
     addBox(doorHalf * 2, 0.12, 0.5, b.x, 0.06, maxZ + 0.3, glowMat);
 
-    // Ground floor
-    addBox(innerMaxX - innerMinX, 0.2, innerMaxZ - innerMinZ, b.x, 0.1, b.z, floorMat);
+    // Ground floor (sits cleanly at y=0.22 top)
+    addBox(iW, 0.22, iD, b.x, 0.11, b.z, floorMat);
 
     // Upper floor slab, split around the stairwell
     const stMinX = minX + 2;
@@ -519,10 +619,14 @@ export class OpenWorldMap {
     const stMaxZ = maxZ - 8;
     const slabT = 0.25;
     const slabY = upperY - slabT * 0.5;
-    addBox(stMinX - innerMinX, slabT, innerMaxZ - innerMinZ, (innerMinX + stMinX) * 0.5, slabY, b.z, floorMat);
-    addBox(innerMaxX - stMaxX, slabT, innerMaxZ - innerMinZ, (stMaxX + innerMaxX) * 0.5, slabY, b.z, floorMat);
+    addBox(stMinX - innerMinX, slabT, iD, (innerMinX + stMinX) * 0.5, slabY, b.z, floorMat);
+    addBox(innerMaxX - stMaxX, slabT, iD, (stMaxX + innerMaxX) * 0.5, slabY, b.z, floorMat);
     addBox(stMaxX - stMinX, slabT, innerMaxZ - stMaxZ, (stMinX + stMaxX) * 0.5, slabY, (stMaxZ + innerMaxZ) * 0.5, floorMat);
     addBox(stMaxX - stMinX, slabT, stMinZ - innerMinZ, (stMinX + stMaxX) * 0.5, slabY, (innerMinZ + stMinZ) * 0.5, floorMat);
+
+    // Mezzanine stairwell safety handrail so you don't slip sideways off the upper landing
+    addBox(0.14, 1.0, stMaxZ - stMinZ, stMaxX + 0.08, upperY + 0.5, (stMinZ + stMaxZ) * 0.5, metalMat, true, upperY + 1.1, upperY);
+    addBox(stMaxX - stMinX, 1.0, 0.14, (stMinX + stMaxX) * 0.5, upperY + 0.5, stMinZ - 0.08, metalMat, true, upperY + 1.1, upperY);
 
     // Walkable staircase (visual steps; ground sampling handles the ramp)
     const steps = 14;
@@ -543,14 +647,59 @@ export class OpenWorldMap {
     stepMesh.receiveShadow = true;
     this.group.add(stepMesh);
 
-    // Interior ceiling + the tall city silhouette above (no collider up there)
-    addBox(innerMaxX - innerMinX, 0.2, innerMaxZ - innerMinZ, b.x, upperY + 4.6, b.z, roofMat);
-    const towerH = b.h - (upperY + 4.6);
-    addBox(b.w - 1.2, towerH, b.d - 1.2, b.x, upperY + 4.6 + towerH * 0.5, b.z, facadeMat);
+    // Interior ceiling (high enough for comfortable 2F camera orbit) + tall city silhouette above
+    addBox(iW, 0.25, iD, b.x, wallH - 0.12, b.z, roofMat);
+    const towerH = b.h - wallH;
+    addBox(b.w - 1.2, towerH, b.d - 1.2, b.x, wallH + towerH * 0.5, b.z, facadeMat);
 
-    // Counter + tables + chairs on both floors
+    // Warm Cafe Pendant Lamps & Lighting
+    for (const [lx, ly, lz] of [
+      [b.x, 3.8, b.z + 4],
+      [b.x, 3.8, minZ + 6],
+      [b.x + 2, wallH - 0.9, b.z + 2]
+    ]) {
+      addBox(0.9, 0.18, 0.9, lx, ly, lz, warmBulbMat);
+    }
+    const cafeLight = new THREE.PointLight(0xffedd5, 2.2, 34, 1.4);
+    cafeLight.position.set(b.x, 3.5, b.z);
+    this.group.add(cafeLight);
+
+    // Counter + Espresso Machine + Barista + Menu Board
     addBox(12, 1.1, 1.6, b.x, 0.55, minZ + 3.2, woodMat, true, 1.1);
     addBox(12.2, 0.14, 0.22, b.x, 1.16, minZ + 4.05, glowMat);
+    addBox(1.5, 0.85, 0.8, b.x + 2.2, 1.52, minZ + 3.1, metalMat);
+    addBox(0.35, 0.35, 0.35, b.x + 2.2, 1.85, minZ + 3.2, pinkGlowMat);
+    addBox(6.8, 1.9, 0.14, b.x, 2.7, innerMinZ + 0.15, pinkGlowMat);
+    // Barista NPC silhouette behind counter
+    addBox(0.45, 0.72, 0.28, b.x - 1.2, 1.0, minZ + 2.0, metalMat);
+    addBox(0.32, 0.32, 0.32, b.x - 1.2, 1.56, minZ + 2.0, woodMat);
+
+    this.interactables.push({
+      id: 'cafe_espresso',
+      type: 'ESPRESSO',
+      x: b.x + 2.2,
+      y: 0,
+      z: minZ + 5.0,
+      radius: 2.8,
+      title: 'MATCHA ESPRESSO BAR',
+      prompt: 'E / USE — Order Matcha Espresso (+50 HP & 30s Sprint Boost)'
+    });
+
+    // Retro Neon Arcade Machine inside cafe SE corner
+    const arcX = b.x + 14.5;
+    const arcZ = b.z - 12;
+    addBox(1.4, 2.2, 1.2, arcX, 1.1, arcZ, metalMat, true, 2.2);
+    addBox(1.05, 0.85, 0.14, arcX, 1.48, arcZ + 0.62, neonMat);
+    this.interactables.push({
+      id: 'cafe_arcade',
+      type: 'ARCADE',
+      x: arcX,
+      y: 0,
+      z: arcZ + 1.8,
+      radius: 2.5,
+      title: 'NEON VELO ARCADE',
+      prompt: 'E / USE — Play Retro Arcade (+₡120 & +60 XP)'
+    });
 
     const tables: Array<{ x: number; z: number; y: number }> = [
       { x: b.x - 8, z: b.z + 9, y: 0 },
@@ -571,15 +720,13 @@ export class OpenWorldMap {
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
       tableTop.setMatrixAt(i, dummy.matrix);
-      // Ground tables are solid; upper-floor ones share XZ space with ground
-      // tables, so they are omitted from this single-height collider list.
-      if (t.y < 1) {
-        this.colliders.push({
-          minX: t.x - 1.2, maxX: t.x + 1.2,
-          minZ: t.z - 1.2, maxZ: t.z + 1.2,
-          height: 0.95
-        });
-      }
+      // Both ground and mezzanine tables are solid using minY height scoping
+      this.colliders.push({
+        minX: t.x - 1.2, maxX: t.x + 1.2,
+        minZ: t.z - 1.2, maxZ: t.z + 1.2,
+        height: t.y + 0.95,
+        minY: t.y
+      });
       dummy.position.set(t.x, t.y + 0.45, t.z);
       dummy.updateMatrix();
       tablePole.setMatrixAt(i, dummy.matrix);
@@ -607,14 +754,11 @@ export class OpenWorldMap {
       dummy.scale.set(1, 1, 1);
       dummy.updateMatrix();
       seatMesh.setMatrixAt(i, dummy.matrix);
-      // Back rest sits behind the seat (local +Z), facing the table at -Z.
       const backOffset = new THREE.Vector3(0, 0, 0.34).applyAxisAngle(new THREE.Vector3(0, 1, 0), c.yaw);
       dummy.position.set(c.x + backOffset.x, c.y + 0.92, c.z + backOffset.z);
       dummy.updateMatrix();
       backMesh.setMatrixAt(i, dummy.matrix);
 
-      // Anchor is the seat surface (hip target), not the character root. The
-      // rig-specific root offset is applied in GLTFCharacterMesh.sitRootPosition.
       this.sitSpots.push({
         pos: new THREE.Vector3(c.x, c.y + 0.58, c.z),
         yaw: c.yaw,
@@ -632,6 +776,514 @@ export class OpenWorldMap {
     });
   }
 
+  /** Walk-in & drive-in DRIFT GARAGE with open 8m bay, tool bay & live tuning terminal. */
+  private createDriftGarageInterior(
+    b: { x: number; z: number; w: number; d: number; h: number },
+    facadeMat: THREE.Material,
+    sideMat: THREE.Material,
+    roofMat: THREE.Material,
+    neonMat: THREE.Material
+  ): void {
+    const minX = b.x - b.w * 0.5;
+    const maxX = b.x + b.w * 0.5;
+    const minZ = b.z - b.d * 0.5;
+    const maxZ = b.z + b.d * 0.5;
+    const wallT = 0.65;
+    const wallH = 7.4;
+    const bayHalf = 4.2; // 8.4m wide opening so cars can drive straight in!
+    const innerMinX = minX + wallT;
+    const innerMaxX = maxX - wallT;
+    const innerMinZ = minZ + wallT;
+    const innerMaxZ = maxZ - wallT;
+
+    const bayFloorMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.42, metalness: 0.25 });
+    const innerWallMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.8 });
+    const liftMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.45, metalness: 0.55 });
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.35, metalness: 0.8 });
+    const hazardMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+
+    const addBox = (
+      w: number, h: number, d: number, x: number, y: number, z: number,
+      mat: THREE.Material, collide = false, collideHeight = wallH
+    ): void => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      this.group.add(m);
+      if (collide) {
+        this.colliders.push({
+          minX: x - w * 0.5, maxX: x + w * 0.5,
+          minZ: z - d * 0.5, maxZ: z + d * 0.5,
+          height: collideHeight
+        });
+      }
+    };
+
+    // Perimeter walls (South bay door open at x = b.x - 4.2 .. b.x + 4.2)
+    addBox(b.w, wallH, wallT, b.x, wallH * 0.5, minZ + wallT * 0.5, facadeMat, true, wallH);
+    addBox(wallT, wallH, b.d, minX + wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    addBox(wallT, wallH, b.d, maxX - wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    const leftW = b.x - bayHalf - minX;
+    const rightW = maxX - (b.x + bayHalf);
+    addBox(leftW, wallH, wallT, minX + leftW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+    addBox(rightW, wallH, wallT, b.x + bayHalf + rightW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+    // Header lintel above roll-up bay door (4.6m clearance!)
+    addBox(bayHalf * 2, wallH - 4.6, wallT, b.x, 4.6 + (wallH - 4.6) * 0.5, maxZ - wallT * 0.5, facadeMat);
+
+    // Interior wall lining + epoxy floor + ceiling + upper tower
+    const iW = innerMaxX - innerMinX;
+    const iD = innerMaxZ - innerMinZ;
+    addBox(iW, wallH - 0.3, 0.1, b.x, wallH * 0.5, innerMinZ + 0.08, innerWallMat);
+    addBox(0.1, wallH - 0.3, iD, innerMinX + 0.08, wallH * 0.5, b.z, innerWallMat);
+    addBox(0.1, wallH - 0.3, iD, innerMaxX - 0.08, wallH * 0.5, b.z, innerWallMat);
+    addBox(iW, 0.18, iD, b.x, 0.09, b.z, bayFloorMat);
+    addBox(iW, 0.25, iD, b.x, wallH - 0.12, b.z, roofMat);
+    const towerH = b.h - wallH;
+    addBox(b.w - 1.2, towerH, b.d - 1.2, b.x, wallH + towerH * 0.5, b.z, facadeMat);
+
+    // Neon bay archway & floor pit guide stripes
+    addBox(0.28, 4.7, 0.35, b.x - bayHalf, 2.35, maxZ + 0.15, neonMat);
+    addBox(0.28, 4.7, 0.35, b.x + bayHalf, 2.35, maxZ + 0.15, neonMat);
+    addBox(bayHalf * 2 + 0.3, 0.28, 0.35, b.x, 4.7, maxZ + 0.15, neonMat);
+    addBox(0.25, 0.04, 16, b.x - 2.6, 0.2, b.z - 1, hazardMat);
+    addBox(0.25, 0.04, 16, b.x + 2.6, 0.2, b.z - 1, hazardMat);
+
+    // Hydraulic twin-post lift & workbench on west side (center bay stays wide open)
+    addBox(0.55, 3.8, 0.55, b.x - 13, 1.9, b.z - 2, liftMat, true, 3.8);
+    addBox(0.55, 3.8, 0.55, b.x - 8.5, 1.9, b.z - 2, liftMat, true, 3.8);
+    addBox(5.2, 0.3, 0.4, b.x - 10.75, 3.8, b.z - 2, steelMat);
+    // Back workbench & nitro bottles on east side
+    addBox(7.5, 1.15, 1.4, b.x + 11, 0.58, minZ + 2.2, liftMat, true, 1.2);
+    addBox(1.8, 2.2, 1.2, b.x + 15.5, 1.1, b.z + 2, steelMat, true, 2.2);
+
+    const shopLight = new THREE.PointLight(0xbae6fd, 2.2, 34, 1.3);
+    shopLight.position.set(b.x, 5.2, b.z);
+    this.group.add(shopLight);
+
+    // Glowing garage tuning pad
+    const pad = new THREE.Mesh(new THREE.RingGeometry(1.7, 2.3, 28), hazardMat);
+    pad.rotation.x = -Math.PI * 0.5;
+    pad.position.set(b.x, 0.22, b.z - 3.5);
+    this.group.add(pad);
+    this.animatedBeacons.push(pad);
+
+    this.interactables.push({
+      id: 'drift_garage_tune',
+      type: 'GARAGE_TUNE',
+      x: b.x,
+      y: 0,
+      z: b.z - 3.5,
+      radius: 4.5,
+      title: 'DRIFT GARAGE SERVICE BAY',
+      prompt: 'E / USE — Tune Engine, Repair & Refill Nitro'
+    });
+
+    this.interiorFloors.push({
+      minX: innerMinX, maxX: innerMaxX, minZ: innerMinZ, maxZ: innerMaxZ,
+      groundY: 0, upperY: 0, switchY: 99,
+      stairs: { minX: 0, maxX: -1, minZ: 0, maxZ: -1, dir: 'SOUTH' }
+    });
+  }
+
+  /** Walk-in NEO RAMEN Izakaya with lanterns, ramen bar counter, stools & stat-boosting bowl. */
+  private createNeoRamenInterior(
+    b: { x: number; z: number; w: number; d: number; h: number },
+    facadeMat: THREE.Material,
+    sideMat: THREE.Material,
+    roofMat: THREE.Material,
+    neonMat: THREE.Material
+  ): void {
+    const minX = b.x - b.w * 0.5;
+    const maxX = b.x + b.w * 0.5;
+    const minZ = b.z - b.d * 0.5;
+    const maxZ = b.z + b.d * 0.5;
+    const wallT = 0.6;
+    const wallH = 7.0;
+    const doorHalf = 1.45;
+    const innerMinX = minX + wallT;
+    const innerMaxX = maxX - wallT;
+    const innerMinZ = minZ + wallT;
+    const innerMaxZ = maxZ - wallT;
+
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x3b2820, roughness: 0.72 });
+    const innerWallMat = new THREE.MeshStandardMaterial({ color: 0x261a16, roughness: 0.86 });
+    const counterMat = new THREE.MeshStandardMaterial({ color: 0x92400e, roughness: 0.55 });
+    const lanternMat = new THREE.MeshBasicMaterial({ color: 0xfb7185 });
+    const warmSignMat = new THREE.MeshBasicMaterial({ color: 0xfde047 });
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.65, roughness: 0.35 });
+
+    const addBox = (
+      w: number, h: number, d: number, x: number, y: number, z: number,
+      mat: THREE.Material, collide = false, collideHeight = wallH
+    ): void => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      this.group.add(m);
+      if (collide) {
+        this.colliders.push({
+          minX: x - w * 0.5, maxX: x + w * 0.5,
+          minZ: z - d * 0.5, maxZ: z + d * 0.5,
+          height: collideHeight
+        });
+      }
+    };
+
+    // Perimeter walls (South door gap)
+    addBox(b.w, wallH, wallT, b.x, wallH * 0.5, minZ + wallT * 0.5, facadeMat, true, wallH);
+    addBox(wallT, wallH, b.d, minX + wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    addBox(wallT, wallH, b.d, maxX - wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    const leftW = b.x - doorHalf - minX;
+    const rightW = maxX - (b.x + doorHalf);
+    addBox(leftW, wallH, wallT, minX + leftW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+    addBox(rightW, wallH, wallT, b.x + doorHalf + rightW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+
+    // Interior floor, wood walls, ceiling & tower above
+    const iW = innerMaxX - innerMinX;
+    const iD = innerMaxZ - innerMinZ;
+    addBox(iW, wallH - 0.3, 0.1, b.x, wallH * 0.5, innerMinZ + 0.08, innerWallMat);
+    addBox(0.1, wallH - 0.3, iD, innerMinX + 0.08, wallH * 0.5, b.z, innerWallMat);
+    addBox(0.1, wallH - 0.3, iD, innerMaxX - 0.08, wallH * 0.5, b.z, innerWallMat);
+    addBox(iW, 0.22, iD, b.x, 0.11, b.z, floorMat);
+    addBox(iW, 0.25, iD, b.x, wallH - 0.12, b.z, roofMat);
+    const towerH = b.h - wallH;
+    addBox(b.w - 1.2, towerH, b.d - 1.2, b.x, wallH + towerH * 0.5, b.z, facadeMat);
+
+    // Glowing Entrance & Hanging Red Lanterns (Akachochin)
+    addBox(0.22, 3.4, 0.3, b.x - doorHalf, 1.7, maxZ + 0.15, neonMat);
+    addBox(0.22, 3.4, 0.3, b.x + doorHalf, 1.7, maxZ + 0.15, neonMat);
+    addBox(doorHalf * 2 + 0.22, 0.24, 0.3, b.x, 3.4, maxZ + 0.15, neonMat);
+    for (const lx of [b.x - 4, b.x, b.x + 4, b.x - 5, b.x + 5]) {
+      const lan = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8), lanternMat);
+      lan.position.set(lx, 4.4, lx === b.x ? minZ + 9 : b.z + 6);
+      this.group.add(lan);
+    }
+    const ramenLight = new THREE.PointLight(0xfed7aa, 2.3, 30, 1.3);
+    ramenLight.position.set(b.x, 4.0, b.z - 2);
+    this.group.add(ramenLight);
+
+    // Ramen Bar Counter + Chef + Menu + 4 Bar Stools
+    addBox(14, 1.15, 1.8, b.x, 0.58, minZ + 7.5, counterMat, true, 1.2);
+    addBox(14.2, 0.14, 0.2, b.x, 1.18, minZ + 8.45, warmSignMat);
+    addBox(1.1, 0.55, 1.1, b.x - 2, 1.42, minZ + 7.5, steelMat);
+    addBox(7.2, 1.8, 0.14, b.x, 3.2, innerMinZ + 0.16, warmSignMat);
+    // Chef figure
+    addBox(0.45, 0.72, 0.28, b.x + 1.4, 1.0, minZ + 5.6, steelMat);
+    addBox(0.32, 0.32, 0.32, b.x + 1.4, 1.56, minZ + 5.6, warmSignMat);
+
+    const stoolGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.64, 10);
+    for (let i = 0; i < 4; i++) {
+      const sx = b.x - 4.5 + i * 3.0;
+      const sz = minZ + 9.6;
+      const stool = new THREE.Mesh(stoolGeo, counterMat);
+      stool.position.set(sx, 0.32, sz);
+      this.group.add(stool);
+      this.sitSpots.push({
+        pos: new THREE.Vector3(sx, 0.64, sz),
+        yaw: 0,
+        label: 'RAMEN COUNTER STOOL'
+      });
+    }
+
+    this.interactables.push({
+      id: 'neo_ramen_eat',
+      type: 'EAT_RAMEN',
+      x: b.x,
+      y: 0,
+      z: minZ + 10.6,
+      radius: 3.4,
+      title: 'NEO RAMEN BAR',
+      prompt: 'E / USE — Eat Tonkotsu Ramen (Full HP + 45s Speed & Power Buff)'
+    });
+
+    this.interiorFloors.push({
+      minX: innerMinX, maxX: innerMaxX, minZ: innerMinZ, maxZ: innerMaxZ,
+      groundY: 0, upperY: 0, switchY: 99,
+      stairs: { minX: 0, maxX: -1, minZ: 0, maxZ: -1, dir: 'SOUTH' }
+    });
+  }
+
+  /** Walk-in ZENITH CORP lobby + express elevator to the 50m Neon Sky Rooftop Lounge & Helipad! */
+  private createZenithTowerInterior(
+    b: { x: number; z: number; w: number; d: number; h: number },
+    facadeMat: THREE.Material,
+    sideMat: THREE.Material,
+    roofMat: THREE.Material,
+    neonMat: THREE.Material
+  ): void {
+    const minX = b.x - b.w * 0.5;
+    const maxX = b.x + b.w * 0.5;
+    const minZ = b.z - b.d * 0.5;
+    const maxZ = b.z + b.d * 0.5;
+    const wallT = 0.6;
+    const wallH = 7.0;
+    const roofY = b.h; // 50.0m open sky rooftop!
+    const doorHalf = 1.65;
+    const innerMinX = minX + wallT;
+    const innerMaxX = maxX - wallT;
+    const innerMinZ = minZ + wallT;
+    const innerMaxZ = maxZ - wallT;
+
+    const marbleMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.25 });
+    const deskMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35, metalness: 0.5 });
+    const glassRailMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.38, roughness: 0.1 });
+    const cyanGlowMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
+    const goldGlowMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    const sofaMat = new THREE.MeshStandardMaterial({ color: 0xbe185d, roughness: 0.72 });
+
+    const addBox = (
+      w: number, h: number, d: number, x: number, y: number, z: number,
+      mat: THREE.Material, collide = false, collideHeight = wallH, minY?: number
+    ): void => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      this.group.add(m);
+      if (collide) {
+        this.colliders.push({
+          minX: x - w * 0.5, maxX: x + w * 0.5,
+          minZ: z - d * 0.5, maxZ: z + d * 0.5,
+          height: collideHeight,
+          minY
+        });
+      }
+    };
+
+    // Lobby perimeter walls (South glass doorway)
+    addBox(b.w, wallH, wallT, b.x, wallH * 0.5, minZ + wallT * 0.5, facadeMat, true, wallH);
+    addBox(wallT, wallH, b.d, minX + wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    addBox(wallT, wallH, b.d, maxX - wallT * 0.5, wallH * 0.5, b.z, sideMat, true, wallH);
+    const leftW = b.x - doorHalf - minX;
+    const rightW = maxX - (b.x + doorHalf);
+    addBox(leftW, wallH, wallT, minX + leftW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+    addBox(rightW, wallH, wallT, b.x + doorHalf + rightW * 0.5, wallH * 0.5, maxZ - wallT * 0.5, facadeMat, true, wallH);
+
+    // Door frame + floor + ceiling + upper tower column up to rooftop (y = 50)
+    addBox(0.24, 3.6, 0.3, b.x - doorHalf, 1.8, maxZ + 0.15, neonMat);
+    addBox(0.24, 3.6, 0.3, b.x + doorHalf, 1.8, maxZ + 0.15, neonMat);
+    addBox(doorHalf * 2 + 0.24, 0.24, 0.3, b.x, 3.6, maxZ + 0.15, neonMat);
+
+    const iW = innerMaxX - innerMinX;
+    const iD = innerMaxZ - innerMinZ;
+    addBox(iW, 0.22, iD, b.x, 0.11, b.z, marbleMat);
+    addBox(iW, 0.25, iD, b.x, wallH - 0.12, b.z, roofMat);
+    const shaftH = roofY - wallH;
+    addBox(b.w - 0.4, shaftH, b.d - 0.4, b.x, wallH + shaftH * 0.5, b.z, facadeMat, true, roofY - 0.3, wallH);
+
+    // Lobby lighting, reception desk & Cyber Elevator Pad
+    const lobbyLight = new THREE.PointLight(0x38bdf8, 2.2, 32, 1.3);
+    lobbyLight.position.set(b.x, 4.5, b.z);
+    this.group.add(lobbyLight);
+    addBox(8, 1.15, 1.6, b.x - 4, 0.58, minZ + 4.5, deskMat, true, 1.2);
+    addBox(8.1, 0.14, 0.16, b.x - 4, 1.18, minZ + 5.3, cyanGlowMat);
+
+    const elevX = b.x + 8.5;
+    const elevZ = b.z - 2;
+    const padUp = new THREE.Mesh(new THREE.RingGeometry(1.4, 2.1, 24), cyanGlowMat);
+    padUp.rotation.x = -Math.PI * 0.5;
+    padUp.position.set(elevX, 0.24, elevZ);
+    this.group.add(padUp);
+    this.animatedBeacons.push(padUp);
+    const beamUp = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.1, 1.1, 4.2, 16, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false })
+    );
+    beamUp.position.set(elevX, 2.3, elevZ);
+    this.group.add(beamUp);
+
+    this.interactables.push({
+      id: 'zenith_lift_up',
+      type: 'ELEVATOR_UP',
+      x: elevX,
+      y: 0,
+      z: elevZ,
+      radius: 3.0,
+      title: 'ZENITH EXPRESS LIFT',
+      prompt: 'E / USE — Ride Elevator to Zenith Rooftop (50m)'
+    });
+
+    // ROOFTOP SKY LOUNGE & HELIPAD (y = 50.0)
+    addBox(b.w, 0.4, b.d, b.x, roofY - 0.2, b.z, marbleMat);
+    // Helipad ring on central deck
+    const heliRing = new THREE.Mesh(new THREE.RingGeometry(4.8, 5.4, 32), goldGlowMat);
+    heliRing.rotation.x = -Math.PI * 0.5;
+    heliRing.position.set(b.x - 2, roofY + 0.03, b.z);
+    this.group.add(heliRing);
+    addBox(3.4, 0.04, 0.65, b.x - 2, roofY + 0.03, b.z, goldGlowMat);
+    addBox(0.65, 0.04, 4.4, b.x - 3.6, roofY + 0.03, b.z, goldGlowMat);
+    addBox(0.65, 0.04, 4.4, b.x - 0.4, roofY + 0.03, b.z, goldGlowMat);
+
+    // Rooftop glass safety parapet (leaves a West sky-dive jump gap at z = -8..-2)
+    addBox(b.w, 1.2, 0.35, b.x, roofY + 0.6, minZ + 0.2, glassRailMat, true, roofY + 1.3, roofY);
+    addBox(b.w, 1.2, 0.35, b.x, roofY + 0.6, maxZ - 0.2, glassRailMat, true, roofY + 1.3, roofY);
+    addBox(0.35, 1.2, b.d, maxX - 0.2, roofY + 0.6, b.z, glassRailMat, true, roofY + 1.3, roofY);
+    addBox(0.35, 1.2, 11, minX + 0.2, roofY + 0.6, minZ + 5.5, glassRailMat, true, roofY + 1.3, roofY);
+    addBox(0.35, 1.2, 11, minX + 0.2, roofY + 0.6, maxZ - 5.5, glassRailMat, true, roofY + 1.3, roofY);
+
+    // Corner rooftop elevator housing + spire cleanly off the walkable terrace
+    addBox(5.2, 4.0, 5.2, maxX - 4.0, roofY + 2.0, minZ + 4.0, roofMat, true, roofY + 4.0, roofY);
+    const padDown = new THREE.Mesh(new THREE.RingGeometry(1.4, 2.0, 24), goldGlowMat);
+    padDown.rotation.x = -Math.PI * 0.5;
+    padDown.position.set(elevX, roofY + 0.04, elevZ);
+    this.group.add(padDown);
+    this.animatedBeacons.push(padDown);
+
+    this.interactables.push({
+      id: 'zenith_lift_down',
+      type: 'ELEVATOR_DOWN',
+      x: elevX,
+      y: roofY,
+      z: elevZ,
+      radius: 3.0,
+      title: 'LOBBY ELEVATOR',
+      prompt: 'E / USE — Ride Elevator Back to Street Lobby'
+    });
+
+    // Hackable Zenith Vault Data Terminal
+    const termX = b.x - 4;
+    const termZ = minZ + 4;
+    addBox(1.8, 1.5, 1.0, termX, roofY + 0.75, termZ, deskMat, true, roofY + 1.6, roofY);
+    addBox(1.4, 0.7, 0.14, termX, roofY + 1.55, termZ + 0.52, cyanGlowMat);
+    this.interactables.push({
+      id: 'zenith_hack',
+      type: 'HACK_TERMINAL',
+      x: termX,
+      y: roofY,
+      z: termZ + 1.4,
+      radius: 2.8,
+      title: 'ZENITH ROOF VAULT TERMINAL',
+      prompt: 'E / USE — Hack Data Vault (+₡650 & +1★ Heat)'
+    });
+
+    // West Sky-Launch Basejump Pad
+    const glideX = minX + 1.8;
+    const glideZ = b.z;
+    const glidePad = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 5.0), cyanGlowMat);
+    glidePad.rotation.x = -Math.PI * 0.5;
+    glidePad.position.set(glideX, roofY + 0.05, glideZ);
+    this.group.add(glidePad);
+    this.interactables.push({
+      id: 'zenith_glide',
+      type: 'ROOFTOP_GLIDE',
+      x: glideX + 1.2,
+      y: roofY,
+      z: glideZ,
+      radius: 3.2,
+      title: 'ROOFTOP SKY-LAUNCH',
+      prompt: 'E / USE — Leap & Base-Jump Over Neo Velo!'
+    });
+
+    // Sky Lounge Sofa looking South over the city
+    addBox(4.2, 0.55, 1.2, b.x - 6, roofY + 0.28, maxZ - 3.6, sofaMat);
+    this.sitSpots.push({
+      pos: new THREE.Vector3(b.x - 6, roofY + 0.58, maxZ - 3.6),
+      yaw: Math.PI,
+      label: 'ZENITH ROOFTOP LOUNGE'
+    });
+
+    this.interiorFloors.push({
+      minX: innerMinX, maxX: innerMaxX, minZ: innerMinZ, maxZ: innerMaxZ,
+      groundY: 0, upperY: 0, switchY: 99,
+      stairs: { minX: 0, maxX: -1, minZ: 0, maxZ: -1, dir: 'SOUTH' }
+    });
+    this.rooftopZones.push({
+      minX: minX + 0.3, maxX: maxX - 0.3, minZ: minZ + 0.3, maxZ: maxZ - 0.3,
+      y: roofY, switchY: roofY - 6
+    });
+  }
+
+  /** Populates glowing Neon Vending Machines & 8 hidden Neon Stash Briefcases across the city. */
+  private createVendingAndCollectibles(): void {
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4, metalness: 0.6 });
+    const screenCyan = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
+    const screenPink = new THREE.MeshBasicMaterial({ color: 0xf472b6 });
+
+    const vendSpots: Array<{ id: string; x: number; z: number; rotY: number }> = [
+      { id: 'vend_cafe', x: 105.4, z: -78, rotY: Math.PI * 0.5 },
+      { id: 'vend_garage', x: 61.5, z: -2, rotY: -Math.PI * 0.5 },
+      { id: 'vend_ramen', x: 241.5, z: -78, rotY: -Math.PI * 0.5 },
+      { id: 'vend_zenith', x: 240.5, z: 2, rotY: -Math.PI * 0.5 },
+      { id: 'vend_harbor', x: 136, z: 240, rotY: 0 }
+    ];
+
+    for (let i = 0; i < vendSpots.length; i++) {
+      const v = vendSpots[i];
+      const grp = new THREE.Group();
+      const box = new THREE.Mesh(new THREE.BoxGeometry(1.3, 2.2, 0.9), bodyMat);
+      box.position.y = 1.1;
+      box.castShadow = true;
+      const face = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 1.35), i % 2 === 0 ? screenCyan : screenPink);
+      face.position.set(0, 1.25, 0.46);
+      grp.add(box, face);
+      grp.position.set(v.x, 0, v.z);
+      grp.rotation.y = v.rotY;
+      this.group.add(grp);
+      this.colliders.push({
+        minX: v.x - 0.65, maxX: v.x + 0.65,
+        minZ: v.z - 0.65, maxZ: v.z + 0.65,
+        height: 2.2
+      });
+      this.interactables.push({
+        id: v.id,
+        type: 'VENDING',
+        x: v.x + Math.sin(v.rotY) * 1.4,
+        y: 0,
+        z: v.z + Math.cos(v.rotY) * 1.4,
+        radius: 2.3,
+        title: 'CYBER VENDING MACHINE',
+        prompt: 'E / USE — Buy Neon Fizz (+30 HP & 20s Speed Boost)'
+      });
+    }
+
+    const crateMat = new THREE.MeshStandardMaterial({
+      color: 0xfacc15,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 0.9,
+      roughness: 0.25,
+      metalness: 0.7
+    });
+    const crateGeo = new THREE.BoxGeometry(0.75, 0.55, 0.55);
+    const ringGeo = new THREE.RingGeometry(0.6, 0.78, 20);
+    ringGeo.rotateX(-Math.PI * 0.5);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xfde047, side: THREE.DoubleSide });
+
+    const stashSpots: Array<{ id: string; x: number; y: number; z: number; reward: number; xp: number; label: string }> = [
+      { id: 'stash_zenith_roof', x: 266, y: 50, z: -12, reward: 500, xp: 200, label: 'Zenith Sky Stash' },
+      { id: 'stash_ramen', x: 247, y: 0, z: -116, reward: 250, xp: 120, label: 'Neo Ramen Backroom Stash' },
+      { id: 'stash_garage', x: 70, y: 0, z: -14, reward: 250, xp: 120, label: 'Drift Garage Tool Stash' },
+      { id: 'stash_cafe_2f', x: 96, y: 4.2, z: -118, reward: 300, xp: 140, label: 'Anime Cafe VIP Mezzanine' },
+      { id: 'stash_touge', x: 155, y: 6.0, z: -322, reward: 350, xp: 160, label: 'Touge Shrine Stash' },
+      { id: 'stash_pier', x: 190, y: 0, z: 290, reward: 300, xp: 130, label: 'Harbor Pier Edge Stash' },
+      { id: 'stash_akiba', x: 172, y: 0, z: -175, reward: 250, xp: 110, label: 'Akiba Cyber Plaza Stash' },
+      { id: 'stash_stunt', x: 84, y: 0, z: 105, reward: 250, xp: 110, label: 'Stunt Arena Ramp Stash' }
+    ];
+
+    for (const s of stashSpots) {
+      const grp = new THREE.Group();
+      const box = new THREE.Mesh(crateGeo, crateMat);
+      box.position.y = 0.85;
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.position.y = 0.08;
+      grp.add(box, ring);
+      grp.position.set(s.x, s.y, s.z);
+      this.group.add(grp);
+      this.collectibles.push({
+        id: s.id,
+        x: s.x,
+        y: s.y,
+        z: s.z,
+        reward: s.reward,
+        xp: s.xp,
+        label: s.label,
+        collected: false,
+        mesh: grp
+      });
+    }
+  }
+
   /** True when an actor is on the restaurant staircase (for native stair clips). */
   public isInInteriorStairs(x: number, z: number): boolean {
     return this.interiorFloors.some((zone) => {
@@ -640,8 +1292,13 @@ export class OpenWorldMap {
     });
   }
 
-  /** Floor height for walk-in interiors; null when the actor is outside one. */
+  /** Floor height for walk-in interiors & accessible rooftops; null when outside. */
   public sampleInteriorHeight(x: number, z: number, currentY = 0): number | null {
+    for (const r of this.rooftopZones) {
+      if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ && currentY >= r.switchY) {
+        return r.y;
+      }
+    }
     for (const zone of this.interiorFloors) {
       if (x < zone.minX || x > zone.maxX || z < zone.minZ || z > zone.maxZ) continue;
       const s = zone.stairs;
@@ -653,10 +1310,7 @@ export class OpenWorldMap {
         else t = (s.maxZ - z) / Math.max(0.01, s.maxZ - s.minZ);
         return THREE.MathUtils.lerp(zone.groundY, zone.upperY, THREE.MathUtils.clamp(t, 0, 1));
       }
-      // Only pick the mezzanine once the actor is actually up there. Using
-      // switchY alone teleports anyone standing halfway up the stairs into
-      // the upper floor the moment they step sideways out of the stairwell.
-      return currentY >= zone.upperY - 0.45 ? zone.upperY : zone.groundY;
+      return currentY >= zone.upperY - 0.45 && zone.upperY > 0 ? zone.upperY : zone.groundY;
     }
     return null;
   }
@@ -664,18 +1318,18 @@ export class OpenWorldMap {
   private createCityBuildings(): void {
     const neonColors = ['#38bdf8', '#ff5500', '#ec4899', '#facc15', '#22c55e'];
 
-    const buildingSpecs: { x: number; z: number; w: number; d: number; h: number; label?: string; interior?: 'restaurant' }[] = [
+    const buildingSpecs: { x: number; z: number; w: number; d: number; h: number; label?: string; interior?: 'restaurant' | 'garage' | 'ramen' | 'zenith' }[] = [
       { x: 84, z: -200, w: 38, d: 34, h: 48, label: 'APEX ZERO' },
       { x: 172, z: -200, w: 48, d: 36, h: 66, label: 'AKIBA CYBER' },
       { x: 260, z: -200, w: 36, d: 34, h: 52, label: 'TOUGE CLUB' },
       { x: 84, z: -100, w: 40, d: 52, h: 38, label: 'ANIME CAFE', interior: 'restaurant' },
       { x: 158, z: -100, w: 34, d: 50, h: 58 },
       { x: 196, z: -100, w: 26, d: 44, h: 44 },
-      { x: 260, z: -100, w: 34, d: 52, h: 60, label: 'NEO RAMEN' },
-      { x: 84, z: -5, w: 42, d: 28, h: 30, label: 'DRIFT GARAGE' },
+      { x: 260, z: -100, w: 34, d: 52, h: 60, label: 'NEO RAMEN', interior: 'ramen' },
+      { x: 84, z: -5, w: 42, d: 28, h: 30, label: 'DRIFT GARAGE', interior: 'garage' },
       { x: 162, z: -5, w: 42, d: 28, h: 46, label: 'METRO ARCADE' },
       { x: 204, z: -5, w: 24, d: 28, h: 36 },
-      { x: 260, z: -5, w: 36, d: 28, h: 50, label: 'ZENITH CORP' },
+      { x: 260, z: -5, w: 36, d: 28, h: 50, label: 'ZENITH CORP', interior: 'zenith' },
       { x: 84, z: 188, w: 44, d: 30, h: 32, label: 'HARBOR INN' },
       { x: 172, z: 188, w: 50, d: 30, h: 52, label: 'STADIUM HOTEL' },
       { x: 318, z: -100, w: 18, d: 62, h: 72 },
@@ -735,8 +1389,13 @@ export class OpenWorldMap {
       const neonMat = getNeonMat(accent);
 
       if (b.interior === 'restaurant') {
-        // Hollow, walk-in building: no solid box, door gap in the wall colliders.
         this.createRestaurantInterior(b, fbMat, sideMat, roofMat, neonMat);
+      } else if (b.interior === 'garage') {
+        this.createDriftGarageInterior(b, fbMat, sideMat, roofMat, neonMat);
+      } else if (b.interior === 'ramen') {
+        this.createNeoRamenInterior(b, fbMat, sideMat, roofMat, neonMat);
+      } else if (b.interior === 'zenith') {
+        this.createZenithTowerInterior(b, fbMat, sideMat, roofMat, neonMat);
       } else {
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(b.w, b.h, b.d),
@@ -748,16 +1407,17 @@ export class OpenWorldMap {
         this.group.add(mesh);
       }
 
-      // Ground-floor architectural plinth / sidewalk & storefront awning so buildings feel grounded
-      const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.w + 2.4, 0.32, b.d + 2.4), plinthMat);
-      plinth.position.set(b.x, 0.16, b.z);
+      // Ground-floor architectural plinth / sidewalk trim (lowered slightly inside enterable shops to avoid z-fighting)
+      const plinthH = b.interior ? 0.06 : 0.32;
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(b.w + 2.4, plinthH, b.d + 2.4), plinthMat);
+      plinth.position.set(b.x, plinthH * 0.5, b.z);
       plinth.receiveShadow = true;
       this.group.add(plinth);
 
       if (b.label) {
         for (const faceZ of [1, -1]) {
           const canopy = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.78, 0.34, 2.3), canopyMat);
-          canopy.position.set(b.x, 4.3, b.z + faceZ * (b.d * 0.5 + 1.05));
+          canopy.position.set(b.x, 4.85, b.z + faceZ * (b.d * 0.5 + 1.05));
           canopy.castShadow = true;
           const bandMat = new THREE.MeshStandardMaterial({
             color: 0x0f172a,
@@ -766,11 +1426,12 @@ export class OpenWorldMap {
             roughness: 0.2,
             metalness: 0.55
           });
+          this.neonSignMats.push(bandMat);
           const bandZ = b.z + faceZ * (b.d * 0.5 + 0.08);
           const bandW = b.w * 0.68;
-          // The restaurant has a real door gap; a full-width storefront panel
-          // would visually seal it, so split the front band around the door.
-          const doorSide = b.interior === 'restaurant' && faceZ === 1 ? 1.45 : 0;
+          const doorSide = faceZ === 1
+            ? (b.interior === 'restaurant' ? 1.45 : (b.interior === 'garage' ? 4.6 : (b.interior === 'ramen' ? 1.65 : (b.interior === 'zenith' ? 1.85 : 0))))
+            : 0;
           const segments = doorSide > 0
             ? [
                 { w: b.x - doorSide - (b.x - bandW * 0.5), x: b.x - bandW * 0.5 + (b.x - doorSide - (b.x - bandW * 0.5)) * 0.5 },
@@ -788,7 +1449,7 @@ export class OpenWorldMap {
         }
       }
 
-      if (b.h >= 44) {
+      if (b.h >= 44 && b.interior !== 'zenith') {
         const tierH = 10;
         const tier = new THREE.Mesh(
           new THREE.BoxGeometry(b.w * 0.65, tierH, b.d * 0.65),
@@ -797,7 +1458,7 @@ export class OpenWorldMap {
         tier.position.set(b.x, b.h + tierH * 0.5, b.z);
         tier.castShadow = true;
         this.group.add(tier);
-      } else {
+      } else if (b.interior !== 'zenith') {
         // Low-rise rooftop HVAC / utility unit for silhouette variety
         const hvac = new THREE.Mesh(new THREE.BoxGeometry(b.w * 0.26, 2.2, b.d * 0.26), roofMat);
         hvac.position.set(b.x - b.w * 0.18, b.h + 1.1, b.z + b.d * 0.14);
@@ -805,13 +1466,15 @@ export class OpenWorldMap {
       }
 
       // Clean architectural rooftop parapet & muted accent cornice strip
-      const parapet = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.55, 0.55, b.d + 0.55), roofMat);
-      parapet.position.set(b.x, b.h - 0.25, b.z);
-      const trimLine = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.62, 0.2, b.d + 0.62), neonMat);
-      trimLine.position.set(b.x, b.h - 0.65, b.z);
-      this.group.add(parapet, trimLine);
+      if (b.interior !== 'zenith') {
+        const parapet = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.55, 0.55, b.d + 0.55), roofMat);
+        parapet.position.set(b.x, b.h - 0.25, b.z);
+        const trimLine = new THREE.Mesh(new THREE.BoxGeometry(b.w + 0.62, 0.2, b.d + 0.62), neonMat);
+        trimLine.position.set(b.x, b.h - 0.65, b.z);
+        this.group.add(parapet, trimLine);
+      }
 
-      if (b.interior !== 'restaurant') {
+      if (!b.interior) {
         this.colliders.push({
           minX: b.x - b.w * 0.5 - 0.4,
           maxX: b.x + b.w * 0.5 + 0.4,
@@ -953,14 +1616,15 @@ export class OpenWorldMap {
     bulbGeo.translate(1.25, 6.38, 0);
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.75, roughness: 0.35 });
     const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfef3c7 });
+    this.lampBulbMat = bulbMat;
 
     const lampGlowCanvas = document.createElement('canvas');
     lampGlowCanvas.width = 64;
     lampGlowCanvas.height = 64;
     const lgCtx = lampGlowCanvas.getContext('2d')!;
     const lgGrad = lgCtx.createRadialGradient(32, 32, 2, 32, 32, 30);
-    lgGrad.addColorStop(0, 'rgba(254, 240, 138, 0.24)');
-    lgGrad.addColorStop(0.55, 'rgba(253, 224, 71, 0.08)');
+    lgGrad.addColorStop(0, 'rgba(254, 240, 138, 0.52)');
+    lgGrad.addColorStop(0.42, 'rgba(253, 224, 71, 0.22)');
     lgGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
     lgCtx.fillStyle = lgGrad;
     lgCtx.fillRect(0, 0, 64, 64);
@@ -969,9 +1633,12 @@ export class OpenWorldMap {
     const lampGlowMat = new THREE.MeshBasicMaterial({
       map: new THREE.CanvasTexture(lampGlowCanvas),
       transparent: true,
+      opacity: 0.0,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      visible: false
     });
+    this.lampGlowMat = lampGlowMat;
 
     const lampCoords: [number, number][] = [];
     for (const ax of [37, 131, 233]) {
@@ -1207,10 +1874,58 @@ export class OpenWorldMap {
     });
   }
 
+  private createStuntArenaTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 512;
+    const ctx = c.getContext('2d')!;
+
+    ctx.fillStyle = '#1e2430';
+    ctx.fillRect(0, 0, 512, 512);
+
+    for (let i = 0; i < 4800; i++) {
+      const v = 24 + Math.floor(Math.random() * 20);
+      ctx.fillStyle = `rgb(${v},${v + 4},${v + 10})`;
+      ctx.fillRect(Math.random() * 510, Math.random() * 510, 2, 2);
+    }
+
+    // Perimeter yellow/black hazard frame
+    ctx.strokeStyle = 'rgba(250, 204, 21, 0.72)';
+    ctx.lineWidth = 10;
+    ctx.strokeRect(10, 10, 492, 492);
+    ctx.strokeStyle = 'rgba(249, 115, 22, 0.42)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([18, 12]);
+    ctx.strokeRect(24, 24, 464, 464);
+
+    // Launch lane guides & central stunt ring
+    ctx.strokeStyle = 'rgba(226, 232, 240, 0.28)';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([16, 16]);
+    ctx.beginPath();
+    ctx.moveTo(148, 36); ctx.lineTo(148, 476);
+    ctx.moveTo(364, 36); ctx.lineTo(364, 476);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(256, 256, 74, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.anisotropy = 4;
+    return tex;
+  }
+
   private createStuntPlayground(): void {
     const floorGeo = new THREE.PlaneGeometry(56, 92);
     floorGeo.rotateX(-Math.PI * 0.5);
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
+    const floorMat = new THREE.MeshStandardMaterial({
+      map: this.createStuntArenaTexture(),
+      roughness: 0.78
+    });
     this.roadMats.push(floorMat);
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.position.set(84, 0.03, 90);
@@ -1302,14 +2017,32 @@ export class OpenWorldMap {
   }
 
   private createSmashableProps(): void {
-    const coneGeo = new THREE.ConeGeometry(0.45, 1.15, 8);
-    coneGeo.translate(0, 0.57, 0);
+    // Reflective white-collar safety cone texture (top UV=0 -> tip, bottom UV=1 -> base)
+    const coneCanvas = document.createElement('canvas');
+    coneCanvas.width = 64;
+    coneCanvas.height = 128;
+    const cCtx = coneCanvas.getContext('2d')!;
+    cCtx.fillStyle = '#f97316';
+    cCtx.fillRect(0, 0, 64, 128);
+    // White reflective safety band around upper-mid cone
+    cCtx.fillStyle = '#f8fafc';
+    cCtx.fillRect(0, 44, 64, 24);
+    // Dark rubber skirt at bottom
+    cCtx.fillStyle = '#1e293b';
+    cCtx.fillRect(0, 110, 64, 18);
+    const coneTex = new THREE.CanvasTexture(coneCanvas);
+
+    const coneGeo = new THREE.ConeGeometry(0.38, 1.05, 10);
+    coneGeo.translate(0, 0.58, 0);
     const coneMat = new THREE.MeshStandardMaterial({
-      color: 0xf97316,
+      map: coneTex,
       emissive: 0xea580c,
-      emissiveIntensity: 0.35,
-      roughness: 0.4
+      emissiveIntensity: 0.16,
+      roughness: 0.42
     });
+    const baseGeo = new THREE.BoxGeometry(0.82, 0.09, 0.82);
+    baseGeo.translate(0, 0.045, 0);
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.88 });
 
     const coords: [number, number][] = [
       [42, -32], [50, -32], [42, 22], [50, 22],
@@ -1320,12 +2053,16 @@ export class OpenWorldMap {
     ];
 
     for (const [cx, cz] of coords) {
-      const m = new THREE.Mesh(coneGeo, coneMat);
-      m.position.set(cx, 0, cz);
-      m.castShadow = true;
-      this.group.add(m);
+      const grp = new THREE.Group();
+      const body = new THREE.Mesh(coneGeo, coneMat);
+      body.castShadow = true;
+      const base = new THREE.Mesh(baseGeo, baseMat);
+      base.castShadow = true;
+      grp.add(base, body);
+      grp.position.set(cx, 0, cz);
+      this.group.add(grp);
       this.smashProps.push({
-        mesh: m,
+        mesh: grp,
         homePos: new THREE.Vector3(cx, 0, cz),
         pos: new THREE.Vector3(cx, 0, cz),
         vel: new THREE.Vector3(),
@@ -1345,6 +2082,15 @@ export class OpenWorldMap {
   ): void {
     if (this.oceanUniforms) {
       this.oceanUniforms.uTime.value = timeSec;
+    }
+    const pulse = 0.92 + Math.sin(timeSec * 4.2) * 0.1;
+    for (const b of this.animatedBeacons) {
+      b.scale.set(pulse, pulse, 1);
+    }
+    for (const c of this.collectibles) {
+      if (c.collected) continue;
+      c.mesh.rotation.y = timeSec * 1.8;
+      c.mesh.position.y = c.y + Math.sin(timeSec * 3.0 + c.x) * 0.16;
     }
 
     const playerSpeed = Math.hypot(playerVel.x, playerVel.z);
@@ -1476,6 +2222,16 @@ export class OpenWorldMap {
     out.x = THREE.MathUtils.clamp(out.x, WORLD_BOUNDS.minX + margin, WORLD_BOUNDS.maxX - margin);
     out.z = THREE.MathUtils.clamp(out.z, WORLD_BOUNDS.minZ + margin, WORLD_BOUNDS.maxZ - margin);
 
+    // Keep camera inside room bounds cleanly when walking indoors (prevents wall-snap & ceiling clip)
+    for (const zone of this.interiorFloors) {
+      if (focus.x >= zone.minX && focus.x <= zone.maxX && focus.z >= zone.minZ && focus.z <= zone.maxZ && focus.y < 10) {
+        out.x = THREE.MathUtils.clamp(out.x, zone.minX + 0.55, zone.maxX - 0.55);
+        out.z = THREE.MathUtils.clamp(out.z, zone.minZ + 0.55, zone.maxZ - 0.55);
+        out.y = Math.min(out.y, 6.6);
+        return out;
+      }
+    }
+
     const dir = this.camClampDir.copy(out).sub(focus);
     const totalLen = dir.length();
     if (totalLen < 0.1) return out;
@@ -1487,7 +2243,7 @@ export class OpenWorldMap {
       const sy = focus.y + dir.y * d;
       const sz = focus.z + dir.z * d;
       for (const b of this.colliders) {
-        if (sy < b.height && sx > b.minX - margin && sx < b.maxX + margin && sz > b.minZ - margin && sz < b.maxZ + margin) {
+        if (sy >= (b.minY ?? -10) && sy < b.height && sx > b.minX - margin && sx < b.maxX + margin && sz > b.minZ - margin && sz < b.maxZ + margin) {
           const safeDist = Math.max(1.2, ((step - 1) / 6) * totalLen);
           return this.camClampSafe.copy(focus).addScaledVector(dir, safeDist);
         }
@@ -1567,7 +2323,7 @@ export class OpenWorldMap {
     }
 
     for (const b of this.colliders) {
-      if (pos.y < b.height && this.resolveCircleVsAABB(pos, vel, radius, b.minX, b.maxX, b.minZ, b.maxZ)) {
+      if (pos.y >= (b.minY ?? -10) - 0.5 && pos.y < b.height && this.resolveCircleVsAABB(pos, vel, radius, b.minX, b.maxX, b.minZ, b.maxZ)) {
         hit = true;
       }
     }
