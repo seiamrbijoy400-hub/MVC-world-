@@ -17,6 +17,9 @@ Command executed after final edits:
 ## 2. Automated Headless Simulation, Asset & LAN Tests (`tests/gameplay.test.ts`) — PASS (74/74)
 Run with `pnpm test` (compiles the suite + `server/onlineServer.ts` to a temp dir and executes `node --test`) — `74` pass, `0` fail, `0` skipped, `~20.0s`:
 
+### Host-side two-client LAN harness (`pnpm qa:lan`) — 12/12 PASS
+Drives the real standalone server with two WebSocket clients on the host machine: LAN info, JSON health, host room, guest join, chat relay, file upload/broadcast/byte-exact download, cross-room block and leaderboard storage. It prints the exact `http://IP:PORT` URL that phones must open. Physical two-device hotspot/cable QA is in `docs/LAN_QA_CHECKLIST.md` and remains **NOT TESTED** (no device/browser attached).
+
 ### Sprint 20 — durable host storage (2026-11-27)
 | Item | Status | Evidence |
 | :--- | :---: | :--- |

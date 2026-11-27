@@ -1,5 +1,6 @@
 # APEX ZERO: NEON VELO — Implementation Roadmap
 **Date:** 2026-11-27 | **Build:** Clean (`tsc && vite build`, 72 modules) | **Automated Tests:** 74/74 Pass (`pnpm test` → `tests/gameplay.test.ts`)
+**LAN QA:** host harness `pnpm qa:lan` 12/12 PASS; physical two-device checklist `docs/LAN_QA_CHECKLIST.md` — **NOT TESTED**.
 
 ---
 
