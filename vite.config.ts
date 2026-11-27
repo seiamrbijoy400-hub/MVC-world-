@@ -20,6 +20,19 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
-    outDir: 'dist'
+    outDir: 'dist',
+    chunkSizeWarningLimit: 700,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor-three',
+              test: /node_modules\/three/
+            }
+          ]
+        }
+      }
+    }
   }
 });
